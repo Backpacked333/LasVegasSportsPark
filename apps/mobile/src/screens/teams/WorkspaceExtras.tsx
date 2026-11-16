@@ -31,7 +31,7 @@ import { useApiRecords } from '../../features/registration/queries';
 import { ordinal, plural } from '../../features/teams/format';
 import type { Viewer, Workspace } from '../../features/teams/queries';
 import { isCurrentPlayer } from '../../features/teams/status';
-import { CommandFailure } from '../../features/teams/ui';
+import { CommandError } from '../../ui/CommandError';
 import { FieldValue } from '../../ui/Field';
 import { OfflineNotice } from '../../ui/OfflineNotice';
 import { Text } from '../../ui/Text';
@@ -296,7 +296,8 @@ export function MatchCheckIn({
     <View testID="match-check-in">
       {attendance.data === undefined ? (
         attendance.error ? (
-          <CommandFailure
+          <CommandError
+            wording="team"
             read
             error={attendance.error}
             onRetry={() => void attendance.refetch()}
@@ -355,7 +356,8 @@ export function MatchCheckIn({
                     ) : null}
                   </View>
                   {state?.status === 'failed' ? (
-                    <CommandFailure
+                    <CommandError
+                      wording="team"
                       error={state.error}
                       onRetry={() =>
                         send(p.personId, lastSent.current.get(p.personId) ?? 'present')

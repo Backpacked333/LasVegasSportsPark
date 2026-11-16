@@ -24,7 +24,7 @@ import { StatusBadge } from '../../ui/StatusBadge';
 import { Text } from '../../ui/Text';
 import { spacing } from '../../ui/theme';
 import { ME_QUERY_KEY, permissionLabel } from '../account/components/account-data';
-import { CommandError } from '../account/components/CommandError';
+import { CommandError } from '../../ui/CommandError';
 import { grantStatusLabel, type GrantView } from './grants';
 
 export const ACCESS_GRANTS_KEY = ['api', '/me/access-grants'] as const;

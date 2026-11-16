@@ -69,7 +69,7 @@ import {
 import { CaptainOnly, TeamFrame } from '../../features/teams/TeamFrame';
 import { TextField } from '../../ui/Field';
 import { ChoiceList } from '../../ui/ChoiceList';
-import { CommandFailure } from '../../features/teams/ui';
+import { CommandError } from '../../ui/CommandError';
 import { AppHeader } from '../../ui/AppHeader';
 import { OfflineNotice } from '../../ui/OfflineNotice';
 import { Section } from '../../ui/Section';
@@ -215,7 +215,8 @@ function InviteForm({ workspace }: { workspace: Workspace }) {
                 testID={`recipient-${index + 1}-withheld`}
               />
             ) : state?.status === 'failed' ? (
-              <CommandFailure
+              <CommandError
+                wording="team"
                 error={state.error}
                 onRetry={() => void sendOne(recipient)}
                 unavailableText="Inviting players is not available to you for this team."
@@ -334,7 +335,8 @@ function PendingInvitation({
         />
       )}
       {revoke.error ? (
-        <CommandFailure
+        <CommandError
+          wording="team"
           error={revoke.error}
           onRetry={submit}
           onReload={() => {
@@ -414,7 +416,8 @@ function JoinRequestItem({
         </View>
       ) : null}
       {decide.error ? (
-        <CommandFailure
+        <CommandError
+          wording="team"
           error={decide.error}
           onRetry={() => lastDecision && submit(lastDecision)}
           unavailableText="Deciding this request is not available to you."

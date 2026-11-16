@@ -39,7 +39,7 @@ import { QueryErrorView } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge, type StatusBadgeProps } from '../../ui/StatusBadge';
 import { moneyRoutes } from '../money/routes';
-import { CommandError } from './CommandError';
+import { CommandError } from '../../ui/CommandError';
 import { formatInstant } from './format';
 import {
   blockingEligibilityReasons,
@@ -478,7 +478,12 @@ export function SessionBookingFlow({
         </Section>
       ) : null}
 
-      <CommandError error={failure} onRetry={() => void submit()} onReload={reset} />
+      <CommandError
+        wording="registration"
+        error={failure}
+        onRetry={() => void submit()}
+        onReload={reset}
+      />
       <View style={styles.actions}>
         <Button
           label={intent === 'trial' ? 'Book the trial' : 'Book the session'}

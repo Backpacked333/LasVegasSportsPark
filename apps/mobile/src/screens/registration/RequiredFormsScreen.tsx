@@ -32,7 +32,7 @@ import { StyleSheet, View } from 'react-native';
 import { usePermissions } from '../../api/permissions';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
-import { CommandError } from '../../features/registration/CommandError';
+import { CommandError } from '../../ui/CommandError';
 import {
   formWording,
   useFormsStatus,
@@ -352,7 +352,12 @@ function FormCard({
             accessibilityLabel={agreeLabel}
             testID={`agree-${policyVersionId}-${participantPersonId}`}
           />
-          <CommandError error={failure} onRetry={() => void submit()} onReload={onSigned} />
+          <CommandError
+            wording="registration"
+            error={failure}
+            onRetry={() => void submit()}
+            onReload={onSigned}
+          />
         </Sheet>
       ) : null}
     </View>

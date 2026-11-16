@@ -147,6 +147,7 @@ describe('SCR-C-23 RosterScreen', () => {
     expect(
       within(failure).getByText('▲ recipientContact.value: Not deliverable'),
     ).toBeOnTheScreen();
+    await openSupportDetails(within(failure));
     expect(within(failure).getByText(/Error code: VALIDATION_FAILED/)).toBeOnTheScreen();
 
     const bodies = app.bodiesOf('POST', '/team-entries/{id}/invitations');
@@ -793,6 +794,7 @@ describe('SCR-C-23 RosterScreen', () => {
       expect(
         screen.getByText('League manager: Wait until the suspension is served.'),
       ).toBeOnTheScreen();
+      await openSupportDetails(screen);
       expect(screen.getByText(/Error code: ELIGIBILITY_FAILED/)).toBeOnTheScreen();
     });
 
@@ -841,11 +843,11 @@ describe('SCR-C-23 RosterScreen', () => {
       fireEvent.press(within(section).getByRole('button', { name: 'Review the handover' }));
       fireEvent.press(within(section).getByRole('button', { name: 'Hand over to Kim Junior' }));
       expect(await screen.findByText('A team captain must be an adult.')).toBeOnTheScreen();
+      await openSupportDetails(screen);
       expect(
-        screen.getByText(
-          'Error code: VALIDATION_FAILED (CAPTAIN_MUST_BE_ADULT). Reference: corr-23',
-        ),
+        screen.getByText('Error code: VALIDATION_FAILED (CAPTAIN_MUST_BE_ADULT)'),
       ).toBeOnTheScreen();
+      expect(screen.getByText('Reference: corr-23')).toBeOnTheScreen();
       expect(screen.getByLabelText('Not done')).toBeOnTheScreen();
       expect(screen.getByText('Review your entries')).toBeOnTheScreen();
       expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
@@ -869,6 +871,9 @@ describe('SCR-C-23 RosterScreen', () => {
         }),
       });
       await chooseCaptainToPat();
+      // The answer arrives after the press: wait for it before opening its support fold.
+      await screen.findByRole('button', { name: 'Check again' });
+      await openSupportDetails(screen);
       expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
       expect(screen.queryByTestId('handover-done')).toBeNull();
       // A 5xx may come after part of the command committed: never "Not done" (§4.9).
@@ -908,6 +913,7 @@ describe('SCR-C-23 RosterScreen', () => {
         expect(
           await screen.findByLabelText('No answer yet: this may already have been recorded'),
         ).toBeOnTheScreen();
+        await openSupportDetails(screen);
         expect(screen.getByText(/Error code: TIMEOUT/)).toBeOnTheScreen();
         expect(screen.queryByTestId('handover-done')).toBeNull();
         expect(screen.queryByLabelText(/is captain from/)).toBeNull();
@@ -931,6 +937,7 @@ describe('SCR-C-23 RosterScreen', () => {
       expect(
         await screen.findByLabelText('No answer yet: this may already have been recorded'),
       ).toBeOnTheScreen();
+      await openSupportDetails(screen);
       expect(screen.getByText(/Error code: NETWORK_UNAVAILABLE/)).toBeOnTheScreen();
       expect(screen.queryByLabelText('Not done')).toBeNull();
       expect(screen.queryByTestId('handover-done')).toBeNull();

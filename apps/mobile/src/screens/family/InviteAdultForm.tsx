@@ -55,7 +55,7 @@ import {
   listPermissions,
   type GrantPermission,
 } from '../account/components/account-data';
-import { CommandError } from '../account/components/CommandError';
+import { CommandError } from '../../ui/CommandError';
 
 import { INVITATION_KEYS, invitationStateLabel } from '../invitations/InvitationScreen';
 import { contactFormatError } from '../onboarding/ContactPointStep';

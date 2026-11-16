@@ -151,6 +151,7 @@ describe('SCR-C-01 OnboardingScreen', () => {
     });
     render(<OnboardingScreen claimToken={TOKEN} />, { wrapper: app.wrapper });
     fireEvent.press(await screen.findByRole('button', { name: 'Claim record' }));
+    await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
     fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
     await waitFor(() => expect(calls).toBe(2));

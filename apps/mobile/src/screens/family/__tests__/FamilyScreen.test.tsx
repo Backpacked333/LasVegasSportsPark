@@ -803,6 +803,7 @@ describe('SCR-C-31 giving up a permission (SPK-IAM-006)', () => {
     fireEvent.press(within(form).getByRole('radio', { name: /^Pay, Starts / }));
     fireEvent.changeText(within(form).getByLabelText('Reason'), 'Not needed');
     fireEvent.press(within(form).getByRole('button', { name: 'Give up permission' }));
+    await openSupportDetails(within(form));
     expect(await within(form).findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
     const post = app.fake.requests.find((r) => r.method === 'POST');
     expect(post?.params.id).toBe(`grant-pay-${CHILD}`);

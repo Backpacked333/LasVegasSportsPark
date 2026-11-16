@@ -27,7 +27,7 @@ import { StatusBadge } from '../../ui/StatusBadge';
 import { SupportDetails } from '../../ui/SupportDetails';
 import { Text } from '../../ui/Text';
 import { fonts, makeStyles, MIN_TOUCH_SIZE, radius, spacing, type, useTheme } from '../../ui/theme';
-import { CommandFailure } from '../teams/ui';
+import { CommandError } from '../../ui/CommandError';
 import {
   AVAILABILITY_CLOSED,
   detailsCode,
@@ -89,7 +89,7 @@ function InlineError({
   if (error.code === 'INVALID_TRANSITION' || error.code === 'STALE_REVISION') {
     return <StateView variant="error" error={error} onAction={onReload} />;
   }
-  return <CommandFailure error={error} onRetry={onRetry} testID="rsvp-failure" />;
+  return <CommandError wording="team" error={error} onRetry={onRetry} testID="rsvp-failure" />;
 }
 
 export function RsvpInline({

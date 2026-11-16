@@ -23,7 +23,7 @@ import { useState } from 'react';
 import { View } from 'react-native';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
-import { CommandFailure } from '../../features/money/CommandFailure';
+import { CommandError } from '../../ui/CommandError';
 import { useEligibleOfferings } from '../../features/money/eligible-offerings';
 import { formatDateRange, formatInstant, hasPassed } from '../../features/money/format';
 import { useNameOf } from '../../features/money/people';
@@ -280,7 +280,8 @@ function RedeemForm({ makeup, reload }: { makeup: MakeupEntitlement; reload: () 
                 </Text>
               </View>
             ) : failure ? (
-              <CommandFailure
+              <CommandError
+                wording="money"
                 error={failure}
                 what="the booking"
                 onRetry={book}

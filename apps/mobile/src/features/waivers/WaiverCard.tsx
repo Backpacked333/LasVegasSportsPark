@@ -17,7 +17,7 @@ import { useApp } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { makeStyles, spacing } from '../../ui/theme';
-import { CommandError } from '../registration/CommandError';
+import { CommandError } from '../../ui/CommandError';
 import { formWording } from '../registration/forms';
 import { Body, ChoiceRow } from '../registration/ui';
 import {
@@ -146,7 +146,12 @@ export function WaiverCard({
           {`Your account cannot accept this${forWhom}. A guardian with permission to complete forms must accept it, or bring a signed paper to the front desk.`}
         </Body>
       ) : null}
-      <CommandError error={failure} onRetry={() => void submit()} onReload={onAccepted} />
+      <CommandError
+        wording="registration"
+        error={failure}
+        onRetry={() => void submit()}
+        onReload={onAccepted}
+      />
     </View>
   );
 }

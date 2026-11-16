@@ -84,7 +84,7 @@ import {
   spacing,
   useTheme,
 } from '../../ui/theme';
-import { CommandError } from '../account/components/CommandError';
+import { CommandError } from '../../ui/CommandError';
 import { inboxSections, noticeTime, type InboxDay, type InboxTab } from './inbox-sections';
 
 type InboxItem = Schema<'InboxItem'>;

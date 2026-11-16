@@ -63,7 +63,7 @@ import {
 } from '../../api/command-outcome';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
-import { CommandFailure } from '../../features/money/CommandFailure';
+import { CommandError } from '../../ui/CommandError';
 import { DevPaymentMethodPicker } from '../../features/money/dev';
 import { formatDay, formatInstant, formatMoney } from '../../features/money/format';
 import {
@@ -320,7 +320,7 @@ function PaySection({
 
   // No definite answer yet: the payment may still take effect, so it is never shown as a failure
   // (SPK-PAY-007) and paying stays blocked; "Check again" re-sends the same request under the same
-  // key. A refusal before running of a first attempt is not one (CommandFailure shows "Not done");
+  // key. A refusal before running of a first attempt is not one (CommandError shows "Not done");
   // a refusal of "Check again" leaves it unanswered and is shown beside it ("Check not run").
   const unknown = unanswered !== null;
   const checkRefused = failure !== null && refusedAfterNoAnswer(failure);
@@ -406,7 +406,8 @@ function PaySection({
           </Text>
         </LiveRegion>
       ) : failure ? (
-        <CommandFailure
+        <CommandError
+          wording="money"
           error={failure}
           what="the payment"
           onRetry={() => sent && void submit(sent)}

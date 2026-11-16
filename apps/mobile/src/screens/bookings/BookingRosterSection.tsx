@@ -27,7 +27,7 @@ import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { TextField } from '../../features/money/ui';
 import type { Booking } from '../../features/package-g/booking-model';
-import { CommandError } from '../../features/registration/CommandError';
+import { CommandError } from '../../ui/CommandError';
 import { useMe, useParticipantNames } from '../../features/registration/participants';
 import { WAIVER_STATUS } from '../../features/waivers/waivers';
 import { useConnectivity } from '../../providers/AppProviders';
@@ -122,7 +122,12 @@ function MemberRow({
           busy={remove.isProcessing}
         />
       ) : null}
-      <CommandError error={failure} onRetry={() => void submit()} onReload={onChanged} />
+      <CommandError
+        wording="registration"
+        error={failure}
+        onRetry={() => void submit()}
+        onReload={onChanged}
+      />
     </View>
   );
 }
@@ -175,7 +180,7 @@ function AddPeople({
           />
         ))}
       </View>
-      <CommandError error={failure} onReload={onChanged} />
+      <CommandError wording="registration" error={failure} onReload={onChanged} />
     </>
   );
 }
@@ -232,7 +237,12 @@ function Invite({ bookingId, onChanged }: { bookingId: string; onChanged: () => 
           </Text>
         </View>
       ) : null}
-      <CommandError error={failure} onRetry={() => void submit()} onReload={onChanged} />
+      <CommandError
+        wording="registration"
+        error={failure}
+        onRetry={() => void submit()}
+        onReload={onChanged}
+      />
     </View>
   );
 }

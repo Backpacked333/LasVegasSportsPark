@@ -318,6 +318,9 @@ describe('SCR-C-22 TeamWorkspaceScreen', () => {
       fireEvent.changeText(await screen.findByLabelText('Title'), 'Lights');
       fireEvent.changeText(screen.getByLabelText('What you need'), 'Field 2');
       fireEvent.press(screen.getByRole('button', { name: 'Send to the operating team' }));
+      // The answer arrives after the press: wait for it before opening its support fold.
+      await screen.findByRole('button', { name: 'Check again' });
+      await openSupportDetails(screen);
       expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
       fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
       expect(await screen.findByTestId('support-request-sent')).toBeOnTheScreen();

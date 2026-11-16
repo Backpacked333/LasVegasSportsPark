@@ -17,6 +17,7 @@ import {
 } from '../../../features/teams/testing/fixtures';
 import { createTeamsTestApp } from '../../../features/teams/testing/teams-test-app';
 import { RosterChangeScreen } from '../RosterChangeScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 const former = member({
   personId: IDS.formerPlayer,
@@ -112,6 +113,7 @@ describe('SCR-C-26 RosterChangeScreen', () => {
       within(failure).getByText('The person is suspended (red card) until 2026-11-01.'),
     ).toBeOnTheScreen();
     expect(within(failure).getByLabelText('Blocking')).toBeOnTheScreen();
+    await openSupportDetails(within(failure));
     expect(within(failure).getByText(/Error code: ELIGIBILITY_FAILED/)).toBeOnTheScreen();
     expect(screen.queryByTestId('change-success')).toBeNull();
     expect(app.bodiesOf('POST', '/team-entries/{id}/roster')).toEqual([

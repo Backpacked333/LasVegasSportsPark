@@ -1,7 +1,6 @@
 /**
  * OutcomeLost: the IDEMPOTENCY_OUTCOME_UNAVAILABLE answer (§4.9, SPK-UX-008), shown by every shared
- * failure view (account `CommandError`, teams and money `CommandFailure`, registration
- * `CommandError`).
+ * failure view (`ui/CommandError`).
  *
  * The answer comes when the same request is sent again under the same key ("Check again" after a
  * lost answer) and an earlier attempt committed changes but its response was never recorded: the
@@ -12,6 +11,7 @@
  * sent again from here, and the key is kept (`keepsIntentAfterFailure`), so an unchanged
  * resubmission gets this answer again instead of running under a new key.
  *
+ * The error code and reference are in the "Details for support" fold (`SupportDetails`, PA-11).
  * It is announced to screen readers when it appears (`ui/announce`: a live region on Android, an
  * announcement on iOS).
  */
@@ -21,6 +21,7 @@ import { Text } from 'react-native';
 import { LiveRegion, sentences } from './announce';
 import { Button } from './Button';
 import { StatusBadge } from './StatusBadge';
+import { SupportDetails } from './SupportDetails';
 import { makeStyles, spacing, type } from './theme';
 
 export const OUTCOME_LOST_LABEL = 'This may already have been done';
@@ -49,15 +50,13 @@ export function OutcomeLost({
     >
       <StatusBadge tone="warning" label={OUTCOME_LOST_LABEL} />
       <Text style={styles.body}>{body}</Text>
-      <Text style={styles.caption} selectable>
-        {`Error code: ${error.code}${error.correlationId ? `. Reference: ${error.correlationId}` : ''}`}
-      </Text>
       <Button
         label="Reload"
         variant="secondary"
         onPress={reload}
         accessibilityHint="Reads what is shown here again"
       />
+      <SupportDetails errorCode={error.code} reference={error.correlationId} />
     </LiveRegion>
   );
 }
@@ -65,5 +64,4 @@ export function OutcomeLost({
 const useStyles = makeStyles(({ colors }) => ({
   box: { padding: spacing.lg, gap: spacing.md, alignItems: 'flex-start' },
   body: { ...type.body, color: colors.text },
-  caption: { ...type.caption, color: colors.textMuted },
 }));

@@ -8,7 +8,7 @@
  * rules (ROLE_NOT_HELD, ROLE_ALREADY_HELD, NOT_ON_ROSTER, and CAPTAIN_MUST_BE_ADULT, a proposed
  * default the API applies), sent as VALIDATION_FAILED with the rule in `details.code`: the API's
  * message is shown with both codes ("Error code: VALIDATION_FAILED (CAPTAIN_MUST_BE_ADULT)", see
- * CommandFailure) and nothing is pre-decided here.
+ * `ui/CommandError`) and nothing is pre-decided here.
  *
  * States: ready; validation failure (no role, holder or reason chosen; the API's reasons);
  * permission restriction ("not available"); stale version (the entry changed: reload); offline
@@ -29,7 +29,7 @@ import { currentLeaders, MY_TEAMS_KEY, rosterNames, type Viewer, type Workspace 
 import { isCurrentPlayer } from './status';
 import { FieldError, TextField } from '../../ui/Field';
 import { ChoiceList } from '../../ui/ChoiceList';
-import { CommandFailure } from './ui';
+import { CommandError } from '../../ui/CommandError';
 import { OfflineNotice } from '../../ui/OfflineNotice';
 import { Text } from '../../ui/Text';
 
@@ -224,7 +224,8 @@ export function RoleHandover({
         <Button label="Review the handover" variant="secondary" onPress={review} />
       )}
       {handover.error ? (
-        <CommandFailure
+        <CommandError
+          wording="team"
           error={handover.error}
           onRetry={submit}
           onReload={() => {

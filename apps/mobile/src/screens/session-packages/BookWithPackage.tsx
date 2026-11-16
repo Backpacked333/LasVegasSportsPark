@@ -25,7 +25,7 @@ import { useState } from 'react';
 import { View } from 'react-native';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
-import { CommandFailure } from '../../features/money/CommandFailure';
+import { CommandError } from '../../ui/CommandError';
 import { useEligibleOfferings } from '../../features/money/eligible-offerings';
 import { formatDateRange, hasPassed } from '../../features/money/format';
 import { packageRefusal, type PackageEntitlement } from '../../features/money/payment-lists';
@@ -220,7 +220,12 @@ function BookingForm({ pkg, onClose }: { pkg: PackageEntitlement; onClose: () =>
           </Text>
         </View>
       ) : failure ? (
-        <CommandFailure error={failure} what="the booking" onRetry={() => void submit()} />
+        <CommandError
+          wording="money"
+          error={failure}
+          what="the booking"
+          onRetry={() => void submit()}
+        />
       ) : null}
     </View>
   );

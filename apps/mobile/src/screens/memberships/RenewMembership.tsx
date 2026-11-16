@@ -20,7 +20,7 @@ import { useState } from 'react';
 import { View } from 'react-native';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiPages } from '../../api/useApiPages';
-import { CommandFailure } from '../../features/money/CommandFailure';
+import { CommandError } from '../../ui/CommandError';
 import { formatDateRange } from '../../features/money/format';
 import { ChoiceCard } from '../../ui/ChoiceList';
 import { registrationRoutes } from '../../features/registration/routes';
@@ -125,7 +125,8 @@ export function RenewMembership({
       {/* Announced when it appears, like every field error (SPK-UX-009). */}
       <FieldErrorText error={missingError} glyph="▲" testID="renew-target-error" />
       {failure ? (
-        <CommandFailure
+        <CommandError
+          wording="money"
           error={failure}
           what="the renewal"
           onRetry={() => void submit()}

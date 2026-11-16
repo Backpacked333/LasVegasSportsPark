@@ -28,7 +28,7 @@ import { StyleSheet, View } from 'react-native';
 import { RegistrationSteps } from '../../features/registration/steps';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
-import { CommandError } from '../../features/registration/CommandError';
+import { CommandError } from '../../ui/CommandError';
 import {
   fieldMessages,
   formatInstant,
@@ -385,6 +385,7 @@ function QuoteContent({ quote, refetch }: { quote: Quote; refetch: () => void })
         </>
       ) : null}
       <CommandError
+        wording="registration"
         error={failure?.error ?? null}
         onRetry={failure?.retry}
         onReload={refetch}

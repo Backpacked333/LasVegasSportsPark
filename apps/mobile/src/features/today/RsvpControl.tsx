@@ -11,7 +11,7 @@
  *   a missing authority ACCESS_DENIED or PARTICIPANT_AUTHORITY_REQUIRED, a fixture that no longer
  *   takes answers INVALID_TRANSITION. Each is shown with its code; nothing is retried blindly.
  * - An answer with no definite outcome (`mayHaveTakenEffect`: no response after sending, a 5xx) is
- *   never "Something went wrong" (§4.9, SPK-UX-008): the shared teams `CommandFailure` reads "No
+ *   never "Something went wrong" (§4.9, SPK-UX-008): the shared `ui/CommandError` (team wording) reads "No
  *   answer yet: this may already have been recorded", and "Check again" resends exactly the request
  *   that got no answer (same state, same `expectedRevision`), so it reuses its key.
  *   IDEMPOTENCY_OUTCOME_UNAVAILABLE reads "This may already have been done" with "Reload".
@@ -38,7 +38,7 @@ import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { SupportDetails } from '../../ui/SupportDetails';
 import { fonts, makeStyles, MIN_TOUCH_SIZE, radius, spacing, type } from '../../ui/theme';
-import { CommandFailure } from '../teams/ui';
+import { CommandError } from '../../ui/CommandError';
 import { fixtureAcceptsRsvp, rsvpStatus, type RsvpState } from './status';
 
 type FixtureStatus = Schema<'FixtureStatus'>;
@@ -114,7 +114,7 @@ function rsvpErrorView(
   }
   // No definite answer ("No answer yet", "Check again" under the same key), a lost outcome ("This
   // may already have been done") or a definite refusal, decided by the shared predicates.
-  return <CommandFailure error={error} onRetry={onRetry} testID="rsvp-failure" />;
+  return <CommandError wording="team" error={error} onRetry={onRetry} testID="rsvp-failure" />;
 }
 
 /**

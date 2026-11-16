@@ -20,6 +20,7 @@ import {
   settleApps,
 } from '../../../features/money/testing/money-test-app';
 import { CancelEnrollmentScreen } from '../CancelEnrollmentScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 const mockRouter = createRouterMock();
 jest.mock('expo-router', () => ({
@@ -203,6 +204,7 @@ describe('SCR-C-33 CancelEnrollmentScreen', () => {
     });
     await fillAndConfirm();
     expect(await screen.findByLabelText('This changed since you opened it')).toBeOnTheScreen();
+    await openSupportDetails(screen);
     expect(screen.getByText(/Error code: STALE_REVISION/)).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: 'Reload' })).toBeOnTheScreen();
     expect(screen.getByLabelText('Reason for canceling')).toHaveDisplayValue('Moving away');

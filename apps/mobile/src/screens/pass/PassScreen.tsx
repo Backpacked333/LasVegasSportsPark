@@ -24,7 +24,7 @@
  *   stopped by its holder. The reference itself can never be shown again (only its hash is kept).
  * - The scannable symbol depends on the desk scanners, which are DEC-023 (Technical lead/account
  *   owners): until then the reference is shown as text, and that is labelled as pending.
- * - A failed issue or withdrawal is shown by the shared account `CommandError` (§4.9, SPK-UX-008):
+ * - A failed issue or withdrawal is shown by the shared `ui/CommandError` (§4.9, SPK-UX-008):
  *   no definite answer (`mayHaveTakenEffect`) reads "No answer yet" with "Check again", which
  *   resends the same request under the same key; IDEMPOTENCY_OUTCOME_UNAVAILABLE reads "This may
  *   already have been done" with "Reload", after which a pass it made is listed under "Other active
@@ -80,7 +80,7 @@ import { StatusBadge } from '../../ui/StatusBadge';
 import { SupportDetails } from '../../ui/SupportDetails';
 import { Text } from '../../ui/Text';
 import { continuousCorners, layout, makeStyles, radius, spacing } from '../../ui/theme';
-import { CommandError, type NotAvailableCopy } from '../account/components/CommandError';
+import { CommandError, type NotAvailableCopy } from '../../ui/CommandError';
 import { NightCard, PassCard } from './PassCard';
 import { usePassStore, type StoredPass } from './pass-store';
 

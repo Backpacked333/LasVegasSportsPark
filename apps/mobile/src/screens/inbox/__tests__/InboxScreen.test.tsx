@@ -192,9 +192,9 @@ describe('SCR-C-06 InboxScreen: reading, acknowledging, revocation and replaced 
     render(<InboxScreen />, { wrapper: app.wrapper });
     fireEvent.press(await screen.findByRole('button', { name: 'Bring water, Read' }));
     fireEvent.press(await screen.findByRole('button', { name: 'Acknowledge' }));
-    expect(
-      await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE\. Reference: corr-ack/),
-    ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(await screen.findByText('Error code: INTEGRATION_UNAVAILABLE')).toBeOnTheScreen();
+    expect(await screen.findByText('Reference: corr-ack')).toBeOnTheScreen();
     expect(
       screen.getByLabelText('No answer yet: this may already have been recorded'),
     ).toBeOnTheScreen();

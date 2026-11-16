@@ -16,7 +16,7 @@ import { useState } from 'react';
 import { View } from 'react-native';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
-import { CommandFailure } from '../../features/money/CommandFailure';
+import { CommandError } from '../../ui/CommandError';
 import { useApiRecords, type RecordState } from '../../features/money/records';
 import { ChoiceRow } from '../../features/money/ui';
 import { formatInstantIn } from '../../features/package-g/time';
@@ -90,7 +90,8 @@ function FormRow({
             onPress={() => setAgreed(!agreed)}
           />
           {failure ? (
-            <CommandFailure
+            <CommandError
+              wording="money"
               error={failure}
               what="the signature"
               onRetry={() => void submit()}

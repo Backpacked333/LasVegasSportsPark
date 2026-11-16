@@ -122,9 +122,9 @@ describe('SCR-C-25 MyContributionsScreen', () => {
     expect(
       within(notice).getByText(/We could not check for a payment already on its way/),
     ).toBeOnTheScreen();
-    expect(
-      within(notice).getByText(/Error code: INTEGRATION_UNAVAILABLE\. Reference: c-mine/),
-    ).toBeOnTheScreen();
+    await openSupportDetails(within(notice));
+    expect(within(notice).getByText('Error code: INTEGRATION_UNAVAILABLE')).toBeOnTheScreen();
+    expect(within(notice).getByText('Reference: c-mine')).toBeOnTheScreen();
     // The lines stay listed with their own status.
     expect(
       screen.getByRole('button', {

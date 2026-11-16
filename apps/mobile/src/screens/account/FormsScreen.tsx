@@ -64,7 +64,7 @@ import {
   usePersonName,
   type MeData,
 } from './components/account-data';
-import { CommandError } from './components/CommandError';
+import { CommandError } from '../../ui/CommandError';
 import { PersonHeading } from './components/PersonHeading';
 
 type Acknowledgment = Schema<'Acknowledgment'>;

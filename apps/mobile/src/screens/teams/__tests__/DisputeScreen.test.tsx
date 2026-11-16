@@ -290,6 +290,9 @@ describe('SCR-C-29 DisputeScreen', () => {
       fireEvent.press(await screen.findByRole('button', { name: 'Withdraw this dispute' }));
       fireEvent.changeText(screen.getByLabelText('Reason for withdrawing'), 'Settled.');
       fireEvent.press(screen.getByRole('button', { name: 'Withdraw the dispute' }));
+      // The answer arrives after the press: wait for it before opening its support fold.
+      await screen.findByRole('button', { name: 'Check again' });
+      await openSupportDetails(screen);
       expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
       expect(screen.queryByText(/You withdrew this dispute/)).toBeNull();
       // The reason is kept for the retry.
@@ -332,6 +335,7 @@ describe('SCR-C-29 DisputeScreen', () => {
       fireEvent.changeText(screen.getByLabelText('Reason for withdrawing'), 'Settled.');
       fireEvent.press(screen.getByRole('button', { name: 'Withdraw the dispute' }));
       expect(await screen.findByLabelText('This changed since you opened it')).toBeOnTheScreen();
+      await openSupportDetails(screen);
       expect(screen.getByText(/Error code: INVALID_TRANSITION/)).toBeOnTheScreen();
       const reads = app.requestsTo('GET', '/fixtures/{id}/disputes').length;
       fireEvent.press(screen.getByRole('button', { name: 'Reload' }));

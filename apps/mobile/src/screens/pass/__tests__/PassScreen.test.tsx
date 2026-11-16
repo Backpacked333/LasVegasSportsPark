@@ -370,9 +370,9 @@ describe('SCR-C-05 PassScreen', () => {
       },
     });
     fireEvent.press(await screen.findByRole('button', { name: 'Get my pass' }));
-    expect(
-      await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE\. Reference: corr-pass/),
-    ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(await screen.findByText('Error code: INTEGRATION_UNAVAILABLE')).toBeOnTheScreen();
+    expect(await screen.findByText('Reference: corr-pass')).toBeOnTheScreen();
     // A 5xx may follow a committed issue (mayHaveTakenEffect): never "Something went wrong".
     expect(
       screen.getByLabelText('No answer yet: this may already have been recorded'),

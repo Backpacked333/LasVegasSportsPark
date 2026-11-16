@@ -19,6 +19,7 @@ import {
 import { createTestApp } from '../../../testing/test-app';
 import { TeamWorkspaceScreen } from '../TeamWorkspaceScreen';
 import { formFixtures, miniRows, outcomeFor } from '../WorkspaceExtras';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), navigate: jest.fn() };
 jest.mock('expo-router', () => ({
@@ -243,6 +244,7 @@ describe('SCR-C-22 workspace: form, mini standings, availability progress, check
     const section = await screen.findByTestId('match-check-in');
     fireEvent.press(await within(section).findByRole('button', { name: 'Absent: Kim Junior' }));
     const failure = await within(section).findByTestId(`check-in-failure-${IDS.child}`);
+    await openSupportDetails(within(failure));
     expect(within(failure).getByText(/Error code: INTERNAL_ERROR/)).toBeOnTheScreen();
 
     fireEvent.press(within(failure).getByRole('button', { name: /^(Try again|Check again)$/ }));

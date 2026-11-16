@@ -384,6 +384,7 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
     await act(async () => {
       fireEvent.press(screen.getByRole('button', { name: 'Add 2 people to cart' }));
     });
+    await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
     expect(screen.getByRole('checkbox', { name: 'Ada. Added to your cart' })).toBeDisabled();
     // A 503 is no definite answer: the line may have been added (SPK-UX-008, §4.9).

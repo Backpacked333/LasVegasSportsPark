@@ -26,7 +26,7 @@ import { StatusBadge } from '../../ui/StatusBadge';
 import { makeStyles, spacing } from '../../ui/theme';
 import { formatInstant, ordinal } from './format';
 import type { Workspace } from './queries';
-import { CommandFailure } from './ui';
+import { CommandError } from '../../ui/CommandError';
 import { FieldValue, TextField } from '../../ui/Field';
 import { OfflineNotice } from '../../ui/OfflineNotice';
 import { Section } from '../../ui/Section';
@@ -137,7 +137,8 @@ function OfferAnswer({
         </Text>
       )}
       {error ? (
-        <CommandFailure
+        <CommandError
+          wording="team"
           error={error}
           onRetry={accept.error ? doAccept : doDecline}
           onReload={() => {
@@ -223,7 +224,8 @@ function WithdrawFromList({ workspace, onReload }: { workspace: Workspace; onRel
         />
       </View>
       {withdraw.error ? (
-        <CommandFailure
+        <CommandError
+          wording="team"
           error={withdraw.error}
           onRetry={submit}
           onReload={() => {

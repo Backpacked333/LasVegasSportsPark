@@ -30,7 +30,7 @@ import { useState } from 'react';
 import { View } from 'react-native';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
-import { CommandFailure } from '../../features/money/CommandFailure';
+import { CommandError } from '../../ui/CommandError';
 import { formatDateRange } from '../../features/money/format';
 import { useNameOf } from '../../features/money/people';
 import { combineQueries } from '../../features/money/queries';
@@ -281,7 +281,8 @@ function CancelForm({
             />
           </View>
           {failure ? (
-            <CommandFailure
+            <CommandError
+              wording="money"
               error={failure}
               what="the cancellation"
               onRetry={() => {

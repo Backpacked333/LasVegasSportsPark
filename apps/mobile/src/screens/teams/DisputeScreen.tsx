@@ -30,7 +30,7 @@ import { idParam } from '../../features/teams/routes';
 import { PUBLICATION_CONSEQUENCE_LABELS, disputeStatus } from '../../features/teams/status';
 import { DisputeWithdraw } from '../../features/teams/DisputeWithdraw';
 import { CaptainOnly, TeamFrame } from '../../features/teams/TeamFrame';
-import { CommandFailure } from '../../features/teams/ui';
+import { CommandError } from '../../ui/CommandError';
 import { AppHeader } from '../../ui/AppHeader';
 import { FieldValue, TextField } from '../../ui/Field';
 import { OfflineNotice } from '../../ui/OfflineNotice';
@@ -282,7 +282,8 @@ function DisputeForm({
           <Text variant="caption" tone="muted">{`Error code: ${submitDispute.error.code}`}</Text>
         </View>
       ) : submitDispute.error ? (
-        <CommandFailure
+        <CommandError
+          wording="team"
           error={submitDispute.error}
           onRetry={submit}
           unavailableText="Submitting a dispute for this game is not available to you."
@@ -317,7 +318,8 @@ function DisputeContent({
       return error.isNotFound || error.isPermissionRestriction ? (
         <StateView variant="unavailable" />
       ) : (
-        <CommandFailure
+        <CommandError
+          wording="team"
           error={error}
           onRetry={() => {
             void results.refetch();

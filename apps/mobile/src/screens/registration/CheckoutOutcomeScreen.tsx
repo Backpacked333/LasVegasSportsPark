@@ -42,7 +42,7 @@ import {
 } from '../../api/command-outcome';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
-import { CommandError } from '../../features/registration/CommandError';
+import { CommandError } from '../../ui/CommandError';
 import { DevPaymentMethodPicker } from '../../features/registration/dev';
 import { formatInstant, formatMoney } from '../../features/registration/format';
 import { useParticipantNames } from '../../features/registration/participants';
@@ -157,7 +157,7 @@ function RetryPayment({
           busy={retry.isProcessing}
         />
       </View>
-      <CommandError error={failure} onRetry={() => void submit()} />
+      <CommandError wording="registration" error={failure} onRetry={() => void submit()} />
     </View>
   );
 }

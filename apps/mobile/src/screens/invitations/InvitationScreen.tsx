@@ -69,7 +69,7 @@ import {
   type GrantPermission,
   type MeData,
 } from '../account/components/account-data';
-import { CommandError } from '../account/components/CommandError';
+import { CommandError } from '../../ui/CommandError';
 
 export type InvitationType = 'family' | 'team';
 

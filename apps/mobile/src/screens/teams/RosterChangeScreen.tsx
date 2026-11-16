@@ -41,7 +41,7 @@ import { isCurrentPlayer, rosterMemberStatus } from '../../features/teams/status
 import { CaptainOnly, TeamFrame } from '../../features/teams/TeamFrame';
 import { TextField } from '../../ui/Field';
 import { ChoiceList } from '../../ui/ChoiceList';
-import { CommandFailure } from '../../features/teams/ui';
+import { CommandError } from '../../ui/CommandError';
 import { AppHeader } from '../../ui/AppHeader';
 import { OfflineNotice } from '../../ui/OfflineNotice';
 import { ReasonList } from '../../ui/ReasonList';
@@ -81,7 +81,8 @@ function EligibilityCheck({
   if (check.data === undefined) {
     if (check.error)
       return (
-        <CommandFailure
+        <CommandError
+          wording="team"
           error={check.error}
           onRetry={() => void check.refetch()}
           unavailableText="Checking eligibility is not available to you for this team."
@@ -206,7 +207,8 @@ function AddPlayer({
         />
       ) : null}
       {change.error ? (
-        <CommandFailure
+        <CommandError
+          wording="team"
           error={change.error}
           onRetry={submit}
           onReload={() => {
@@ -313,7 +315,8 @@ function RemovePlayer({
         </Text>
       ) : null}
       {change.error ? (
-        <CommandFailure
+        <CommandError
+          wording="team"
           error={change.error}
           onRetry={submit}
           onReload={() => {

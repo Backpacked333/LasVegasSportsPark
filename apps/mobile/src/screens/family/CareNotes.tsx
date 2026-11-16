@@ -34,7 +34,7 @@ import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { Text } from '../../ui/Text';
 import { makeStyles, radius, spacing } from '../../ui/theme';
-import { CommandError } from '../account/components/CommandError';
+import { CommandError } from '../../ui/CommandError';
 
 type CareNote = Schema<'CareNote'>;
 type CareNoteKind = CareNote['kind'];

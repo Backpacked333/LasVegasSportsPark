@@ -55,7 +55,7 @@ import {
 } from '../../api/command-outcome';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
-import { CommandError } from '../../features/registration/CommandError';
+import { CommandError } from '../../ui/CommandError';
 import { DevPaymentMethodPicker } from '../../features/registration/dev';
 import { ExpiryNotice } from '../../features/registration/ExpiryNotice';
 import { formatInstant, formatMoney } from '../../features/registration/format';
@@ -485,6 +485,7 @@ function CheckoutContent({
       ) : null}
 
       <CommandError
+        wording="registration"
         error={checkRefused ? null : (failure?.error ?? null)}
         onRetry={failure?.retry}
         onReload={() => {

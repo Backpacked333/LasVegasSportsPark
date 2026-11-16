@@ -10,8 +10,8 @@ import { ApiError } from '@sportspark/api-client';
 import { apiErrorBody, fakeResponse } from '@sportspark/api-client/testing';
 import { act, render, renderHook, screen, waitFor } from '@testing-library/react-native';
 import { AccessibilityInfo } from 'react-native';
-import { CommandFailure as MoneyCommandFailure } from '../../features/money/CommandFailure';
-import { CommandError } from '../../screens/account/components/CommandError';
+import { openSupportDetails } from '../../testing/ui-surfaces';
+import { CommandError } from '../../ui/CommandError';
 import { createTestApp } from '../../testing/test-app';
 import * as outcome from '../command-outcome';
 import { useApiCommand } from '../useApiCommand';
@@ -104,7 +104,7 @@ describe('R4-CLIENTS-A11Y-COPY-01 command outcome predicates (src/api/command-ou
 });
 
 describe('R4-CLIENTS-A11Y-COPY-01 account CommandError', () => {
-  it('SPK-AT-028: a refusal before running reads "Not done" with the API message and that nothing was changed, announced with "Try again"', () => {
+  it('SPK-AT-028: a refusal before running reads "Not done" with the API message and that nothing was changed, announced with "Try again"', async () => {
     const app = createTestApp();
     const onRetry = jest.fn();
     render(<CommandError error={paused()} onRetry={onRetry} />, { wrapper: app.wrapper });
@@ -115,9 +115,9 @@ describe('R4-CLIENTS-A11Y-COPY-01 account CommandError', () => {
         'Nothing was changed: the service did not run this request, so nothing was paid or recorded.',
       ),
     ).toBeOnTheScreen();
-    expect(
-      screen.getByText('Error code: INTEGRATION_UNAVAILABLE. Reference: c-paused'),
-    ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(screen.getByText('Error code: INTEGRATION_UNAVAILABLE')).toBeOnTheScreen();
+    expect(screen.getByText('Reference: c-paused')).toBeOnTheScreen();
     expect(
       screen.queryByLabelText('No answer yet: this may already have been recorded'),
     ).toBeNull();
@@ -227,9 +227,10 @@ describe('R4-CLIENTS-A11Y-COPY-01 a refusal before running of a re-check (refuse
     const check = paused();
     memory.failed('key-a', check);
     const app = createTestApp();
-    render(<MoneyCommandFailure error={check} what="the cancellation" onRetry={jest.fn()} />, {
-      wrapper: app.wrapper,
-    });
+    render(
+      <CommandError wording="money" error={check} what="the cancellation" onRetry={jest.fn()} />,
+      { wrapper: app.wrapper },
+    );
     expect(screen.getByLabelText('Check not run')).toBeOnTheScreen();
     expect(screen.getByText(PAUSED)).toBeOnTheScreen();
     expect(

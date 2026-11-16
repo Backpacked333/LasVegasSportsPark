@@ -16,6 +16,7 @@ import {
 } from '../../../features/teams/testing/fixtures';
 import { createTeamsTestApp, dropAnswers } from '../../../features/teams/testing/teams-test-app';
 import { ContributionScreen } from '../ContributionScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 const outcome = (status: string, overrides = {}) => ({
   payment: paymentAttempt({ status: status as never }),
@@ -144,6 +145,7 @@ describe('SCR-C-25 ContributionScreen', () => {
     expect(
       await screen.findByLabelText('No answer yet: this may already have been recorded'),
     ).toBeOnTheScreen();
+    await openSupportDetails(screen);
     expect(screen.getByText(/Error code: NETWORK_UNAVAILABLE/)).toBeOnTheScreen();
     expect(screen.queryByLabelText('Not done')).toBeNull();
     // Another method would change the request and send it under a new key: never offered.
@@ -187,6 +189,7 @@ describe('SCR-C-25 ContributionScreen', () => {
     expect(
       await screen.findByLabelText('No answer yet: this may already have been recorded'),
     ).toBeOnTheScreen();
+    await openSupportDetails(screen);
     expect(screen.getByText(/Error code: RESPONSE_UNREADABLE/)).toBeOnTheScreen();
     expect(screen.queryByLabelText('Not done')).toBeNull();
     expect(screen.queryByRole('radio', { name: /^Development payment/ })).toBeNull();
@@ -399,9 +402,9 @@ describe('SCR-C-25 ContributionScreen', () => {
       fireEvent.press(await screen.findByRole('button', { name: 'Check again' }));
     });
     expect(await screen.findByLabelText('This may already have been done')).toBeOnTheScreen();
-    expect(
-      screen.getByText('Error code: IDEMPOTENCY_OUTCOME_UNAVAILABLE. Reference: corr-pay'),
-    ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(screen.getByText('Error code: IDEMPOTENCY_OUTCOME_UNAVAILABLE')).toBeOnTheScreen();
+    expect(screen.getByText('Reference: corr-pay')).toBeOnTheScreen();
     expect(screen.queryByLabelText('Not done')).toBeNull();
     expect(screen.queryByLabelText('Something went wrong')).toBeNull();
     // Picking another method would send a new key: never offered after a payment that committed.
@@ -611,9 +614,9 @@ describe('SCR-C-25 ContributionScreen', () => {
         fakeResponse(503, apiErrorBody('INTEGRATION_UNAVAILABLE', { correlationId: 'c-live' })),
     });
     expect(await screen.findByTestId('contribution-payments-unchecked')).toBeOnTheScreen();
-    expect(
-      screen.getByText(/Error code: INTEGRATION_UNAVAILABLE\. Reference: c-live/),
-    ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(screen.getByText('Error code: INTEGRATION_UNAVAILABLE')).toBeOnTheScreen();
+    expect(screen.getByText('Reference: c-live')).toBeOnTheScreen();
     expect(
       screen.getByText(/We could not check for a payment already on its way/),
     ).toBeOnTheScreen();

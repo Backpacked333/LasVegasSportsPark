@@ -43,7 +43,7 @@ import {
   usePersonName,
   useMe,
 } from '../account/components/account-data';
-import { CommandError } from '../account/components/CommandError';
+import { CommandError } from '../../ui/CommandError';
 
 type CalendarFeed = Schema<'CalendarFeed'>;
 type CalendarFeedCreated = Schema<'CalendarFeedCreated'>;

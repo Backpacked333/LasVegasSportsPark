@@ -33,7 +33,7 @@ import { useState } from 'react';
 import { View } from 'react-native';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
-import { CommandError } from '../../features/registration/CommandError';
+import { CommandError } from '../../ui/CommandError';
 import { ExpiryNotice } from '../../features/registration/ExpiryNotice';
 import { useFormsStatus, type FormsStatus } from '../../features/registration/forms';
 import { formatMoney } from '../../features/registration/format';
@@ -426,6 +426,7 @@ function BasketContent({ basket, refetch }: { basket: Basket; refetch: () => voi
         </Section>
       ) : null}
       <CommandError
+        wording="registration"
         error={failure?.error ?? null}
         onRetry={failure?.retry}
         onReload={() => {

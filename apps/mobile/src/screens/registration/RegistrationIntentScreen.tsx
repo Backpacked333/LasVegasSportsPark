@@ -69,7 +69,7 @@ import {
   useCampWeeks,
   weekChoosable,
 } from '../../features/registration/CampWeeks';
-import { CommandError } from '../../features/registration/CommandError';
+import { CommandError } from '../../ui/CommandError';
 import type { RegistrationIntent } from '../../features/registration/format';
 import {
   MY_BASKETS_KEY,
@@ -511,6 +511,7 @@ function IntentChooser({ offering }: { offering: Offering }) {
       ) : null}
       {basketIntent ? (
         <CommandError
+          wording="registration"
           error={failure}
           onRetry={() => void submit()}
           onReload={() => {

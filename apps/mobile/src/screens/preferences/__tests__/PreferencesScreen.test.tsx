@@ -173,6 +173,9 @@ describe('SCR-C-36 PreferencesScreen', () => {
       await screen.findByRole('switch', { name: 'In the app for promotional messages' }),
     );
     fireEvent.press(screen.getByRole('button', { name: 'Save preferences' }));
+    // The answer arrives after the press: wait for it before opening its support fold.
+    await screen.findByRole('button', { name: 'Check again' });
+    await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
     expect(
       screen.getByRole('switch', { name: 'In the app for promotional messages' }),
@@ -203,9 +206,9 @@ describe('SCR-C-36 PreferencesScreen', () => {
     );
     fireEvent.press(screen.getByRole('button', { name: 'Save preferences' }));
     expect(await screen.findByLabelText('This may already have been done')).toBeOnTheScreen();
-    expect(
-      screen.getByText('Error code: IDEMPOTENCY_OUTCOME_UNAVAILABLE. Reference: corr-prefs'),
-    ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(screen.getByText('Error code: IDEMPOTENCY_OUTCOME_UNAVAILABLE')).toBeOnTheScreen();
+    expect(screen.getByText('Reference: corr-prefs')).toBeOnTheScreen();
     expect(screen.queryByLabelText('Something went wrong')).toBeNull();
     const reads = () =>
       app.fake.requests.filter(
@@ -606,6 +609,7 @@ describe('SCR-C-36 push devices (SPK-UX-001 push registration, SPK-IAM-006; DEC-
     );
     fireEvent.changeText(within(row).getByLabelText('Reason'), 'Old phone');
     fireEvent.press(within(row).getByRole('button', { name: 'Stop push' }));
+    await openSupportDetails(within(row));
     expect(await within(row).findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
     expect(within(row).getByLabelText('Reason')).toHaveProp('value', 'Old phone');
     // A 5xx may come after the device was stopped: checked again under the same key (§4.9).

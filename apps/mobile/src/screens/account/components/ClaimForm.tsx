@@ -23,7 +23,7 @@ import { LiveRegion, sentences } from '../../../ui/announce';
 import { StatusBadge } from '../../../ui/StatusBadge';
 import { spacing } from '../../../ui/theme';
 import { listPermissions, ME_QUERY_KEY, personNameText, usePersonName } from './account-data';
-import { CommandError } from './CommandError';
+import { CommandError } from '../../../ui/CommandError';
 import { Paragraph, TextField } from './forms';
 
 type ClaimAccepted = Schema<'ClaimAccepted'>;

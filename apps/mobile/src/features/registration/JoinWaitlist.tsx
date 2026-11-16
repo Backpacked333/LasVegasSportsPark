@@ -15,7 +15,7 @@ import { useState } from 'react';
 import { View } from 'react-native';
 import { useApiCommand } from '../../api/useApiCommand';
 import { Button } from '../../ui/Button';
-import { CommandError } from './CommandError';
+import { CommandError } from '../../ui/CommandError';
 import { MY_WAITLIST_KEY } from './in-progress';
 import { registrationRoutes } from './routes';
 
@@ -85,7 +85,7 @@ export function JoinWaitlistButton({
         busy={join.isProcessing}
         disabled={disabled}
       />
-      <CommandError error={failure} onRetry={() => void submit()} />
+      <CommandError wording="registration" error={failure} onRetry={() => void submit()} />
     </View>
   );
 }

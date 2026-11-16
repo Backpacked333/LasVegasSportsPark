@@ -407,7 +407,9 @@ describe('Package G BookingDetailScreen (SPK-COND-003)', () => {
     await openCancel();
     await confirmCancel();
     expect(await screen.findByLabelText('No answer yet')).toBeOnTheScreen();
-    expect(screen.getByText(/Error code: INTERNAL_ERROR\. Reference: c-500/)).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(screen.getByText('Error code: INTERNAL_ERROR')).toBeOnTheScreen();
+    expect(screen.getByText('Reference: c-500')).toBeOnTheScreen();
     expect(screen.queryByLabelText('Something went wrong')).toBeNull();
     await act(async () => {
       fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
@@ -432,9 +434,9 @@ describe('Package G BookingDetailScreen (SPK-COND-003)', () => {
     await openCancel();
     await confirmCancel();
     expect(await screen.findByLabelText('This may already have been done')).toBeOnTheScreen();
-    expect(
-      screen.getByText('Error code: IDEMPOTENCY_OUTCOME_UNAVAILABLE. Reference: c-lost'),
-    ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(screen.getByText('Error code: IDEMPOTENCY_OUTCOME_UNAVAILABLE')).toBeOnTheScreen();
+    expect(screen.getByText('Reference: c-lost')).toBeOnTheScreen();
     expect(screen.queryByLabelText('Something went wrong')).toBeNull();
     expect(screen.queryByLabelText('This changed since you opened it')).toBeNull();
     const reads = app.fake.requests.filter((r) => r.route === '/bookings/{id}').length;
@@ -460,6 +462,7 @@ describe('Package G BookingDetailScreen (SPK-COND-003)', () => {
     await openCancel('Moving away');
     await confirmCancel();
     expect(await screen.findByLabelText('This changed since you opened it')).toBeOnTheScreen();
+    await openSupportDetails(screen);
     expect(screen.getByText(/Error code: STALE_REVISION/)).toBeOnTheScreen();
     expect(screen.getByLabelText('Reason for canceling')).toHaveDisplayValue('Moving away');
     fireEvent.press(screen.getByRole('button', { name: 'Reload' }));

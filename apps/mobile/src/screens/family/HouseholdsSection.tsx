@@ -38,7 +38,7 @@ import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Section } from '../../ui/Section';
 import { Text } from '../../ui/Text';
 import { spacing } from '../../ui/theme';
-import { CommandError } from '../account/components/CommandError';
+import { CommandError } from '../../ui/CommandError';
 
 type MyHousehold = Schema<'MyHousehold'>;
 type Member = MyHousehold['members'][number];

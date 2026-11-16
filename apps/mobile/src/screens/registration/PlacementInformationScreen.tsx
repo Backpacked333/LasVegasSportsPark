@@ -27,7 +27,7 @@ import { useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
-import { CommandError } from '../../features/registration/CommandError';
+import { CommandError } from '../../ui/CommandError';
 import { fieldMessages } from '../../features/registration/format';
 import { useRegistrationOptions } from '../../features/registration/options';
 import { useParticipantNames } from '../../features/registration/participants';
@@ -413,7 +413,7 @@ function PlacementForm({
           </UiText>
         ) : null}
       </Section>
-      <CommandError error={failure} onRetry={() => void submit()} />
+      <CommandError wording="registration" error={failure} onRetry={() => void submit()} />
       <View style={styles.actions}>
         <Button
           label="Save placement information"

@@ -84,8 +84,8 @@ going" is `RsvpInline.tsx`, sharing its `useRsvpAnswer` logic), the per-section 
   (an issue then answers for the pass it made, see Pass above; the RSVP keeps its `expectedRevision`;
   the support request is resent as sent even after the draft was edited, and an edited draft is
   kept). IDEMPOTENCY_OUTCOME_UNAVAILABLE reads "This may already have been done" with "Reload".
-  The pass, inbox and support screens use the account `CommandError`, the RSVP the teams
-  `CommandFailure`; both decide with `src/api/command-outcome.ts` (the shared api-client
+  The pass, inbox and support screens and the RSVP use the shared `ui/CommandError` (the RSVP in
+  its team wording); it decides with `src/api/command-outcome.ts` (the shared api-client
   predicates).
 - **Inbox (SPK-COMMS-004).** Read and acknowledge send the attempt's `revision` (the newest the
   screen knows); a stale read reloads the list; a stale acknowledgment shows the code with

@@ -24,7 +24,7 @@ import { ListRow } from '../../ui/ListRow';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { spacing } from '../../ui/theme';
-import { CommandError } from '../account/components/CommandError';
+import { CommandError } from '../../ui/CommandError';
 import { ChoiceGroup, Paragraph, SectionHeader, TextField } from '../account/components/forms';
 
 type ContactPoint = Schema<'ContactPoint'>;

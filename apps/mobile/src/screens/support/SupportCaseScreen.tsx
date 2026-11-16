@@ -31,7 +31,7 @@ import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { spacing } from '../../ui/theme';
-import { CommandError, type NotAvailableCopy } from '../account/components/CommandError';
+import { CommandError, type NotAvailableCopy } from '../../ui/CommandError';
 import {
   CATEGORY_LABELS,
   caseStatus,

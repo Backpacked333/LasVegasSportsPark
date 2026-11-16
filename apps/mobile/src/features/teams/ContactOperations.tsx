@@ -30,7 +30,7 @@ import { spacing } from '../../ui/theme';
 import { formatInstant } from './format';
 import type { Workspace } from './queries';
 import { TextField } from '../../ui/Field';
-import { CommandFailure } from './ui';
+import { CommandError } from '../../ui/CommandError';
 import { OfflineNotice } from '../../ui/OfflineNotice';
 import { Text } from '../../ui/Text';
 
@@ -147,7 +147,8 @@ export function ContactOperations({ workspace }: { workspace: Workspace }) {
       </Text>
       <SupportDetails decisions={['DEC-015']} />
       {send.error ? (
-        <CommandFailure
+        <CommandError
+          wording="team"
           error={send.error}
           onRetry={submit}
           unavailableText="Contacting the operating team about this team is not available to you. Use Support for a request about yourself."

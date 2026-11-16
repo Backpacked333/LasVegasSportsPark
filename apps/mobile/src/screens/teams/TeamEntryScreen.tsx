@@ -57,7 +57,7 @@ import {
 } from '../../features/teams/queries';
 import { idParam, teamRoutes } from '../../features/teams/routes';
 import { teamEntryStatus } from '../../features/teams/status';
-import { CommandFailure } from '../../features/teams/ui';
+import { CommandError } from '../../ui/CommandError';
 import { ChoiceList } from '../../ui/ChoiceList';
 import { AppHeader } from '../../ui/AppHeader';
 import { FieldValue, TextField } from '../../ui/Field';
@@ -209,7 +209,8 @@ function SuggestedPlayers({ created, teamName }: { created: Created; teamName: s
               </>
             )}
             {state?.status === 'failed' && !withheld ? (
-              <CommandFailure
+              <CommandError
+                wording="team"
                 error={state.error}
                 onRetry={() => send(player.personId)}
                 unavailableText="Inviting this player is not available to you."
@@ -355,7 +356,8 @@ function EntryForm({
           />
         </View>
         {create.error ? (
-          <CommandFailure
+          <CommandError
+            wording="team"
             error={create.error}
             onRetry={submit}
             unavailableText={

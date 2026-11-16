@@ -34,7 +34,7 @@ import { useState } from 'react';
 import { View } from 'react-native';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
-import { CommandFailure } from '../../features/money/CommandFailure';
+import { CommandError } from '../../ui/CommandError';
 import { formatDateRange } from '../../features/money/format';
 import { useNameOf } from '../../features/money/people';
 import { moneyRoutes, param } from '../../features/money/routes';
@@ -403,7 +403,8 @@ function TransferForm({ enrollment, reload }: { enrollment: Enrollment; reload: 
           <StateView variant="loading" label="the transfer preview" />
         ) : null}
         {previewFailed ? (
-          <CommandFailure
+          <CommandError
+            wording="money"
             error={previewFailed}
             what="the transfer preview"
             onRetry={() => void previewQuery.refetch()}
@@ -480,7 +481,8 @@ function TransferForm({ enrollment, reload }: { enrollment: Enrollment; reload: 
           />
         </View>
       ) : failure ? (
-        <CommandFailure
+        <CommandError
+          wording="money"
           error={failure.error}
           what="the transfer"
           onRetry={() => {

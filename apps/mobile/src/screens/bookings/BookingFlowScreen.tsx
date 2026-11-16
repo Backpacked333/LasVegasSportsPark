@@ -45,7 +45,7 @@ import { useState } from 'react';
 import { Text, View } from 'react-native';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
-import { CommandFailure } from '../../features/money/CommandFailure';
+import { CommandError } from '../../ui/CommandError';
 import { ChoiceGroup, ChoiceRow, FieldError, TextField } from '../../features/money/ui';
 import {
   bookableTimes,
@@ -538,7 +538,8 @@ function BookingForm({
           </View>
         ) : null}
         {failure ? (
-          <CommandFailure
+          <CommandError
+            wording="money"
             error={failure}
             what="the booking"
             onRetry={() => void submit()}

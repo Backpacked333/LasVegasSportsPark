@@ -55,7 +55,7 @@ import {
 import { usePullToRefresh } from '../../features/teams/refresh';
 import { teamRoutes } from '../../features/teams/routes';
 import { invitationStatus, teamEntryStatus } from '../../features/teams/status';
-import { CommandFailure } from '../../features/teams/ui';
+import { CommandError } from '../../ui/CommandError';
 import { ownResponse, viewerOnRoster } from '../../features/today/fixture-model';
 import { RsvpInline } from '../../features/today/RsvpInline';
 import { fixtureAcceptsRsvp, type RsvpState } from '../../features/today/status';
@@ -395,7 +395,8 @@ function InvitationItem({
         </View>
       ) : null}
       {decline.error ? (
-        <CommandFailure
+        <CommandError
+          wording="team"
           error={decline.error}
           onRetry={submit}
           onReload={() => {

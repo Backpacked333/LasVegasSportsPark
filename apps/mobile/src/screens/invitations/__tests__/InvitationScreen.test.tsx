@@ -554,6 +554,7 @@ describe('SCR-C-17 InvitationScreen (family access)', () => {
     fireEvent.press(await screen.findByRole('button', { name: 'Decline' }));
     fireEvent.changeText(screen.getByLabelText('Reason (optional)'), 'Not me');
     fireEvent.press(screen.getByRole('button', { name: 'Confirm decline' }));
+    await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
     // The read refreshes meanwhile (return to the app, reconnect) with a newer revision.
     await act(async () => {
@@ -851,6 +852,7 @@ describe('SCR-C-17 InvitationScreen (team)', () => {
     });
     fireEvent.press(await screen.findByRole('button', { name: 'Decline' }));
     fireEvent.press(screen.getByRole('button', { name: 'Confirm decline' }));
+    await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
     await act(async () => {
       await app.queryClient.invalidateQueries({ queryKey: ['api', '/team-invitations/{id}'] });

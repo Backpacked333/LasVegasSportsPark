@@ -54,7 +54,7 @@ import {
   type RsvpState,
 } from '../../features/teams/status';
 import { TeamFrame } from '../../features/teams/TeamFrame';
-import { CommandFailure } from '../../features/teams/ui';
+import { CommandError } from '../../ui/CommandError';
 import { AppHeader } from '../../ui/AppHeader';
 import { FieldValue } from '../../ui/Field';
 import { OfflineNotice } from '../../ui/OfflineNotice';
@@ -146,7 +146,8 @@ function AnswerControl({
       {respond.error && availabilityClosedAt(respond.error) !== null ? (
         <AvailabilityClosed error={respond.error} timeZone={timeZone} what="Answers" />
       ) : respond.error ? (
-        <CommandFailure
+        <CommandError
+          wording="team"
           error={respond.error}
           onRetry={() => chosen && submit(chosen)}
           onReload={() => {

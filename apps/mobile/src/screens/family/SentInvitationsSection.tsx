@@ -25,7 +25,7 @@ import { Section } from '../../ui/Section';
 import { Text } from '../../ui/Text';
 import { spacing } from '../../ui/theme';
 import { listPermissions } from '../account/components/account-data';
-import { CommandError } from '../account/components/CommandError';
+import { CommandError } from '../../ui/CommandError';
 import {
   INVITATION_KEYS,
   invitationStatus,

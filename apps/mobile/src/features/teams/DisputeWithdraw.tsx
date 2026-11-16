@@ -19,7 +19,7 @@ import { LiveRegion } from '../../ui/announce';
 import { Button } from '../../ui/Button';
 import { spacing } from '../../ui/theme';
 import { TextField } from '../../ui/Field';
-import { CommandFailure } from './ui';
+import { CommandError } from '../../ui/CommandError';
 import { OfflineNotice } from '../../ui/OfflineNotice';
 import { Text } from '../../ui/Text';
 
@@ -113,7 +113,8 @@ export function DisputeWithdraw({
         />
       </View>
       {withdraw.error ? (
-        <CommandFailure
+        <CommandError
+          wording="team"
           error={withdraw.error}
           onRetry={submit}
           onReload={() => {

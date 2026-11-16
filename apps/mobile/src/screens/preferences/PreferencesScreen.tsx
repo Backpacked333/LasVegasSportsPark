@@ -51,7 +51,7 @@ import { StatusBadge } from '../../ui/StatusBadge';
 import { SwitchRow } from '../../ui/SwitchRow';
 import { Text } from '../../ui/Text';
 import { spacing } from '../../ui/theme';
-import { CommandError } from '../account/components/CommandError';
+import { CommandError } from '../../ui/CommandError';
 import { CalendarFeedsSection } from './CalendarFeedsSection';
 import { PushDevicesSection } from './PushDevicesSection';
 

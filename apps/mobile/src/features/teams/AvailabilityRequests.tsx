@@ -27,7 +27,7 @@ import { StatusBadge } from '../../ui/StatusBadge';
 import { spacing } from '../../ui/theme';
 import { formatInstant, plural } from './format';
 import { TextField } from '../../ui/Field';
-import { CommandFailure } from './ui';
+import { CommandError } from '../../ui/CommandError';
 import { OfflineNotice } from '../../ui/OfflineNotice';
 import { Text } from '../../ui/Text';
 
@@ -183,7 +183,8 @@ export function AvailabilityRequests({
       {send.error && availabilityClosedAt(send.error) !== null ? (
         <AvailabilityClosed error={send.error} timeZone={timeZone} what="Availability requests" />
       ) : send.error ? (
-        <CommandFailure
+        <CommandError
+          wording="team"
           error={send.error}
           onRetry={submit}
           onReload={() => {

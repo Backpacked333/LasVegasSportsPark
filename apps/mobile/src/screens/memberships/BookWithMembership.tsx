@@ -26,7 +26,7 @@ import type { ApiError } from '@sportspark/api-client';
 import { useState } from 'react';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
-import { CommandFailure } from '../../features/money/CommandFailure';
+import { CommandError } from '../../ui/CommandError';
 import { formatDateRange, hasPassed } from '../../features/money/format';
 import { bookingStatus, type SessionBooking } from '../../features/money/status';
 import { ChoiceCard } from '../../ui/ChoiceList';
@@ -249,7 +249,12 @@ function BookingForm({ membership, onClose }: { membership: Membership; onClose:
           <Text variant="caption" tone="muted">{`Error code: ${failure.code}`}</Text>
         </LiveRegion>
       ) : failure ? (
-        <CommandFailure error={failure} what="the booking" onRetry={() => void submit()} />
+        <CommandError
+          wording="money"
+          error={failure}
+          what="the booking"
+          onRetry={() => void submit()}
+        />
       ) : null}
     </Section>
   );

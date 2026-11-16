@@ -160,6 +160,7 @@ describe('SCR-C-24 AvailabilityScreen', () => {
     });
     fireEvent.press(await screen.findByRole('button', { name: 'Unavailable' }));
     expect(await screen.findByLabelText('This changed since you opened it')).toBeOnTheScreen();
+    await openSupportDetails(screen);
     expect(screen.getByText(/Error code: STALE_REVISION/)).toBeOnTheScreen();
     const reads = app.requestsTo('GET', '/fixtures/{id}').length;
     fireEvent.press(screen.getByRole('button', { name: 'Reload' }));
@@ -319,6 +320,9 @@ describe('SCR-C-24 AvailabilityScreen', () => {
       fireEvent.press(
         await screen.findByRole('button', { name: 'Send a reminder to players without an answer' }),
       );
+      // The answer arrives after the press: wait for it before opening its support fold.
+      await screen.findByRole('button', { name: 'Check again' });
+      await openSupportDetails(screen);
       expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
       expect(screen.queryByLabelText(/^Asked /)).toBeNull();
       fireEvent.press(screen.getByRole('button', { name: 'Check again' }));

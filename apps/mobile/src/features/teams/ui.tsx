@@ -7,29 +7,14 @@
  * the OS setting.
  *
  * Moved out: `ReasonList` (`ui/ReasonList`), `OfflineNotice` (`ui/OfflineNotice`) and the error
- * detail readers (`api/error-details`), re-exported here. `CommandFailure` stays until the three
- * command-failure views are merged.
+ * detail readers (`api/error-details`), re-exported here. `CommandFailure` became `ui/CommandError`
+ * (`wording="team"`).
  */
-import { presentationForError, recoveryActionFor, type ApiError } from '@sportspark/api-client';
 import { createContext, useContext, type ReactNode } from 'react';
 import { View } from 'react-native';
-import {
-  mayHaveTakenEffect,
-  refusedBeforeRunning,
-  secretWithheldOf,
-  tookEffectOutcomeLost,
-} from '../../api/command-outcome';
-import { detailCodeOf, eligibilityReasonsOf, fieldIssuesOf } from '../../api/error-details';
-import { LiveRegion, sentences } from '../../ui/announce';
-import { Button } from '../../ui/Button';
 import { ChoiceCard } from '../../ui/ChoiceList';
 import { Field, FieldErrorText, FieldInput, FieldValue, useFieldStyles } from '../../ui/Field';
-import { OutcomeLost } from '../../ui/OutcomeLost';
-import { ReasonList } from '../../ui/ReasonList';
-import { RefusedBeforeRunning } from '../../ui/RefusedBeforeRunning';
 import { Section as UiSection } from '../../ui/Section';
-import { StateView } from '../../ui/StateView';
-import { StatusBadge } from '../../ui/StatusBadge';
 import { Text } from '../../ui/Text';
 import { layout, makeStyles, spacing } from '../../ui/theme';
 
@@ -219,141 +204,6 @@ export function TextField({
   );
 }
 
-/**
- * A failed command (SPK-UX-008): the API's code (with the rule code in `details.code` when there is
- * one), safe message and reference, its recovery action,
- * and the user's input kept by the caller. "Try again" repeats the same intent under the same
- * idempotency key; "Reload" fetches the current record after STALE_REVISION or
- * INVALID_TRANSITION. A refusal (ACCESS_DENIED, PARTICIPANT_AUTHORITY_REQUIRED, protected
- * NOT_FOUND) is "not available" with no hint that a record exists (§4.10).
- *
- * An answer after which the command may have taken effect (`mayHaveTakenEffect`: a lost
- * connection or a timeout after sending, IDEMPOTENCY_IN_PROGRESS, INTERNAL_ERROR or another 5xx, a
- * success status whose body could not be read (RESPONSE_UNREADABLE), PAYMENT_OUTCOME_UNKNOWN) is
- * never "Not done" (§4.9, SPK-PAY-007): it reads "No answer yet: this
- * may already have been recorded", and "Check again" repeats the same request under the same key,
- * which the API answers with the stored outcome or runs once. IDEMPOTENCY_OUTCOME_UNAVAILABLE
- * (`tookEffectOutcomeLost`: an earlier attempt committed, its answer lost) is "This may already have
- * been done" with "Reload" (`ui/OutcomeLost`: every API record on screen is read again), never
- * "Not done". IDEMPOTENCY_SECRET_WITHHELD is a success whose one-time link cannot be shown again;
- * screens whose create returns a link show `SecretWithheld` instead, and this never calls it a
- * failure either. A refusal before running (`refusedBeforeRunning`: payments paused while the
- * service recovers from a restore, SPK-AT-028) changed nothing although it is a 503: it is "Not
- * done" with the API's message (`ui/RefusedBeforeRunning`), never "No answer yet". Pass `read` for
- * a failed read: it changed nothing, so it is "Not loaded" and "Try again".
- */
-export function CommandFailure({
-  error,
-  onRetry,
-  onReload,
-  unavailableText,
-  read = false,
-  testID = 'command-failure',
-}: {
-  error: ApiError;
-  onRetry?: () => void;
-  onReload?: () => void;
-  /** What is not available, e.g. "Inviting players is not available to you for this team." */
-  unavailableText?: string;
-  /** The failure is of a read (a GET), which changes nothing. */
-  read?: boolean;
-  testID?: string;
-}) {
-  const styles = useStyles();
-  const presentation = presentationForError(error);
-  if (presentation === 'unavailable') {
-    return (
-      <View testID={testID}>
-        <StateView variant="unavailable" description={unavailableText} />
-      </View>
-    );
-  }
-  if (presentation === 'turned_off') {
-    // ACCESS_DENIED CAPABILITY_DISABLED (K-12): StateView shows it as turned off (DEC-016).
-    return (
-      <View testID={testID}>
-        <StateView variant="error" error={error} />
-      </View>
-    );
-  }
-  if (!read && tookEffectOutcomeLost(error)) {
-    return (
-      <View testID={testID}>
-        <OutcomeLost error={error} />
-      </View>
-    );
-  }
-  if (!read && refusedBeforeRunning(error)) {
-    return (
-      <View testID={testID}>
-        <RefusedBeforeRunning error={error} onRetry={onRetry} />
-      </View>
-    );
-  }
-  const recovery = recoveryActionFor(error);
-  const reasons = error.code === 'ELIGIBILITY_FAILED' ? eligibilityReasonsOf(error) : [];
-  const issues = error.code === 'VALIDATION_FAILED' ? fieldIssuesOf(error) : [];
-  const stale = error.isStale;
-  const rule = detailCodeOf(error);
-  const unknown = !read && mayHaveTakenEffect(error);
-  const withheld = !read && secretWithheldOf(error) !== null;
-  const label = unknown
-    ? 'No answer yet: this may already have been recorded'
-    : withheld
-      ? 'Done, but the link cannot be shown again'
-      : stale
-        ? 'This changed since you opened it'
-        : read
-          ? 'Not loaded'
-          : 'Not done';
-  // NA-A01: the announcement ends with the next action, the button's label or the instruction.
-  const nextAction =
-    stale && onReload
-      ? 'Reload'
-      : recovery.retry && onRetry
-        ? unknown
-          ? 'Check again'
-          : 'Try again'
-        : recovery.label;
-  return (
-    <LiveRegion
-      style={styles.failure}
-      testID={testID}
-      announcement={sentences(
-        label,
-        error.message,
-        ...issues,
-        ...reasons.map((reason) => reason.message),
-        nextAction,
-      )}
-      occurrence={error}
-    >
-      <StatusBadge tone={unknown || withheld ? 'warning' : 'danger'} label={label} />
-      <Text variant="body">{error.message}</Text>
-      {issues.map((issue) => (
-        <Text key={issue} variant="body">{`▲ ${issue}`}</Text>
-      ))}
-      {reasons.length > 0 ? <ReasonList reasons={reasons} /> : null}
-      <Text variant="caption" tone="muted" selectable>
-        {`Error code: ${error.code}${rule ? ` (${rule})` : ''}${error.correlationId ? `. Reference: ${error.correlationId}` : ''}`}
-      </Text>
-      {stale && onReload ? (
-        <Button label="Reload" onPress={onReload} variant="secondary" />
-      ) : recovery.retry && onRetry ? (
-        <Button
-          label={nextAction}
-          onPress={onRetry}
-          accessibilityHint={
-            read ? 'Reads it again' : 'Sends the same request again; it is never applied twice'
-          }
-        />
-      ) : (
-        <Text variant="body">{nextAction}</Text>
-      )}
-    </LiveRegion>
-  );
-}
-
 const useStyles = makeStyles(() => ({
   title: {
     paddingHorizontal: layout.gutter,
@@ -362,5 +212,4 @@ const useStyles = makeStyles(() => ({
   },
   buttonRow: { gap: spacing.sm, paddingTop: spacing.xs },
   group: { gap: spacing.sm },
-  failure: { gap: spacing.sm, paddingVertical: spacing.sm },
 }));

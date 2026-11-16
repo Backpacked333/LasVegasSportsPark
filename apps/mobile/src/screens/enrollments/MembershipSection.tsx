@@ -25,7 +25,7 @@ import { useState } from 'react';
 import { View } from 'react-native';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
-import { CommandFailure } from '../../features/money/CommandFailure';
+import { CommandError } from '../../ui/CommandError';
 import { formatDateRange } from '../../features/money/format';
 import { ChoiceRow } from '../../features/money/ui';
 import { packageGRoutes } from '../../features/package-g/routes';
@@ -158,7 +158,8 @@ function Renewal({ enrollment }: { enrollment: Enrollment }) {
         </View>
       ) : null}
       {failure ? (
-        <CommandFailure
+        <CommandError
+          wording="money"
           error={failure}
           what="the renewal"
           onRetry={() => void submit()}

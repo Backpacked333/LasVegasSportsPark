@@ -384,9 +384,9 @@ describe('SCR-C-34 ObligationScreen', () => {
     expect(await screen.findByTestId('command-refused-before-running')).toBeOnTheScreen();
     expect(screen.getByLabelText('Not done')).toBeOnTheScreen();
     expect(screen.getByText(paused)).toBeOnTheScreen();
-    expect(
-      screen.getByText('Error code: INTEGRATION_UNAVAILABLE. Reference: c-paused'),
-    ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(screen.getByText('Error code: INTEGRATION_UNAVAILABLE')).toBeOnTheScreen();
+    expect(screen.getByText('Reference: c-paused')).toBeOnTheScreen();
     expect(screen.queryByTestId('payment-no-answer')).toBeNull();
     expect(
       screen.queryByLabelText('Payment outcome being confirmed. Do not pay again.'),
@@ -486,9 +486,9 @@ describe('SCR-C-34 ObligationScreen', () => {
     });
     const before = balanceReads();
     expect(await screen.findByLabelText('This may already have been done')).toBeOnTheScreen();
-    expect(
-      screen.getByText('Error code: IDEMPOTENCY_OUTCOME_UNAVAILABLE. Reference: c-pay-lost'),
-    ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(screen.getByText('Error code: IDEMPOTENCY_OUTCOME_UNAVAILABLE')).toBeOnTheScreen();
+    expect(screen.getByText('Reference: c-pay-lost')).toBeOnTheScreen();
     expect(screen.queryByText('Something went wrong')).toBeNull();
     expect(screen.queryByLabelText('Something went wrong')).toBeNull();
     expect(screen.getByRole('button', { name: 'Pay $40.00' })).toBeDisabled();

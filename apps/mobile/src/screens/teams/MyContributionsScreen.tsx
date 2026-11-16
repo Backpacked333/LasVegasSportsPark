@@ -31,7 +31,7 @@ import type { PaymentAttempt } from '../../features/money/status';
 import { formatMoney } from '../../features/teams/format';
 import { teamRoutes } from '../../features/teams/routes';
 import { contributionStatus, paymentStatus } from '../../features/teams/status';
-import { CommandFailure } from '../../features/teams/ui';
+import { CommandError } from '../../ui/CommandError';
 import { Section } from '../../ui/Section';
 import { Text } from '../../ui/Text';
 import { RequireSession } from '../../session/RequireSession';
@@ -73,7 +73,7 @@ export function PaymentsUnchecked({ payments }: { payments: LivePayments['paymen
         We could not check for a payment already on its way. If you paid recently, check again
         before paying: a second payment is refused while one is being confirmed.
       </Text>
-      <CommandFailure error={failed} onRetry={() => void payments.refetch()} read />
+      <CommandError wording="team" error={failed} onRetry={() => void payments.refetch()} read />
     </View>
   );
 }

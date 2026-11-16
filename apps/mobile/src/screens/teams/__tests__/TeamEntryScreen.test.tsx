@@ -21,6 +21,7 @@ import {
 import { WITHHELD_REVOKE_REASON } from '../../../features/teams/InvitationIssued';
 import { createTeamsTestApp, dropAnswers } from '../../../features/teams/testing/teams-test-app';
 import { TeamEntryScreen, divisionCriteriaText } from '../TeamEntryScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), navigate: jest.fn() };
 jest.mock('expo-router', () => ({
@@ -142,6 +143,7 @@ describe('SCR-C-27 TeamEntryScreen', () => {
     expect(
       await screen.findByText('The registration window for this season is closed.'),
     ).toBeOnTheScreen();
+    await openSupportDetails(screen);
     expect(screen.getByText(/Error code: ELIGIBILITY_FAILED/)).toBeOnTheScreen();
     expect(screen.getByLabelText('Team name').props.value).toBe('Desert Foxes');
   });

@@ -35,7 +35,7 @@ import {
 } from '../../features/teams/status';
 import { TeamFrame } from '../../features/teams/TeamFrame';
 import { ChoiceList } from '../../ui/ChoiceList';
-import { CommandFailure } from '../../features/teams/ui';
+import { CommandError } from '../../ui/CommandError';
 import { AppHeader } from '../../ui/AppHeader';
 import { FieldValue, TextField } from '../../ui/Field';
 import { OfflineNotice } from '../../ui/OfflineNotice';
@@ -135,7 +135,8 @@ function RequestContribution({
         />
       ) : null}
       {request.error ? (
-        <CommandFailure
+        <CommandError
+          wording="team"
           error={request.error}
           onRetry={send}
           unavailableText="Requesting contributions is not available to you for this team."

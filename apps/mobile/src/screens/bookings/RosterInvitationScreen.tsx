@@ -33,7 +33,7 @@ import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { TextField } from '../../features/money/ui';
 import { routeId } from '../../features/package-g/routes';
-import { CommandError } from '../../features/registration/CommandError';
+import { CommandError } from '../../ui/CommandError';
 import { useMe, useParticipantNames } from '../../features/registration/participants';
 import { ChoiceRow } from '../../features/registration/ui';
 import { displayZone, formatRange } from '../../features/today/time';
@@ -288,7 +288,7 @@ function InvitationBody({
           ) : null}
         </Section>
       ) : null}
-      <CommandError error={failure} onReload={reload} />
+      <CommandError wording="registration" error={failure} onReload={reload} />
       {joined && invitation.requiredWaiverKeys.length > 0 ? (
         <JoinerWaivers
           personId={joined}

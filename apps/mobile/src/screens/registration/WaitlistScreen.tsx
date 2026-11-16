@@ -27,7 +27,7 @@ import { StyleSheet, View } from 'react-native';
 import { usePermissions } from '../../api/permissions';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
-import { CommandError } from '../../features/registration/CommandError';
+import { CommandError } from '../../ui/CommandError';
 import { ExpiryNotice } from '../../features/registration/ExpiryNotice';
 import { formatInstant } from '../../features/registration/format';
 import { INTENT_CAPABILITY } from '../../features/registration/intents';
@@ -183,6 +183,7 @@ function EntryContent({ entry, refetch }: { entry: WaitlistEntry; refetch: () =>
       ) : null}
 
       <CommandError
+        wording="registration"
         error={failure?.error ?? null}
         onRetry={failure?.retry}
         onReload={() => {

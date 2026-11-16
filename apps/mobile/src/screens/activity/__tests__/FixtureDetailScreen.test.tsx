@@ -390,6 +390,7 @@ describe('SCR-C-20 FixtureDetailScreen', () => {
     expect(
       await screen.findByText('The person is not on a roster of this fixture.'),
     ).toBeOnTheScreen();
+    await openSupportDetails(screen);
     expect(screen.getByText(/Error code: VALIDATION_FAILED/)).toBeOnTheScreen();
 
     screen.unmount();

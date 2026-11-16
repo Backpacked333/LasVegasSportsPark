@@ -39,7 +39,7 @@ import { StatusBadge } from '../../ui/StatusBadge';
 import { Text } from '../../ui/Text';
 import { spacing } from '../../ui/theme';
 import { formatDateTime } from '../account/components/account-data';
-import { CommandError } from '../account/components/CommandError';
+import { CommandError } from '../../ui/CommandError';
 import { usePushPermissionReader, usePushPermissionStatus } from './push-permission';
 
 type PushDevice = Schema<'PushDevice'>;

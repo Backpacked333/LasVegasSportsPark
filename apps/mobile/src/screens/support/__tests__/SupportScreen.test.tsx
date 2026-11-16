@@ -206,9 +206,11 @@ describe('SCR-C-38 SupportScreen: opening a request (POST /v1/me/support-request
     });
     const form = await fillDraft();
     fireEvent.press(within(form).getByRole('button', { name: 'Send request' }));
-    expect(
-      await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE\. Reference: corr-sup/),
-    ).toBeOnTheScreen();
+    // The answer arrives after the press: wait for it before opening its support fold.
+    await screen.findByRole('button', { name: 'Check again' });
+    await openSupportDetails(screen);
+    expect(await screen.findByText('Error code: INTEGRATION_UNAVAILABLE')).toBeOnTheScreen();
+    expect(await screen.findByText('Reference: corr-sup')).toBeOnTheScreen();
     expect(within(form).getByLabelText('Title')).toHaveProp('value', 'Practice time for Sam');
     // A 5xx may follow a committed request (mayHaveTakenEffect): never "Something went wrong".
     expect(

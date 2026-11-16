@@ -138,6 +138,7 @@ describe('SCR-C-25 TeamContributionsScreen', () => {
     expect(
       await screen.findByText('This player already has an open contribution request.'),
     ).toBeOnTheScreen();
+    await openSupportDetails(screen);
     expect(screen.getByText(/Error code: RESOURCE_CONFLICT/)).toBeOnTheScreen();
     expect(screen.getByText('Resolve the conflict')).toBeOnTheScreen();
   });
@@ -167,6 +168,7 @@ describe('SCR-C-25 TeamContributionsScreen', () => {
     expect(
       await screen.findByLabelText('No answer yet: this may already have been recorded'),
     ).toBeOnTheScreen();
+    await openSupportDetails(screen);
     expect(screen.getByText(/Error code: RESPONSE_UNREADABLE/)).toBeOnTheScreen();
     expect(screen.queryByLabelText('Not done')).toBeNull();
     await act(async () => {

@@ -11,20 +11,17 @@ import { NavigationContext } from 'expo-router/build/react-navigation/core/Navig
 import * as fs from 'fs';
 import * as path from 'path';
 import { AccessibilityInfo, Platform } from 'react-native';
-import { CommandFailure as MoneyCommandFailure } from '../../features/money/CommandFailure';
 import {
   FieldError as MoneyFieldError,
   TextField as MoneyTextField,
 } from '../../features/money/ui';
-import { CommandError as RegistrationCommandError } from '../../features/registration/CommandError';
 import { TextField as RegistrationTextField } from '../../features/registration/ui';
-import { CommandFailure as TeamsCommandFailure } from '../../features/teams/ui';
-import { CommandError as AccountCommandError } from '../../screens/account/components/CommandError';
 import { TextField as AccountTextField } from '../../screens/account/components/forms';
 import { useConnectivity } from '../../providers/AppProviders';
 import { createTestApp } from '../../testing/test-app';
 import { LiveRegion, sentences } from '../announce';
 import { OUTCOME_LOST_LABEL, OutcomeLost } from '../OutcomeLost';
+import { CommandError } from '../CommandError';
 import { StateView } from '../StateView';
 
 const announce = AccessibilityInfo.announceForAccessibilityWithOptions as jest.Mock;
@@ -157,12 +154,20 @@ describe('SPK-UX-009 announcements reach VoiceOver (ui/announce)', () => {
       message: 'The payment provider has not confirmed this payment.',
       nextAction: 'await_reconciliation',
     });
-    render(<TeamsCommandFailure error={unknownPayment} onRetry={jest.fn()} />, {
+    render(<CommandError wording="team" error={unknownPayment} onRetry={jest.fn()} />, {
       wrapper: app.wrapper,
     });
-    render(<MoneyCommandFailure error={unknownPayment} what="the payment" onRetry={jest.fn()} />, {
-      wrapper: app.wrapper,
-    });
+    render(
+      <CommandError
+        wording="money"
+        error={unknownPayment}
+        what="the payment"
+        onRetry={jest.fn()}
+      />,
+      {
+        wrapper: app.wrapper,
+      },
+    );
     render(
       <StateView
         variant="error"
@@ -182,7 +187,8 @@ describe('SPK-UX-009 announcements reach VoiceOver (ui/announce)', () => {
       />,
     );
     render(
-      <MoneyCommandFailure
+      <CommandError
+        wording="money"
         error={apiError('STALE_REVISION')}
         what="the cancellation"
         onReload={jest.fn()}
@@ -272,10 +278,21 @@ describe('SPK-UX-009 announcements reach VoiceOver (ui/announce)', () => {
   it('"No answer yet" is announced by every shared failure view, with "Check again"', async () => {
     const app = createTestApp();
     const views = [
-      <MoneyCommandFailure key="money" error={noAnswer()} what="the payment" onRetry={jest.fn()} />,
-      <TeamsCommandFailure key="teams" error={noAnswer()} onRetry={jest.fn()} />,
-      <AccountCommandError key="account" error={noAnswer()} onRetry={jest.fn()} />,
-      <RegistrationCommandError key="registration" error={noAnswer()} onRetry={jest.fn()} />,
+      <CommandError
+        wording="money"
+        key="money"
+        error={noAnswer()}
+        what="the payment"
+        onRetry={jest.fn()}
+      />,
+      <CommandError wording="team" key="teams" error={noAnswer()} onRetry={jest.fn()} />,
+      <CommandError key="account" error={noAnswer()} onRetry={jest.fn()} />,
+      <CommandError
+        wording="registration"
+        key="registration"
+        error={noAnswer()}
+        onRetry={jest.fn()}
+      />,
     ];
     for (const view of views) {
       render(view, { wrapper: app.wrapper });
@@ -300,8 +317,19 @@ describe('SPK-UX-009 announcements reach VoiceOver (ui/announce)', () => {
   it('R3-SCREEN-STATES-01: offline, "Check again" is disabled with "Needs a connection" in the registration and money failure views', async () => {
     const app = createTestApp({ reachable: false });
     for (const view of [
-      <MoneyCommandFailure key="money" error={noAnswer()} what="the payment" onRetry={jest.fn()} />,
-      <RegistrationCommandError key="registration" error={noAnswer()} onRetry={jest.fn()} />,
+      <CommandError
+        wording="money"
+        key="money"
+        error={noAnswer()}
+        what="the payment"
+        onRetry={jest.fn()}
+      />,
+      <CommandError
+        wording="registration"
+        key="registration"
+        error={noAnswer()}
+        onRetry={jest.fn()}
+      />,
     ]) {
       const { unmount } = render(view, { wrapper: app.wrapper });
       await nextTask();
@@ -312,7 +340,9 @@ describe('SPK-UX-009 announcements reach VoiceOver (ui/announce)', () => {
   });
 
   it('a stale answer is announced as "This changed since you opened it"', () => {
-    render(<MoneyCommandFailure error={apiError('STALE_REVISION')} what="the cancellation" />);
+    render(
+      <CommandError wording="money" error={apiError('STALE_REVISION')} what="the cancellation" />,
+    );
     // No Reload is offered here, so none is announced.
     expect(announced()).toEqual([
       'This changed since you opened it. The record changed since it was loaded.',

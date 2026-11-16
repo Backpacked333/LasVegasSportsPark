@@ -31,7 +31,7 @@ import { useState, type ReactNode } from 'react';
 import { View } from 'react-native';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
-import { CommandFailure } from '../../features/money/CommandFailure';
+import { CommandError } from '../../ui/CommandError';
 import {
   consequenceSummary,
   sameConsequence,
@@ -405,7 +405,8 @@ export function CancelBooking({ booking, onReload }: { booking: Booking; onReloa
         />
       </View>
       {failure ? (
-        <CommandFailure
+        <CommandError
+          wording="money"
           error={failure}
           what={failureRead ? 'what canceling would change' : 'the cancellation'}
           read={failureRead}

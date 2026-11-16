@@ -417,6 +417,7 @@ describe('SCR-C-21 TeamsScreen', () => {
       render(<TeamsScreen />, { wrapper: app.wrapper });
       fireEvent.press(await screen.findByRole('button', { name: 'Decline' }));
       fireEvent.press(screen.getByRole('button', { name: 'Decline invitation' }));
+      await openSupportDetails(screen);
       expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
       fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
       expect(

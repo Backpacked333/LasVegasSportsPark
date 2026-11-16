@@ -53,7 +53,7 @@ import { useMe, useSignedIn } from '../../features/teams/queries';
 import { idParam } from '../../features/teams/routes';
 import { contributionStatus, obligationStatus, paymentStatus } from '../../features/teams/status';
 import { ChoiceList } from '../../ui/ChoiceList';
-import { CommandFailure } from '../../features/teams/ui';
+import { CommandError } from '../../ui/CommandError';
 import { AppHeader } from '../../ui/AppHeader';
 import { FieldValue } from '../../ui/Field';
 import { OfflineNotice } from '../../ui/OfflineNotice';
@@ -246,7 +246,12 @@ function PayContribution({
             We could not check for a payment already on its way. If you paid recently, check again
             before paying: a second payment is refused while one is being confirmed.
           </Text>
-          <CommandFailure error={knownFailed} onRetry={() => void known.payments.refetch()} read />
+          <CommandError
+            wording="team"
+            error={knownFailed}
+            onRetry={() => void known.payments.refetch()}
+            read
+          />
         </View>
       ) : null}
     </>
@@ -328,7 +333,7 @@ function PayContribution({
           testID="contribution-check-refused"
         />
       ) : pay.error ? (
-        <CommandFailure error={pay.error} onRetry={submit} />
+        <CommandError wording="team" error={pay.error} onRetry={submit} />
       ) : null}
     </View>
   );
