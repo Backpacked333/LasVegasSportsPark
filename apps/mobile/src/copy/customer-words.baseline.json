@@ -91,10 +91,6 @@
   "src/screens/family/HouseholdsSection.tsx :: household :: creating a household",
   "src/screens/family/HouseholdsSection.tsx :: household :: your households",
 
-  "src/screens/home/HomeScreen.tsx :: fixture :: View fixture",
-  "src/screens/home/HomeScreen.tsx :: fixture :: Your team fixtures could not be loaded.",
-  "src/screens/home/HomeScreen.tsx :: fixture :: your fixtures",
-
   "src/screens/inbox/InboxScreen.tsx :: fixture :: Open fixture",
 
   "src/screens/memberships/RenewMembership.tsx :: basket :: Add the renewal to a basket",
