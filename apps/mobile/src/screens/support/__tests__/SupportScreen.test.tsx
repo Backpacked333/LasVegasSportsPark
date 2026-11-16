@@ -552,10 +552,16 @@ describe('SCR-C-38 SupportScreen: case history (GET /v1/me/cases)', () => {
 describe('SCR-C-38 SupportScreen: contact and changes', () => {
   it('DEC-015: with no configured contact, shows the pending decision and invents no number or hours', async () => {
     renderSupport();
-    expect(await screen.findByText('Ask at the front desk.')).toBeOnTheScreen();
     expect(
-      screen.getByLabelText(
-        "The facility’s support phone, email and hours. This isn't available in the app yet.",
+      await screen.findByLabelText(
+        'The facility’s support phone, email and hours. For help, ask at the front desk.',
+      ),
+    ).toBeOnTheScreen();
+    // PA-11: no decision code in a sentence; it is only in the fold
+    expect(screen.queryByText(/DEC-015/)).toBeNull();
+    expect(
+      screen.getByText(
+        'The facility team answers your request here. For something urgent, ask at the front desk. Notes and internal details stay with the team.',
       ),
     ).toBeOnTheScreen();
     await openSupportDetails(screen);
@@ -590,7 +596,7 @@ describe('SCR-C-38 SupportScreen: contact and changes', () => {
     expect(
       await screen.findByText(/A conversation with support never replaces the change itself/),
     ).toBeOnTheScreen();
-    fireEvent.press(screen.getByRole('button', { name: 'Open enrollments' }));
+    fireEvent.press(screen.getByRole('button', { name: 'Open registrations' }));
     expect(mockPush).toHaveBeenCalledWith('/enrollments');
     fireEvent.press(screen.getByRole('button', { name: 'Open payments' }));
     expect(mockPush).toHaveBeenCalledWith('/payments');

@@ -11,6 +11,11 @@
  * guard, and do not count against "No open invitations". The same rule is applied to both lists. Answering needs the token from the invitation link (except declining a team invitation); the
  * detail says so. Invitations this person sent are on the family screen (SCR-C-31).
  *
+ * Cards (PA-11, ADR-008): each open invitation is a card (its facts and status, which opens the
+ * invitation) with "Accept" and "Decline". Both open the invitation's page, where the answer is
+ * given with the link's token and confirmed (Decline opens straight to its confirmation); nothing
+ * is answered from the list. Pull to refresh reads both lists again.
+ *
  * States: loading; empty ("No open invitations"); ready; validation failure: not applicable;
  * permission restriction (an account not linked to a person has none: finish setup); stale
  * version: not applicable, refreshed on return; offline (cached lists with their age); processing:
@@ -18,17 +23,23 @@
  * shows, each with its own error and "Try again"; recovery required: not applicable.
  */
 import type { Schema } from '@sportspark/api-client';
+import { useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
+import { useState, type ReactNode } from 'react';
 import { View } from 'react-native';
 import { useApiPages } from '../../api/useApiPages';
 import { RequireSession } from '../../session/RequireSession';
+import { Button } from '../../ui/Button';
+import { Card } from '../../ui/Card';
 import { ListRow } from '../../ui/ListRow';
 import { LoadMore } from '../../ui/LoadMore';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
+import { Section } from '../../ui/Section';
 import { StateView } from '../../ui/StateView';
+import { Text } from '../../ui/Text';
+import { layout, spacing } from '../../ui/theme';
 import { listPermissions, useMe } from '../account/components/account-data';
-import { Paragraph, SectionHeader } from '../account/components/forms';
 import { invitationStatus, relationshipLabel, subjectsText } from './InvitationScreen';
 
 type FamilyView = Schema<'InvitationView'>;
@@ -42,8 +53,8 @@ function isOpen(invitation: { effectiveStatus: string }): boolean {
 }
 
 /** In-app route of one invitation; ids only, never a token or a name (§4.14). */
-export function invitationRoute(id: string, type: 'family' | 'team'): string {
-  return `/invitations/${id}?type=${type}`;
+export function invitationRoute(id: string, type: 'family' | 'team', answer?: 'decline'): string {
+  return `/invitations/${id}?type=${type}${answer ? `&answer=${answer}` : ''}`;
 }
 
 export function InvitationsRoute() {
@@ -51,12 +62,18 @@ export function InvitationsRoute() {
 }
 
 export function InvitationsScreen() {
+  const queryClient = useQueryClient();
+  const [refreshing, setRefreshing] = useState(false);
+  // Pull to refresh: both lists again.
+  const refresh = () => {
+    setRefreshing(true);
+    void queryClient.refetchQueries({ type: 'active' }).finally(() => setRefreshing(false));
+  };
   return (
-    <Screen>
-      <SectionHeader
-        title="Invitations"
-        detail="Invitations sent to you, or to an email or phone you verified, that are still open."
-      />
+    <Screen onRefresh={refresh} refreshing={refreshing}>
+      <Text variant="body" tone="muted" style={styles.intro}>
+        Invitations sent to you, or to an email or phone you verified, that are still open.
+      </Text>
       <RequireSession what="your invitations">
         <InvitationsContent />
       </RequireSession>
@@ -112,8 +129,7 @@ function OpenInvitations() {
           description="When someone invites you to hold permissions for a family member, or to join a team, it appears here. You can also open the link you received."
         />
       ) : null}
-      <View testID="invitations-family">
-        <SectionHeader title="Family access" />
+      <Section title="Family access" variant="plain" testID="invitations-family">
         <QueryBoundary
           query={{ ...family, data: openFamily }}
           label="family access invitations"
@@ -124,21 +140,28 @@ function OpenInvitations() {
           }}
         >
           {(items) => (
-            <View accessibilityRole="list" accessibilityLabel="Family access invitations">
+            <View
+              accessibilityRole="list"
+              accessibilityLabel="Family access invitations"
+              style={styles.cards}
+            >
               {items.map((invitation) => (
-                <FamilyRow
+                <InvitationCard
                   key={invitation.id}
-                  invitation={invitation}
-                  onPress={() => router.push(invitationRoute(invitation.id, 'family'))}
-                />
+                  open={(answer) => router.push(invitationRoute(invitation.id, 'family', answer))}
+                >
+                  <FamilyRow
+                    invitation={invitation}
+                    onPress={() => router.push(invitationRoute(invitation.id, 'family'))}
+                  />
+                </InvitationCard>
               ))}
             </View>
           )}
         </QueryBoundary>
         <LoadMore pages={family} label="family access invitations" />
-      </View>
-      <View testID="invitations-team">
-        <SectionHeader title="Teams" />
+      </Section>
+      <Section title="Teams" variant="plain" testID="invitations-team">
         <QueryBoundary
           query={{ ...team, data: openTeam }}
           label="team invitations"
@@ -149,24 +172,63 @@ function OpenInvitations() {
           }}
         >
           {(items) => (
-            <View accessibilityRole="list" accessibilityLabel="Team invitations">
+            <View
+              accessibilityRole="list"
+              accessibilityLabel="Team invitations"
+              style={styles.cards}
+            >
               {items.map((invitation) => (
-                <TeamRow
+                <InvitationCard
                   key={invitation.id}
-                  invitation={invitation}
-                  onPress={() => router.push(invitationRoute(invitation.id, 'team'))}
-                />
+                  open={(answer) => router.push(invitationRoute(invitation.id, 'team', answer))}
+                >
+                  <TeamRow
+                    invitation={invitation}
+                    onPress={() => router.push(invitationRoute(invitation.id, 'team'))}
+                  />
+                </InvitationCard>
               ))}
             </View>
           )}
         </QueryBoundary>
         <LoadMore pages={team} label="team invitations" />
-      </View>
-      <Paragraph muted>
+      </Section>
+      <Text variant="body" tone="muted" style={styles.intro}>
         Answered, expired and withdrawn invitations are not listed. Invitations you sent are under
         Family and permissions.
-      </Paragraph>
+      </Text>
     </View>
+  );
+}
+
+/**
+ * One open invitation: its row (which opens it), then "Accept" and "Decline", which open it to
+ * answer there (Decline at its confirmation). Nothing is sent from the list.
+ */
+function InvitationCard({
+  open,
+  children,
+}: {
+  open: (answer?: 'decline') => void;
+  children: ReactNode;
+}) {
+  return (
+    <Card>
+      {children}
+      <View style={styles.answers}>
+        <Button
+          label="Accept"
+          onPress={() => open()}
+          accessibilityHint="Opens the invitation to accept it"
+        />
+        <Button
+          label="Decline"
+          variant="secondary"
+          onPress={() => open('decline')}
+          accessibilityHint="Opens the invitation to confirm declining it"
+        />
+      </View>
+    </Card>
   );
 }
 
@@ -197,3 +259,9 @@ function TeamRow({ invitation, onPress }: { invitation: TeamView; onPress: () =>
     />
   );
 }
+
+const styles = {
+  intro: { paddingHorizontal: layout.gutter, paddingTop: spacing.sm },
+  cards: { gap: spacing.md },
+  answers: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, paddingTop: spacing.sm },
+} as const;

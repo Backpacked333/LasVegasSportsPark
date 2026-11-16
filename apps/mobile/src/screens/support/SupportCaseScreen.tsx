@@ -19,7 +19,7 @@ import { useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
-import { Body, Caption, Field, Section, TextField } from '../../features/money/ui';
+import { TextField } from '../../features/money/ui';
 import { nameOf, useMe, usePersonNames, useSignedIn } from '../../features/today/queries';
 import { displayZone, formatWhen } from '../../features/today/time';
 import { useConnectivity } from '../../providers/AppProviders';
@@ -39,6 +39,9 @@ import {
   isUuid,
   type CustomerCase,
 } from './support-model';
+import { Section } from '../../ui/Section';
+import { FieldValue as Field } from '../../ui/Field';
+import { Text } from '../../ui/Text';
 
 const REPLY_NOT_FOUND: NotAvailableCopy = {
   title: 'Not available',
@@ -108,19 +111,27 @@ function CaseReplies({ request, onReload }: { request: CustomerCase; onReload: (
       {replies.data === undefined ? (
         replies.error ? (
           <View style={styles.reply} testID="support-replies-failed">
-            <Caption>Your replies could not be read. The request itself is shown above.</Caption>
+            <Text variant="caption" tone="muted">
+              Your replies could not be read. The request itself is shown above.
+            </Text>
             <Button label="Try again" variant="secondary" onPress={() => void replies.refetch()} />
           </View>
         ) : (
-          <Caption>Reading your replies…</Caption>
+          <Text variant="caption" tone="muted">
+            Reading your replies…
+          </Text>
         )
       ) : own.length === 0 ? (
-        <Caption>You have not replied on this request.</Caption>
+        <Text variant="caption" tone="muted">
+          You have not replied on this request.
+        </Text>
       ) : (
         own.map((r) => (
           <View key={r.id} style={styles.reply} testID="support-reply">
-            <Caption>Sent {formatWhen(r.sentAt, zone.zone)}</Caption>
-            <Body>{r.body}</Body>
+            <Text variant="caption" tone="muted">
+              Sent {formatWhen(r.sentAt, zone.zone)}
+            </Text>
+            <Text variant="body">{r.body}</Text>
           </View>
         ))
       )}
@@ -130,7 +141,7 @@ function CaseReplies({ request, onReload }: { request: CustomerCase; onReload: (
           testID="support-reply-sent"
         >
           <StatusBadge tone="success" label="Reply sent" />
-          <Body>{caseStatusMeaning(sent.status)}</Body>
+          <Text variant="body">{caseStatusMeaning(sent.status)}</Text>
         </LiveRegion>
       ) : null}
       {canReply ? (
@@ -155,14 +166,16 @@ function CaseReplies({ request, onReload }: { request: CustomerCase; onReload: (
             testID="support-reply-send"
           />
           {offline ? (
-            <Caption>Sending needs a connection. Your reply stays on this screen.</Caption>
+            <Text variant="caption" tone="muted">
+              Sending needs a connection. Your reply stays on this screen.
+            </Text>
           ) : null}
         </>
       ) : (
-        <Caption>
+        <Text variant="caption" tone="muted">
           This request is resolved and takes no more replies. If you still need help, send a new
           request from Support.
-        </Caption>
+        </Text>
       )}
       {send.error ? (
         <CommandError
@@ -194,7 +207,7 @@ function CaseContent({ caseId }: { caseId: string }) {
         <View testID="support-case">
           <Section title={c.title}>
             <StatusBadge {...caseStatus(c.status)} testID="support-case-status" />
-            <Body>{caseStatusMeaning(c.status)}</Body>
+            <Text variant="body">{caseStatusMeaning(c.status)}</Text>
             <Field label="About" value={CATEGORY_LABELS[c.category]} />
             {c.subjectPersonId ? (
               <Field label="For" value={nameOf(names, c.subjectPersonId)} />
@@ -204,11 +217,11 @@ function CaseContent({ caseId }: { caseId: string }) {
             {c.resolvedAt ? (
               <Field label="Resolved" value={formatWhen(c.resolvedAt, zone.zone)} />
             ) : null}
-            <Caption>
+            <Text variant="caption" tone="muted">
               Notes and internal details stay with the facility team. A request never replaces a
               change itself: refunds, transfers and permission changes are made as their own
               actions.
-            </Caption>
+            </Text>
           </Section>
           <CaseReplies request={c} onReload={() => void read.refetch()} />
           <View style={styles.pad}>

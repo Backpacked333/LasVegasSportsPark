@@ -4,7 +4,7 @@
  * SPK-CAP-001, POL-044).
  */
 import { fakeResponse } from '@sportspark/api-client/testing';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
 import { clearLinkSecrets, holdLinkSecret, readLinkSecret } from '../../../links/link-secrets';
 import { createTestApp } from '../../../testing/test-app';
 import {
@@ -480,6 +480,28 @@ describe('SCR-C-17 InvitationScreen (family access)', () => {
     });
     expect(post?.headers['idempotency-key']).toBe('key-00000001');
     expect(readLinkSecret('invitation', INVITATION)).toBeNull();
+  });
+
+  it('PA-11 ADR-008: the answer is its own "Your answer" card; opened from a list card\'s Decline it starts at the confirmation and sends nothing', async () => {
+    holdLinkSecret('invitation', TOKEN, INVITATION);
+    const app = familyApp();
+    render(
+      <InvitationScreen
+        invitationId={INVITATION}
+        type="family"
+        token={TOKEN}
+        startWith="decline"
+      />,
+      { wrapper: app.wrapper },
+    );
+    const answer = await screen.findByTestId('invitation-answer');
+    expect(within(answer).getByRole('header', { name: 'Your answer' })).toBeOnTheScreen();
+    expect(within(answer).getByTestId('decline-confirm')).toBeOnTheScreen();
+    expect(within(answer).getByRole('button', { name: 'Confirm decline' })).toBeOnTheScreen();
+    expect(posts(app)).toHaveLength(0);
+    fireEvent.press(within(answer).getByRole('button', { name: 'Keep invitation' }));
+    expect(within(answer).getByRole('button', { name: 'Accept invitation' })).toBeOnTheScreen();
+    expect(posts(app)).toHaveLength(0);
   });
 
   it('stale version: STALE_REVISION on decline offers Reload, which reads the invitation again', async () => {

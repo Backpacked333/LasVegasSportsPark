@@ -15,6 +15,11 @@
  *   token and sends nothing more). Revoking needs no push module, so it works in this build.
  *
  * Essential notices always appear in the in-app inbox whatever happens to push (SPK-COMMS-007).
+ *
+ * Plain words (PA-11, ADR-008): while this build cannot register for push, the section says only
+ * what to do now ("You can carry on without them. Check your inbox in the app for notices.") with
+ * DEC-061 and DEC-020 in "Details for support", and the device list is hidden unless the API
+ * lists a device already registered (records already made stay readable and can be stopped).
  */
 import type { Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
@@ -22,16 +27,19 @@ import { useEffect, useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
+import { pendingMessageFor } from '../../copy/pending';
 import { useApp, useConnectivity } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
+import { TextField } from '../../ui/Field';
 import { ListRow } from '../../ui/ListRow';
 import { QueryBoundary } from '../../ui/QueryBoundary';
+import { Section } from '../../ui/Section';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
+import { Text } from '../../ui/Text';
 import { spacing } from '../../ui/theme';
 import { formatDateTime } from '../account/components/account-data';
 import { CommandError } from '../account/components/CommandError';
-import { Paragraph, SectionHeader, TextField } from '../account/components/forms';
 import { usePushPermissionReader, usePushPermissionStatus } from './push-permission';
 
 type PushDevice = Schema<'PushDevice'>;
@@ -63,15 +71,14 @@ export function deviceDetail(device: PushDevice): string {
 
 export function PushDevicesSection() {
   const [registeredId, setRegisteredId] = useState<string | null>(null);
+  // Push can be set up only when the build reads a permission that allows it.
+  const pushable = usePushPermissionStatus() === 'granted';
   return (
     <View>
-      <SectionHeader title="Push on this device" />
-      <ThisDevice onRegistered={setRegisteredId} />
-      <SectionHeader
-        title="Devices registered for push"
-        detail="Push notices go to every device listed as receiving push."
-      />
-      <RegisteredDevices thisDeviceId={registeredId} />
+      <Section title="Push on this device" variant="plain">
+        <ThisDevice onRegistered={setRegisteredId} />
+      </Section>
+      <RegisteredDevices thisDeviceId={registeredId} hideWhenEmpty={!pushable} />
     </View>
   );
 }
@@ -115,21 +122,13 @@ function ThisDevice({ onRegistered }: { onRegistered: (id: string) => void }) {
     return <RegisterThisDevice token={token} onRegistered={onRegistered} />;
   }
   return (
-    <View>
-      {status === 'unavailable' ? (
-        <StateView
-          variant="unavailable"
-          title="Push is not set up in this version"
-          description="This version of the app does not register for push notifications. Essential notices always appear in the app's inbox."
-        />
-      ) : null}
-      <StateView
-        variant="pending-decision"
-        subject="Registering this device for push notifications"
-        decisions={['DEC-061', 'DEC-020']}
-        owner="Technical lead/operator (DEC-061); Technical lead/account owners (DEC-020)"
-      />
-    </View>
+    <StateView
+      variant="pending-decision"
+      subject="Push notifications"
+      decisions={['DEC-061', 'DEC-020']}
+      owner="Technical lead/operator (DEC-061); Technical lead/account owners (DEC-020)"
+      message={pendingMessageFor(['DEC-061', 'DEC-020'])}
+    />
   );
 }
 
@@ -163,9 +162,9 @@ function RegisterThisDevice({
       {register.data ? (
         <StatusBadge tone="success" label="This device receives push" />
       ) : (
-        <Paragraph inset={false}>
+        <Text variant="body">
           Notifications are allowed for this app. Register this device to get push notices too.
-        </Paragraph>
+        </Text>
       )}
       <Button
         label={register.data ? 'Register again' : 'Register this device'}
@@ -176,9 +175,9 @@ function RegisterThisDevice({
         accessibilityHint={offline ? 'Needs a connection' : undefined}
       />
       {offline ? (
-        <Paragraph muted inset={false}>
+        <Text variant="body" tone="muted">
           Registering needs a connection.
-        </Paragraph>
+        </Text>
       ) : null}
       {register.error ? (
         <CommandError error={register.error} onRetry={() => void submit()} />
@@ -187,30 +186,49 @@ function RegisterThisDevice({
   );
 }
 
-function RegisteredDevices({ thisDeviceId }: { thisDeviceId: string | null }) {
+function RegisteredDevices({
+  thisDeviceId,
+  hideWhenEmpty,
+}: {
+  thisDeviceId: string | null;
+  /** This build cannot register for push: an empty list is not shown at all. */
+  hideWhenEmpty: boolean;
+}) {
   const devices = useApiQuery({ path: '/me/push-devices' });
+  // Hidden until the API lists a device, unless push can be set up here.
+  if (hideWhenEmpty && (devices.data?.devices.length ?? 0) === 0) return null;
   return (
-    <QueryBoundary
-      query={devices}
-      label="devices registered for push"
-      isEmpty={(data) => data.devices.length === 0}
-      empty={{
-        title: 'No devices registered',
-        description:
-          'No device receives push notices for your account. Essential notices always appear in the app.',
-      }}
-      unavailableOffline={['stopping push to a device']}
+    <Section
+      title="Devices registered for push"
+      subtitle="Push notices go to every device listed as receiving push."
+      variant="plain"
     >
-      {(data) => (
-        <View accessibilityRole="list" accessibilityLabel="Devices registered for push">
-          {[...data.devices]
-            .sort((a, b) => (a.status === b.status ? 0 : a.status === 'active' ? -1 : 1))
-            .map((device) => (
-              <DeviceRow key={device.id} device={device} thisDevice={device.id === thisDeviceId} />
-            ))}
-        </View>
-      )}
-    </QueryBoundary>
+      <QueryBoundary
+        query={devices}
+        label="devices registered for push"
+        isEmpty={(data) => data.devices.length === 0}
+        empty={{
+          title: 'No devices registered',
+          description:
+            'No device receives push notices for your account. Essential notices always appear in the app.',
+        }}
+        unavailableOffline={['stopping push to a device']}
+      >
+        {(data) => (
+          <View accessibilityRole="list" accessibilityLabel="Devices registered for push">
+            {[...data.devices]
+              .sort((a, b) => (a.status === b.status ? 0 : a.status === 'active' ? -1 : 1))
+              .map((device) => (
+                <DeviceRow
+                  key={device.id}
+                  device={device}
+                  thisDevice={device.id === thisDeviceId}
+                />
+              ))}
+          </View>
+        )}
+      </QueryBoundary>
+    </Section>
   );
 }
 

@@ -31,6 +31,10 @@
  * listed, or "Declined"); partial completion: not permitted; recovery required: not applicable, a
  * failed accept or decline shows "Try again", which resends the same request under the same
  * idempotency key, until the read shows the invitation closed.
+ *
+ * Cards (PA-11, ADR-008): the facts in one card, the answer in a "Your answer" card with "Accept
+ * invitation" and "Decline". Opened from a list card's "Decline" (`answer=decline` in the route),
+ * the page starts at the decline confirmation; it still sends nothing until "Confirm decline".
  */
 import { ApiError, presentationForError, type Schema } from '@sportspark/api-client';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -44,12 +48,16 @@ import { isUuid } from '../../links/link-targets';
 import { useConnectivity } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
 import { Button } from '../../ui/Button';
+import { Card } from '../../ui/Card';
+import { ChoiceCard } from '../../ui/ChoiceList';
+import { TextField, useFieldStyles } from '../../ui/Field';
 import { ListRow } from '../../ui/ListRow';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge, type StatusBadgeProps } from '../../ui/StatusBadge';
-import { spacing } from '../../ui/theme';
+import { Text } from '../../ui/Text';
+import { layout, spacing } from '../../ui/theme';
 import {
   formatDateTime,
   listPermissions,
@@ -62,13 +70,6 @@ import {
   type MeData,
 } from '../account/components/account-data';
 import { CommandError } from '../account/components/CommandError';
-import {
-  Paragraph,
-  RadioGroup,
-  RadioRow,
-  SectionHeader,
-  TextField,
-} from '../account/components/forms';
 
 export type InvitationType = 'family' | 'team';
 
@@ -177,36 +178,58 @@ function closedCopy(state: string): string {
 
 /** Route entry: `/invitations/{id}?type=family|team`; the token comes from memory, not the route. */
 export function InvitationRoute() {
-  const params = useLocalSearchParams<{ id?: string; type?: string }>();
+  const params = useLocalSearchParams<{ id?: string; type?: string; answer?: string }>();
   const type: InvitationType = params.type === 'team' ? 'team' : 'family';
   const id = typeof params.id === 'string' ? params.id : '';
   // Read once per account: the token is forgotten after a confirmed answer, the outcome stays on
   // screen; another account signing in never gets this one's token (R3-SECURITY-07).
   const held = useLinkSecret(type === 'team' ? 'team-invitation' : 'invitation', id);
   const token = isUuid(id) ? held : null;
-  return <InvitationScreen invitationId={id} type={type} token={token} />;
+  return (
+    <InvitationScreen
+      invitationId={id}
+      type={type}
+      token={token}
+      startWith={params.answer === 'decline' ? 'decline' : null}
+    />
+  );
 }
 
 export function InvitationScreen({
   invitationId,
   type,
   token,
+  startWith = null,
 }: {
   invitationId: string;
   type: InvitationType;
   token: string | null;
+  /** "decline": opened from a list card's Decline, so the confirmation shows first. */
+  startWith?: 'decline' | null;
 }) {
   return (
     <Screen>
-      <SectionHeader title={type === 'team' ? 'Team invitation' : 'Family access invitation'} />
+      <Text variant="title2" heading style={styles.title}>
+        {type === 'team' ? 'Team invitation' : 'Family access invitation'}
+      </Text>
       <RequireSession what="this invitation">
         {isUuid(invitationId) ? (
           <LinkedPerson>
             {(me) =>
               type === 'team' ? (
-                <TeamInvitation me={me} invitationId={invitationId} token={token} />
+                <TeamInvitation
+                  me={me}
+                  invitationId={invitationId}
+                  token={token}
+                  startWith={startWith}
+                />
               ) : (
-                <FamilyInvitation me={me} invitationId={invitationId} token={token} />
+                <FamilyInvitation
+                  me={me}
+                  invitationId={invitationId}
+                  token={token}
+                  startWith={startWith}
+                />
               )
             }
           </LinkedPerson>
@@ -272,7 +295,9 @@ function NotNow() {
 function OfflineNotice({ offline }: { offline: boolean }) {
   if (!offline) return null;
   return (
-    <Paragraph muted>Answering an invitation needs a connection. The invitation is kept.</Paragraph>
+    <Text variant="body" tone="muted">
+      Answering an invitation needs a connection. The invitation is kept.
+    </Text>
   );
 }
 
@@ -298,15 +323,13 @@ function StaleInvitation({
     <View style={styles.result} testID="invitation-closed">
       {acceptedByYou ? (
         <>
-          <Paragraph inset={false}>You accepted this invitation.</Paragraph>
+          <Text variant="body">You accepted this invitation.</Text>
           {granted ? (
-            <Paragraph
-              inset={false}
-            >{`Permissions granted: ${listPermissions(granted)}.`}</Paragraph>
+            <Text variant="body">{`Permissions granted: ${listPermissions(granted)}.`}</Text>
           ) : null}
-          <Paragraph inset={false}>
+          <Text variant="body">
             What you may do for each person is listed under Family and permissions.
-          </Paragraph>
+          </Text>
           <Button
             label="Open Family and permissions"
             variant="secondary"
@@ -314,12 +337,12 @@ function StaleInvitation({
           />
         </>
       ) : (
-        <Paragraph inset={false}>{closedCopy(state)}</Paragraph>
+        <Text variant="body">{closedCopy(state)}</Text>
       )}
       {at ? (
-        <Paragraph muted inset={false}>
+        <Text variant="body" tone="muted">
           {`${invitationStateLabel(state)} ${formatDateTime(at)}.`}
-        </Paragraph>
+        </Text>
       ) : null}
     </View>
   );
@@ -329,9 +352,9 @@ function DeclinedView() {
   return (
     <View style={styles.result} testID="invitation-declined">
       <StatusBadge tone="neutral" label="Declined" />
-      <Paragraph inset={false}>
+      <Text variant="body">
         You declined this invitation. It can no longer be accepted, and nothing was granted.
-      </Paragraph>
+      </Text>
     </View>
   );
 }
@@ -361,9 +384,9 @@ function DeclineConfirm({
   const [reason, setReason] = useState('');
   return (
     <View style={styles.body} testID="decline-confirm">
-      <Paragraph>
+      <Text variant="body">
         Declining is final: this invitation can no longer be accepted. Nothing is granted.
-      </Paragraph>
+      </Text>
       <TextField
         label="Reason (optional)"
         hint="Kept with the invitation."
@@ -399,10 +422,12 @@ function FamilyInvitation({
   me,
   invitationId,
   token,
+  startWith,
 }: {
   me: MeData;
   invitationId: string;
   token: string | null;
+  startWith: 'decline' | null;
 }) {
   const view = useApiQuery({
     path: '/me/invitations/{id}',
@@ -424,6 +449,7 @@ function FamilyInvitation({
           me={me}
           invitation={invitation}
           token={token}
+          startWith={startWith}
           onReload={() => void view.refetch()}
         />
       )}
@@ -433,18 +459,20 @@ function FamilyInvitation({
 
 function FamilyFacts({ invitation }: { invitation: FamilyView }) {
   return (
-    <View accessibilityRole="list" accessibilityLabel="Invitation details">
-      <Fact title="From" detail={invitation.inviter?.displayName || 'The facility'} />
-      <Fact title="For" detail={subjectsText(invitation.subjects)} />
-      <Fact title="As" detail={relationshipLabel(invitation.relationshipKind)} />
-      <Fact
-        title="Permissions requested"
-        detail={`${listPermissions(invitation.requestedPermissions)}. Each one is separate.`}
-      />
-      {invitation.recipientContact ? (
-        <Fact title="Sent to" detail={invitation.recipientContact.value} />
-      ) : null}
-    </View>
+    <Card>
+      <View accessibilityRole="list" accessibilityLabel="Invitation details">
+        <Fact title="From" detail={invitation.inviter?.displayName || 'The facility'} />
+        <Fact title="For" detail={subjectsText(invitation.subjects)} />
+        <Fact title="As" detail={relationshipLabel(invitation.relationshipKind)} />
+        <Fact
+          title="Permissions requested"
+          detail={`${listPermissions(invitation.requestedPermissions)}. Each one is separate.`}
+        />
+        {invitation.recipientContact ? (
+          <Fact title="Sent to" detail={invitation.recipientContact.value} />
+        ) : null}
+      </View>
+    </Card>
   );
 }
 
@@ -469,17 +497,20 @@ function FamilyInvitationBody({
   me,
   invitation,
   token,
+  startWith,
   onReload,
 }: {
   me: MeData;
   invitation: FamilyView;
   token: string | null;
+  startWith: 'decline' | null;
   onReload: () => void;
 }) {
   const router = useRouter();
   const { reachable } = useConnectivity();
   const offline = reachable === false;
-  const [declining, setDeclining] = useState(false);
+  // Opened from a list card's "Decline": the confirmation first (it still sends nothing).
+  const [declining, setDeclining] = useState(startWith === 'decline');
   const refresh = [
     ME_QUERY_KEY,
     INVITATION_KEYS.familyList,
@@ -548,17 +579,20 @@ function FamilyInvitationBody({
         <StaleInvitation state={refusedAs} />
       ) : null}
       {open ? (
-        <>
-          <Paragraph>
+        <Card style={styles.answer} testID="invitation-answer">
+          <Text variant="title3" heading>
+            Your answer
+          </Text>
+          <Text variant="body">
             Accepting gives you only the permissions the sender is still allowed to give over the
             people in this invitation. Anything else is left out and listed after you accept.
-          </Paragraph>
+          </Text>
           {token === null ? (
             <>
-              <Paragraph>
+              <Text variant="body">
                 To accept or decline, open the invitation link you received. The link shows that the
                 invitation was sent to you.
-              </Paragraph>
+              </Text>
               <View style={styles.actions}>
                 <NotNow />
               </View>
@@ -600,7 +634,7 @@ function FamilyInvitationBody({
             </View>
           )}
           <OfflineNotice offline={offline && token !== null} />
-        </>
+        </Card>
       ) : null}
       {/* Once the read shows the invitation closed, a failed answer has nothing left to retry. */}
       {accept.error && pending && closedStateOf(accept.error) === null ? (
@@ -661,14 +695,14 @@ function GrantedFor({
       : '';
   return (
     <View accessible accessibilityLabel={`${name}: ${granted}${left}`}>
-      <Paragraph inset={false}>
+      <Text variant="body">
         {name}: {granted}
-      </Paragraph>
+      </Text>
       {notGranted.length > 0 ? (
-        <Paragraph muted inset={false}>
+        <Text variant="body" tone="muted">
           Not granted for {name}, because the sender no longer holds them:{' '}
           {listPermissions(notGranted)}.
-        </Paragraph>
+        </Text>
       ) : null}
     </View>
   );
@@ -708,9 +742,9 @@ function FamilyAcceptedView({ result }: { result: FamilyAccepted }) {
   return (
     <View style={styles.result} testID="invitation-accepted">
       <StatusBadge tone="success" label="Accepted" />
-      <Paragraph inset={false}>What you can do now:</Paragraph>
+      <Text variant="body">What you can do now:</Text>
       {!anyGranted && bySubject.every((s) => s.notGranted.length === 0) ? (
-        <Paragraph inset={false}>No permissions were granted.</Paragraph>
+        <Text variant="body">No permissions were granted.</Text>
       ) : (
         <View accessibilityRole="list">
           {bySubject.map((s) => (
@@ -724,18 +758,18 @@ function FamilyAcceptedView({ result }: { result: FamilyAccepted }) {
         </View>
       )}
       {bySubject.length === 0 && result.droppedPermissions.length > 0 ? (
-        <Paragraph inset={false}>
+        <Text variant="body">
           Not granted, because the sender no longer holds them:{' '}
           {listPermissions(result.droppedPermissions)}.
-        </Paragraph>
+        </Text>
       ) : null}
-      <Paragraph muted inset={false}>
+      <Text variant="body" tone="muted">
         Nothing else was granted.
-      </Paragraph>
+      </Text>
       {result.invitation.acceptedAt ? (
-        <Paragraph muted inset={false}>
+        <Text variant="body" tone="muted">
           Accepted {formatDateTime(result.invitation.acceptedAt)}.
-        </Paragraph>
+        </Text>
       ) : null}
     </View>
   );
@@ -748,10 +782,12 @@ function TeamInvitation({
   me,
   invitationId,
   token,
+  startWith,
 }: {
   me: MeData;
   invitationId: string;
   token: string | null;
+  startWith: 'decline' | null;
 }) {
   const view = useApiQuery({
     path: '/team-invitations/{id}',
@@ -773,6 +809,7 @@ function TeamInvitation({
           me={me}
           invitation={invitation}
           token={token}
+          startWith={startWith}
           onReload={() => void view.refetch()}
         />
       )}
@@ -793,8 +830,9 @@ function ParticipantRadio({
 }) {
   const name = usePersonName(personId);
   return (
-    <RadioRow
-      label={personNameText(name)}
+    <ChoiceCard
+      option={{ value: personId, label: personNameText(name) }}
+      mode="single"
       checked={checked}
       disabled={disabled || name.status !== 'ready'}
       onPress={onPress}
@@ -802,14 +840,27 @@ function ParticipantRadio({
   );
 }
 
+/** "Accept for": the people the invitation may be accepted for, one radio each. */
+function AcceptFor({ children }: { children: ReactNode }) {
+  const field = useFieldStyles();
+  return (
+    <View style={styles.group} accessibilityRole="radiogroup" accessibilityLabel="Accept for">
+      <Text style={field.label}>Accept for</Text>
+      {children}
+    </View>
+  );
+}
+
 function TeamFacts({ invitation }: { invitation: TeamView }) {
   return (
-    <View accessibilityRole="list" accessibilityLabel="Invitation details">
-      <Fact title="Team" detail={invitation.teamName} />
-      <Fact title="Season" detail={invitation.seasonName} />
-      <Fact title="From" detail={invitation.invitedBy?.displayName || 'The league'} />
-      {invitation.message ? <Fact title="Message" detail={invitation.message} /> : null}
-    </View>
+    <Card>
+      <View accessibilityRole="list" accessibilityLabel="Invitation details">
+        <Fact title="Team" detail={invitation.teamName} />
+        <Fact title="Season" detail={invitation.seasonName} />
+        <Fact title="From" detail={invitation.invitedBy?.displayName || 'The league'} />
+        {invitation.message ? <Fact title="Message" detail={invitation.message} /> : null}
+      </View>
+    </Card>
   );
 }
 
@@ -819,11 +870,13 @@ function TeamInvitationBody({
   me,
   invitation,
   token,
+  startWith,
   onReload,
 }: {
   me: MeData;
   invitation: TeamView;
   token: string | null;
+  startWith: 'decline' | null;
   onReload: () => void;
 }) {
   const { reachable } = useConnectivity();
@@ -832,7 +885,8 @@ function TeamInvitationBody({
   // The person themself, plus each person the API says they may register (SPK-IAM-003).
   const children = me.authorities.filter((a) => a.permissions.includes('register'));
   const [participant, setParticipant] = useState<string | null>(self);
-  const [declining, setDeclining] = useState(false);
+  // Opened from a list card's "Decline": the confirmation first (it still sends nothing).
+  const [declining, setDeclining] = useState(startWith === 'decline');
   const refresh = [
     ME_QUERY_KEY,
     INVITATION_KEYS.teamList,
@@ -899,15 +953,22 @@ function TeamInvitationBody({
         <StaleInvitation state={refusedAs} />
       ) : null}
       {open ? (
-        <>
-          <Paragraph>
+        <Card style={styles.answer} testID="invitation-answer">
+          <Text variant="title3" heading>
+            Your answer
+          </Text>
+          <Text variant="body">
             Accepting adds the participant you choose to the team roster. Only the person the
             invitation was sent to, or their guardian, can accept it.
-          </Paragraph>
+          </Text>
           {token !== null && children.length > 0 && self ? (
-            <RadioGroup label="Accept for">
-              <RadioRow
-                label={`You, ${me.person ? personDisplayName(me.person) : ''}`}
+            <AcceptFor>
+              <ChoiceCard
+                option={{
+                  value: self,
+                  label: `You, ${me.person ? personDisplayName(me.person) : ''}`,
+                }}
+                mode="single"
                 checked={participant === self}
                 disabled={busy}
                 onPress={() => choose(self)}
@@ -921,12 +982,12 @@ function TeamInvitationBody({
                   onPress={() => choose(child.subjectPersonId)}
                 />
               ))}
-            </RadioGroup>
+            </AcceptFor>
           ) : null}
           {token === null ? (
-            <Paragraph>
+            <Text variant="body">
               To accept, open the invitation link you received. You can decline here.
-            </Paragraph>
+            </Text>
           ) : null}
           {declining ? (
             <DeclineConfirm
@@ -966,7 +1027,7 @@ function TeamInvitationBody({
             </View>
           )}
           <OfflineNotice offline={offline} />
-        </>
+        </Card>
       ) : null}
       {/* Once the read shows the invitation closed, a failed answer has nothing left to retry. */}
       {accept.error && pending && closedStateOf(accept.error) === null ? (
@@ -1007,19 +1068,22 @@ function TeamAcceptedView({ result }: { result: TeamAccepted }) {
   return (
     <View style={styles.result} testID="invitation-accepted">
       <StatusBadge tone="success" label="Accepted" />
-      <Paragraph inset={false}>
+      <Text variant="body">
         {result.membership.displayName} is on the team roster
         {result.membership.status === 'active' ? '' : ` as ${result.membership.status}`}.
-      </Paragraph>
-      <Paragraph muted inset={false}>
+      </Text>
+      <Text variant="body" tone="muted">
         Nothing else was granted.
-      </Paragraph>
+      </Text>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  title: { paddingHorizontal: layout.gutter, paddingTop: spacing.sm },
   body: { gap: spacing.md, paddingTop: spacing.md },
-  actions: { paddingHorizontal: spacing.lg, gap: spacing.sm },
+  actions: { gap: spacing.sm },
   result: { paddingHorizontal: spacing.lg, paddingTop: spacing.md, gap: spacing.sm },
+  answer: { marginHorizontal: layout.gutter, gap: spacing.md },
+  group: { gap: spacing.sm },
 });

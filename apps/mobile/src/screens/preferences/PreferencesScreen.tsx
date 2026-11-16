@@ -1,5 +1,5 @@
 /**
- * SCR-C-36 Preferences (SPK-UX-001, SPK-COMMS-001, SPK-COMMS-007, SPK-COMMS-008, DEC-062,
+ * SCR-C-36 Notifications and calendar, the preferences screen (SPK-UX-001, SPK-COMMS-001, SPK-COMMS-007, SPK-COMMS-008, DEC-062,
  * POL-024).
  *
  * - Communication preferences (`GET`/`PATCH /v1/me/communication-preferences`): "Essential notices"
@@ -15,6 +15,12 @@
  * - Appearance: the Legends mode switch (`ui/LegendsModeToggle`), a display preference kept on
  *   this device and not sent to the API; shown first, whatever the API answers below.
  *
+ * Undecided channels are hidden (PA-11, ADR-008): which channels the facility uses is DEC-062
+ * and the messaging providers are DEC-020, so only the in-app rows are shown. In their place one
+ * plain message says what to do now ("Check your inbox in the app for notices."), with the
+ * decisions in "Details for support". The API's matrix and any choice stored for the hidden
+ * channels are left as they are: a save sends only the rows the customer changed.
+ *
  * States: loading; empty: not applicable (the API always returns the full matrix); ready;
  * validation failure: not applicable (a locked notice cannot be switched; the API's
  * VALIDATION_FAILED is shown if it happens; a reason is required to stop push to a device);
@@ -25,10 +31,13 @@
  * failed save keeps the choices and offers "Try again" under the same key.
  */
 import type { Schema } from '@sportspark/api-client';
+import { useQueryClient } from '@tanstack/react-query';
+import { Stack } from 'expo-router';
 import { useRef, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { View } from 'react-native';
 import { useApiCommand, type CommandRequest } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
+import { pendingMessageFor } from '../../copy/pending';
 import { useConnectivity } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
 import { Button } from '../../ui/Button';
@@ -36,11 +45,13 @@ import { LegendsModeToggle } from '../../ui/LegendsModeToggle';
 import { ListRow } from '../../ui/ListRow';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
+import { Section } from '../../ui/Section';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
+import { SwitchRow } from '../../ui/SwitchRow';
+import { Text } from '../../ui/Text';
 import { spacing } from '../../ui/theme';
 import { CommandError } from '../account/components/CommandError';
-import { Paragraph, SectionHeader, SwitchRow } from '../account/components/forms';
 import { CalendarFeedsSection } from './CalendarFeedsSection';
 import { PushDevicesSection } from './PushDevicesSection';
 
@@ -64,19 +75,41 @@ export const CHANNEL_LABELS: Record<Channel, string> = {
   sms: 'Text messages (SMS)',
 };
 const CATEGORIES: readonly Category[] = ['operational', 'promotional'];
+/** The channels shown: in-app only while DEC-062 and DEC-020 are open (the others are hidden). */
+export const SHOWN_CHANNELS: readonly Channel[] = ['in_app'];
+/** The screen's title (the You hub row and the stack header). */
+export const PREFERENCES_TITLE = 'Notifications and calendar';
 const PREFERENCES_KEY = ['api', '/me/communication-preferences'] as const;
 
 const keyOf = (p: Pick<Preference, 'category' | 'channel'>) => `${p.category}:${p.channel}`;
 
 export function PreferencesScreen() {
+  const queryClient = useQueryClient();
+  const [refreshing, setRefreshing] = useState(false);
+  // Pull to refresh: every read on the screen again.
+  const refresh = () => {
+    setRefreshing(true);
+    void queryClient.refetchQueries({ type: 'active' }).finally(() => setRefreshing(false));
+  };
   return (
-    <Screen>
-      <SectionHeader title="Appearance" detail="How the app looks on this device." />
-      <LegendsModeToggle testID="preferences-legends-mode" />
+    <Screen onRefresh={refresh} refreshing={refreshing}>
+      <Section title="Appearance" subtitle="How the app looks on this device." variant="carousel">
+        <LegendsModeToggle testID="preferences-legends-mode" />
+      </Section>
       <RequireSession what="your preferences">
         <PreferencesContent />
       </RequireSession>
     </Screen>
+  );
+}
+
+/** Route component for app/preferences.tsx. */
+export function PreferencesRoute() {
+  return (
+    <>
+      <Stack.Screen options={{ title: PREFERENCES_TITLE }} />
+      <PreferencesScreen />
+    </>
   );
 }
 
@@ -144,17 +177,23 @@ function PreferencesForm({ data }: { data: Preferences }) {
 
   return (
     <View>
-      <StateView
-        variant="pending-decision"
-        subject="The choice of channels the facility uses"
-        decisions={['DEC-062']}
-        owner="Operator/privacy owner"
-      />
+      <Section title="Notifications" variant="plain">
+        <StateView
+          variant="pending-decision"
+          subject="Email, text and push notices"
+          decisions={['DEC-062', 'DEC-020']}
+          owner="Operator/privacy owner (DEC-062); Technical lead/account owners (DEC-020)"
+          message={pendingMessageFor(['DEC-062', 'DEC-020'])}
+        />
+      </Section>
       {CATEGORIES.map((category) => (
-        <View key={category}>
-          <SectionHeader title={CATEGORY_TITLES[category]} detail={CATEGORY_DETAILS[category]} />
+        <Section
+          key={category}
+          title={CATEGORY_TITLES[category]}
+          subtitle={CATEGORY_DETAILS[category]}
+        >
           {data.preferences
-            .filter((p) => p.category === category)
+            .filter((p) => p.category === category && SHOWN_CHANNELS.includes(p.channel))
             .map((p) =>
               p.locked ? (
                 <ListRow
@@ -169,7 +208,7 @@ function PreferencesForm({ data }: { data: Preferences }) {
                   key={keyOf(p)}
                   label={CHANNEL_LABELS[p.channel]}
                   accessibilityLabel={`${CHANNEL_LABELS[p.channel]} for ${CATEGORY_TITLES[category].toLowerCase()}`}
-                  detail={p.stored ? 'Your choice' : 'Facility default'}
+                  description={p.stored ? 'Your choice' : 'Facility default'}
                   value={draft[keyOf(p)] ?? p.enabled}
                   disabled={offline || save.isProcessing}
                   onChange={(enabled) => {
@@ -182,7 +221,7 @@ function PreferencesForm({ data }: { data: Preferences }) {
                 />
               ),
             )}
-        </View>
+        </Section>
       ))}
       <View style={styles.actions}>
         <Button
@@ -198,9 +237,9 @@ function PreferencesForm({ data }: { data: Preferences }) {
           <StatusBadge tone="success" label="Preferences saved" />
         ) : null}
         {offline ? (
-          <Paragraph muted inset={false}>
+          <Text variant="body" tone="muted">
             Changes need a connection and are not queued.
-          </Paragraph>
+          </Text>
         ) : null}
       </View>
       {save.error ? <CommandError error={save.error} onRetry={() => void retry()} /> : null}
@@ -208,6 +247,6 @@ function PreferencesForm({ data }: { data: Preferences }) {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = {
   actions: { paddingHorizontal: spacing.lg, paddingVertical: spacing.lg, gap: spacing.sm },
-});
+} as const;

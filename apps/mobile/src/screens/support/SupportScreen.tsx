@@ -33,6 +33,11 @@
  *   (Enrollments) and payments are commands of their own; a note in a case is not a refund,
  *   permission change or transfer.
  *
+ * Plain wording (PA-11, ADR-008): the request form is "Ask the facility team"; no decision code
+ * is shown in a sentence. Without a configured contact the screen says "For help, ask at the front
+ * desk." (`src/copy/pending.ts`), with DEC-015 in "Details for support"; no response time is
+ * promised, in words only. Customer words: registrations, never enrollments.
+ *
  * States: loading; empty (no requests yet); validation failure (category, title or description
  * missing, next to the field); permission restriction (not available); stale (the list re-reads
  * on return to the app and shows its age); offline (draft kept, sending disabled); processing;
@@ -45,18 +50,9 @@ import { useApiCommand } from '../../api/useApiCommand';
 import { useApiPages } from '../../api/useApiPages';
 import { useApiQuery } from '../../api/useApiQuery';
 import type { SupportContact } from '../../config/app-config';
+import { pendingMessage } from '../../copy/pending';
 import { moneyRoutes } from '../../features/money/routes';
-import {
-  Body,
-  ButtonRow,
-  Caption,
-  ChoiceGroup,
-  ChoiceRow,
-  Field,
-  FieldError,
-  Section,
-  TextField,
-} from '../../features/money/ui';
+import { ChoiceGroup, ChoiceRow, FieldError, TextField } from '../../features/money/ui';
 import {
   nameOf,
   useApiReads,
@@ -94,6 +90,9 @@ import {
   type RelatedType,
   type SupportDraft,
 } from './support-model';
+import { Section } from '../../ui/Section';
+import { FieldValue as Field } from '../../ui/Field';
+import { Text } from '../../ui/Text';
 
 const CASES_KEY = ['api', '/me/cases'] as const;
 const CASES_PAGE = 20;
@@ -111,7 +110,7 @@ function ContactDetails({ contact }: { contact: SupportContact }) {
       {contact.phone ? <Field label="Phone" value={contact.phone} /> : null}
       {contact.email ? <Field label="Email" value={contact.email} /> : null}
       {contact.hours ? <Field label="Hours" value={contact.hours} /> : null}
-      <ButtonRow>
+      <View style={buttonRow}>
         {contact.phone ? (
           <Button
             label="Call the facility"
@@ -128,7 +127,7 @@ function ContactDetails({ contact }: { contact: SupportContact }) {
             onPress={() => void Linking.openURL(`mailto:${contact.email}`)}
           />
         ) : null}
-      </ButtonRow>
+      </View>
     </>
   );
 }
@@ -247,7 +246,7 @@ function SupportRequestForm({ linked }: { linked: { type: RelatedType; id: strin
   };
 
   return (
-    <Section title="Contact the operating team" testID="support-request">
+    <Section title="Ask the facility team" testID="support-request">
       {sent ? (
         <LiveRegion
           style={styles.gap}
@@ -255,7 +254,7 @@ function SupportRequestForm({ linked }: { linked: { type: RelatedType; id: strin
           testID="support-sent"
         >
           <StatusBadge tone="success" label="Request sent" />
-          <Body>{sentSummary(sent)}</Body>
+          <Text variant="body">{sentSummary(sent)}</Text>
           <Button
             label="View this request"
             variant="secondary"
@@ -265,7 +264,9 @@ function SupportRequestForm({ linked }: { linked: { type: RelatedType; id: strin
       ) : null}
 
       <View accessibilityRole="radiogroup" accessibilityLabel="Who is this about">
-        <Caption>Who is this about</Caption>
+        <Text variant="caption" tone="muted">
+          Who is this about
+        </Text>
         {people.map((personId) => (
           <ChoiceRow
             key={personId}
@@ -301,7 +302,9 @@ function SupportRequestForm({ linked }: { linked: { type: RelatedType; id: strin
       </View>
 
       <ChoiceGroup label="What is it about" error={errors.category}>
-        <Caption>What is it about</Caption>
+        <Text variant="caption" tone="muted">
+          What is it about
+        </Text>
         {CATEGORIES.map((category) => (
           <ChoiceRow
             key={category}
@@ -324,15 +327,21 @@ function SupportRequestForm({ linked }: { linked: { type: RelatedType; id: strin
 
       {draft.category === 'registration' ? (
         <View accessibilityRole="radiogroup" accessibilityLabel="Which registration (optional)">
-          <Caption>Which registration (optional)</Caption>
+          <Text variant="caption" tone="muted">
+            Which registration (optional)
+          </Text>
           {registrations.data === undefined ? (
             registrations.error ? (
-              <Caption>Registrations could not be listed; describe it in your message.</Caption>
+              <Text variant="caption" tone="muted">
+                Registrations could not be listed; describe it in your message.
+              </Text>
             ) : (
               <StateView variant="loading" label="registrations" />
             )
           ) : registrations.data.items.length === 0 ? (
-            <Caption>No registrations to choose from.</Caption>
+            <Text variant="caption" tone="muted">
+              No registrations to choose from.
+            </Text>
           ) : (
             registrations.data.items.map((e) => (
               <ChoiceRow
@@ -359,10 +368,10 @@ function SupportRequestForm({ linked }: { linked: { type: RelatedType; id: strin
 
       {listedRelated.map((r) => (
         <View key={`${r.type}:${r.id}`} style={styles.gap} testID="support-about">
-          <Body>
+          <Text variant="body">
             About {RELATED_TYPE_LABELS[r.type]}
             {isLinked(r) ? ' (from the link you followed)' : ''}.
-          </Body>
+          </Text>
           <Button
             label="Do not link it"
             variant="secondary"
@@ -395,7 +404,9 @@ function SupportRequestForm({ linked }: { linked: { type: RelatedType; id: strin
         testID="support-send"
       />
       {offline ? (
-        <Caption>Sending needs a connection. Your draft stays on this screen.</Caption>
+        <Text variant="caption" tone="muted">
+          Sending needs a connection. Your draft stays on this screen.
+        </Text>
       ) : null}
       {send.error ? (
         <CommandError
@@ -405,10 +416,10 @@ function SupportRequestForm({ linked }: { linked: { type: RelatedType; id: strin
           denied={REQUEST_DENIED}
         />
       ) : null}
-      <Caption>
-        The facility team answers requests; how quickly is not set yet (DEC-015). Notes and internal
-        details stay with the team.
-      </Caption>
+      <Text variant="caption" tone="muted">
+        The facility team answers your request here. For something urgent, ask at the front desk.
+        Notes and internal details stay with the team.
+      </Text>
     </Section>
   );
 }
@@ -467,26 +478,24 @@ function Support({ linked }: { linked: { type: RelatedType; id: string } | null 
         {contact ? (
           <ContactDetails contact={contact} />
         ) : (
-          <>
-            <Body>Ask at the front desk.</Body>
-            <StateView
-              variant="pending-decision"
-              subject="The facility’s support phone, email and hours"
-              decisions={['DEC-015']}
-              owner="Technical lead/operator"
-            />
-          </>
+          <StateView
+            variant="pending-decision"
+            subject="The facility’s support phone, email and hours"
+            decisions={['DEC-015']}
+            owner="Technical lead/operator"
+            message={pendingMessage('DEC-015')}
+          />
         )}
       </Section>
       <Section title="Changes are made, not noted">
-        <Body>
+        <Text variant="body">
           A conversation with support never replaces the change itself. Cancel or transfer a
-          registration from Enrollments, where you see the refund, credit or charge first; refunds
+          registration from Registrations, where you see the refund, credit or charge first; refunds
           and permission changes are made by the facility as their own actions.
-        </Body>
-        <ButtonRow>
+        </Text>
+        <View style={buttonRow}>
           <Button
-            label="Open enrollments"
+            label="Open registrations"
             variant="secondary"
             onPress={() => router.push(moneyRoutes.enrollments())}
           />
@@ -495,7 +504,7 @@ function Support({ linked }: { linked: { type: RelatedType; id: string } | null 
             variant="secondary"
             onPress={() => router.push(moneyRoutes.payments())}
           />
-        </ButtonRow>
+        </View>
       </Section>
     </View>
   );
@@ -529,3 +538,5 @@ export function SupportRoute() {
 const styles = StyleSheet.create({
   gap: { gap: spacing.sm },
 });
+
+const buttonRow = { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm } as const;

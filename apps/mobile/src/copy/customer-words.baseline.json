@@ -27,10 +27,6 @@
   "src/screens/bookings/CancelBooking.tsx :: basket :: Open the basket",
   "src/screens/bookings/CancelBooking.tsx :: basket :: … released and your basket is emptied. Nothing has been cha…",
 
-  "src/screens/support/SupportScreen.tsx :: DEC- :: …ly is not set yet (DEC-015). Notes and internal details st…",
-  "src/screens/support/SupportScreen.tsx :: enrollment :: Open enrollments",
-  "src/screens/support/SupportScreen.tsx :: enrollment :: … registration from Enrollments, where you see the refund, …",
-
   "src/screens/teams/AvailabilityScreen.tsx :: DEC- :: …d yet: whether it is used is still being decided (DEC-064).",
   "src/screens/teams/AvailabilityScreen.tsx :: DEC- :: …d yet: whether it is used is still being decided (DEC-064).",
 
