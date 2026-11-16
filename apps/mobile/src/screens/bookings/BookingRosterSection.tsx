@@ -25,7 +25,6 @@ import { View } from 'react-native';
 import { usePermissions } from '../../api/permissions';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
-import { TextField } from '../../features/money/ui';
 import type { Booking } from '../../features/package-g/booking-model';
 import { CommandError } from '../../ui/CommandError';
 import { useMe, useParticipantNames } from '../../features/registration/participants';
@@ -37,6 +36,7 @@ import { StatusBadge, type StatusTone } from '../../ui/StatusBadge';
 import { makeStyles, spacing } from '../../ui/theme';
 import { Section } from '../../ui/Section';
 import { Text } from '../../ui/Text';
+import { TextField } from '../../ui/Field';
 
 type Roster = Schema<'BookingRoster'>;
 type Member = Schema<'BookingRosterMember'>;
@@ -218,6 +218,9 @@ function Invite({ bookingId, onChanged }: { bookingId: string; onChanged: () => 
         onChangeText={setEmail}
         error={attempted ? emailError : null}
         testID="roster-invite-email"
+        errorGlyph="▲"
+        errorAnnouncement="message"
+        autoCorrect
       />
       <View style={buttonRow}>
         <Button

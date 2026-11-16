@@ -46,7 +46,6 @@ import { Text, View } from 'react-native';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { CommandError } from '../../ui/CommandError';
-import { ChoiceGroup, ChoiceRow, FieldError, TextField } from '../../features/money/ui';
 import {
   bookableTimes,
   bookingKindOf,
@@ -93,6 +92,8 @@ import { BookingForms } from './BookingForms';
 import { Section } from '../../ui/Section';
 import { FieldValue as Field } from '../../ui/Field';
 import { Text as UiText } from '../../ui/Text';
+import { ChoiceCard, ChoiceGroup } from '../../ui/ChoiceList';
+import { FieldErrorText, TextField } from '../../ui/Field';
 
 type Offering = Schema<'Offering'>;
 
@@ -368,6 +369,9 @@ function BookingForm({
             }}
             error={errors.duration}
             testID="booking-duration"
+            errorGlyph="▲"
+            errorAnnouncement="message"
+            autoCorrect
           />
         ) : availability.data ? (
           <Field label="Length" value={`${availability.data.durationMinutes} minutes`} />
@@ -428,16 +432,19 @@ function BookingForm({
           <>
             {timesNotice}
             {/* A required choice: its error is each time's hint too (SPK-UX-009). */}
-            <ChoiceGroup label="Start time" error={errors.time} layout="grid">
+            <ChoiceGroup label="Start time" error={errors.time} layout="tile">
               {times.map((t) => (
-                <ChoiceRow
+                <ChoiceCard
                   key={t.start}
-                  mode="radio"
-                  tile
-                  shortLabel={`${formatTime(t.start, zone.zone)} to ${formatTime(t.end, zone.zone)}`}
-                  label={formatRange(t.start, t.end, zone.zone)}
-                  detail={`${t.resources.length} free: ${t.resources.map((r) => resourceName(r.name)).join(', ')}`}
+                  option={{
+                    value: formatRange(t.start, t.end, zone.zone),
+                    label: formatRange(t.start, t.end, zone.zone),
+                    shortLabel: `${formatTime(t.start, zone.zone)} to ${formatTime(t.end, zone.zone)}`,
+                    description: `${t.resources.length} free: ${t.resources.map((r) => resourceName(r.name)).join(', ')}`,
+                  }}
+                  mode="single"
                   checked={start === t.start}
+                  layout="tile"
                   onPress={() => {
                     setStart(t.start);
                     setChosen([]);
@@ -448,7 +455,7 @@ function BookingForm({
             </ChoiceGroup>
           </>
         )}
-        <FieldError error={errors.time} testID="booking-time-error" />
+        <FieldErrorText error={errors.time} testID="booking-time-error" glyph="▲" />
       </Section>
 
       {time && resourceCount !== null ? (
@@ -462,16 +469,16 @@ function BookingForm({
             error={errors.resources}
           >
             {time.resources.map((r) => (
-              <ChoiceRow
+              <ChoiceCard
                 key={r.resourceId}
-                mode={resourceCount === 1 ? 'radio' : 'checkbox'}
-                label={resourceName(r.name)}
+                option={{ value: resourceName(r.name), label: resourceName(r.name) }}
+                mode={resourceCount === 1 ? 'single' : 'multiple'}
                 checked={chosen.includes(r.resourceId)}
                 onPress={() => toggleResource(r.resourceId)}
               />
             ))}
           </ChoiceGroup>
-          <FieldError error={errors.resources} testID="booking-resources-error" />
+          <FieldErrorText error={errors.resources} testID="booking-resources-error" glyph="▲" />
         </Section>
       ) : null}
 
@@ -487,14 +494,20 @@ function BookingForm({
             }}
             error={errors.guests}
             testID="booking-guests"
+            errorGlyph="▲"
+            errorAnnouncement="message"
+            autoCorrect
           />
         </Section>
       ) : (
         <Section title="Repeat">
-          <ChoiceRow
-            mode="checkbox"
-            label="Repeat every week"
-            detail="Same time and spaces each week"
+          <ChoiceCard
+            option={{
+              value: 'Repeat every week',
+              label: 'Repeat every week',
+              description: 'Same time and spaces each week',
+            }}
+            mode="multiple"
             checked={repeat}
             onPress={() => {
               setRepeat(!repeat);
@@ -513,6 +526,9 @@ function BookingForm({
                 }}
                 error={errors.weeks}
                 testID="booking-weeks"
+                errorGlyph="▲"
+                errorAnnouncement="message"
+                autoCorrect
               />
               <UiText variant="caption" tone="muted">
                 Only the first week's time is shown free here; every week is checked when you book.

@@ -5,8 +5,8 @@
  */
 import { Text, View } from 'react-native';
 import { makeStyles, spacing, type } from '../../../ui/theme';
-import { ChoiceRow } from '../ui';
 import type { PaymentMethodPickerProps } from './index';
+import { ChoiceCard } from '../../../ui/ChoiceList';
 
 export const DEV_PAYMENT_SCENARIOS = [
   { token: 'pm_fake_visa', label: 'Succeeds at once' },
@@ -30,12 +30,12 @@ export function DevPaymentMethodPickerView({ value, onChange }: PaymentMethodPic
       </Text>
       <View accessibilityRole="radiogroup">
         {DEV_PAYMENT_SCENARIOS.map((scenario) => (
-          <ChoiceRow
+          <ChoiceCard
             key={scenario.token}
-            mode="radio"
-            label={scenario.label}
+            option={{ value: scenario.label, label: scenario.label }}
+            mode="single"
             checked={value === scenario.token}
-            onToggle={() => onChange(scenario.token)}
+            onPress={() => onChange(scenario.token)}
             testID={`dev-payment-${scenario.token}`}
           />
         ))}

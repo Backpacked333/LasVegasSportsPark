@@ -412,10 +412,10 @@ variant="error"` directly: those views decide with `src/api/command-outcome.ts` 
   label, or the instruction shown when there is none); leave codes, glyphs and ages that change
   while shown out. Do not nest one live region in another (TalkBack would read it twice): use
   `useAnnouncement` for words that appear inside one. Field and choice errors go through the shared
-  field error (`FieldError` in `features/money/ui` or `features/teams/ui`, or the features'
-  `TextField`); a required choice also makes its error each choice's hint: pass it to its group
-  (`ChoiceGroup error` in `features/money/ui`, `RadioGroup error` in `features/teams/ui`) or to
-  each row (account `CheckboxRow error`), never to a text field next to it.
+  field error (`TextField`'s own, or `FieldErrorText` in `src/ui/Field.tsx` under a choice); a
+  required choice also makes its error each choice's hint: pass it to its group (`ChoiceGroup
+error` or `ChoiceList error` in `src/ui/ChoiceList.tsx`) or to each card (`ChoiceCard error`),
+  never to a text field next to it.
 - **Colours.** Declare styles with `makeStyles(({ colors }) => ({ ... }))` and read inline colours
   from `useTheme()` (`src/ui/theme.ts`); never write a colour literal in a screen (a test checks the
   sources) and pair text with its surface's own token, so the screen works in Legends mode too.

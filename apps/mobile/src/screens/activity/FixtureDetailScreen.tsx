@@ -49,7 +49,7 @@ import type { ActivityCardModel } from '../../features/today/NextActivityCard';
 import { latestChangeForEvent, openAvailabilityRequest } from '../../features/today/notices';
 import { nameOf, useInbox, useMe, usePersonNames, useSignedIn } from '../../features/today/queries';
 import { RsvpControl } from '../../features/today/RsvpControl';
-import { Caption, oldestUpdate, Section, SectionQueryState } from '../../features/today/Section';
+import { oldestUpdate, SectionQueryState } from '../../features/today/read-state';
 import {
   currentResult,
   fixtureStatus,
@@ -66,10 +66,11 @@ import { RequireSession } from '../../session/RequireSession';
 import { Button } from '../../ui/Button';
 import { LastUpdated } from '../../ui/LastUpdated';
 import { Screen } from '../../ui/Screen';
+import { Section } from '../../ui/Section';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { SupportDetails } from '../../ui/SupportDetails';
-import { makeStyles, radius, spacing, type } from '../../ui/theme';
+import { layout, makeStyles, radius, spacing, type } from '../../ui/theme';
 import { ActivityHero } from './ActivityHero';
 
 type FixtureDetail = Schema<'FixtureDetail'>;
@@ -290,11 +291,11 @@ function FixtureContent({ fixtureId }: { fixtureId: string }) {
             />
           }
         />
-        {notice ? <Caption>{notice}</Caption> : null}
+        {notice ? <Text style={styles.note}>{notice}</Text> : null}
       </View>
 
       {!viewerKnown && (detail.responses ?? []).length > 0 ? (
-        <Section title="Family answers" testID="fixture-family-answers">
+        <Section variant="carousel" title="Family answers" testID="fixture-family-answers">
           <SectionQueryState
             read={me}
             label="the family answers"
@@ -303,7 +304,7 @@ function FixtureContent({ fixtureId }: { fixtureId: string }) {
         </Section>
       ) : null}
       {othersAnswers.length > 0 ? (
-        <Section title="Family answers" testID="fixture-family-answers">
+        <Section variant="carousel" title="Family answers" testID="fixture-family-answers">
           <View accessibilityRole="list" style={styles.pad}>
             {othersAnswers.map((r) => {
               const status = rsvpStatus(r.state as RsvpState);
@@ -320,7 +321,9 @@ function FixtureContent({ fixtureId }: { fixtureId: string }) {
               );
             })}
           </View>
-          <Caption>{`These are the answers recorded so far. ${pendingMessage('DEC-090')}`}</Caption>
+          <Text
+            style={styles.note}
+          >{`These are the answers recorded so far. ${pendingMessage('DEC-090')}`}</Text>
           <View style={styles.pad}>
             <SupportDetails decisions={['DEC-090']} />
           </View>
@@ -329,13 +332,13 @@ function FixtureContent({ fixtureId }: { fixtureId: string }) {
 
       {ownSide ? (
         // Only the viewer's own side: the opponent's answers are not theirs to see.
-        <Section title="Team availability" testID="fixture-availability">
-          <Caption>{availabilityLine(ownSide)}</Caption>
+        <Section variant="carousel" title="Team availability" testID="fixture-availability">
+          <Text style={styles.note}>{availabilityLine(ownSide)}</Text>
         </Section>
       ) : null}
 
       {isCaptain ? (
-        <Section title="Match readiness" testID="fixture-readiness">
+        <Section variant="carousel" title="Match readiness" testID="fixture-readiness">
           <SectionQueryState
             read={readiness}
             label="match readiness"
@@ -344,7 +347,9 @@ function FixtureContent({ fixtureId }: { fixtureId: string }) {
           {readiness.data && shownReadiness ? (
             <View style={styles.pad}>
               <StatusBadge {...readinessStatus(readiness.data.status)} testID="readiness-status" />
-              <Caption>Assessed {formatWhen(readiness.data.evaluatedAt, zone.zone)}.</Caption>
+              <Text style={styles.note}>
+                Assessed {formatWhen(readiness.data.evaluatedAt, zone.zone)}.
+              </Text>
               {shownReadiness.sides.map((side) => (
                 <Text key={side.teamEntryId} style={styles.body}>
                   {side.teamName}: {side.eligiblePlayers} of {side.rosterSize} rostered players
@@ -353,7 +358,7 @@ function FixtureContent({ fixtureId }: { fixtureId: string }) {
                 </Text>
               ))}
               {shownReadiness.issues.length === 0 ? (
-                <Caption>No open issues.</Caption>
+                <Text style={styles.note}>No open issues.</Text>
               ) : (
                 <View accessibilityRole="list" style={styles.issues}>
                   {shownReadiness.issues.map((issue, index) => (
@@ -380,13 +385,13 @@ function FixtureContent({ fixtureId }: { fixtureId: string }) {
         </Section>
       ) : null}
 
-      <Section title="Result" testID="fixture-result">
+      <Section variant="carousel" title="Result" testID="fixture-result">
         <SectionQueryState
           read={results}
           label="the result"
           unavailable={{ description: 'The result is not available to you.' }}
         />
-        {results.data && !result ? <Caption>No result yet.</Caption> : null}
+        {results.data && !result ? <Text style={styles.note}>No result yet.</Text> : null}
         {result ? (
           <View
             style={styles.pad}
@@ -396,7 +401,9 @@ function FixtureContent({ fixtureId }: { fixtureId: string }) {
             <Text style={styles.score}>{scoreLine(result, detail)}</Text>
             <StatusBadge {...resultStatus(result, (iso) => formatDay(iso, zone.zone))} />
             {result.status === 'submitted' ? (
-              <Caption>Provisional results do not count in the standings until official.</Caption>
+              <Text style={styles.note}>
+                Provisional results do not count in the standings until official.
+              </Text>
             ) : null}
           </View>
         ) : null}
@@ -413,20 +420,20 @@ function FixtureContent({ fixtureId }: { fixtureId: string }) {
         ) : null}
       </Section>
 
-      <Section title="Rules" testID="fixture-rules">
+      <Section variant="carousel" title="Rules" testID="fixture-rules">
         {workspace ? (
-          <Caption>
+          <Text style={styles.note}>
             {workspace.ruleSet.name} (version {workspace.ruleSet.version}), {workspace.season.name}
             {workspace.division ? `, ${workspace.division.name}` : ''}.
-          </Caption>
+          </Text>
         ) : homeEntry.isLoading || awayEntry.isLoading ? (
           <StateView variant="loading" label="the rules" />
         ) : (
-          <Caption>The rule set summary is shown to team members.</Caption>
+          <Text style={styles.note}>The rule set summary is shown to team members.</Text>
         )}
       </Section>
 
-      <Section title="Arrival guidance">
+      <Section variant="carousel" title="Arrival guidance">
         <StateView
           variant="pending-decision"
           subject="Arrival guidance for this activity"
@@ -469,5 +476,7 @@ const useStyles = makeStyles(({ colors }) => ({
   },
   body: { ...type.body, color: colors.text },
   caption: { ...type.caption, color: colors.textMuted },
+  /** A note at the page's side margin, inside an edge-to-edge section. */
+  note: { ...type.caption, color: colors.textMuted, paddingHorizontal: layout.gutter },
   score: { ...type.title, color: colors.text },
 }));

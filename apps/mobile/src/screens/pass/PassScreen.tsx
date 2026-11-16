@@ -65,7 +65,7 @@ import {
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery, type ApiQueryResult } from '../../api/useApiQuery';
 import { useMe } from '../../features/today/queries';
-import { SectionQueryState } from '../../features/today/Section';
+import { SectionQueryState } from '../../features/today/read-state';
 import { displayZone, formatWhen } from '../../features/today/time';
 import { useApp, useConnectivity, useNow } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';

@@ -11,17 +11,12 @@ import { NavigationContext } from 'expo-router/build/react-navigation/core/Navig
 import * as fs from 'fs';
 import * as path from 'path';
 import { AccessibilityInfo, Platform } from 'react-native';
-import {
-  FieldError as MoneyFieldError,
-  TextField as MoneyTextField,
-} from '../../features/money/ui';
-import { TextField as RegistrationTextField } from '../../features/registration/ui';
-import { TextField as AccountTextField } from '../../screens/account/components/forms';
 import { useConnectivity } from '../../providers/AppProviders';
 import { createTestApp } from '../../testing/test-app';
 import { LiveRegion, sentences } from '../announce';
 import { OUTCOME_LOST_LABEL, OutcomeLost } from '../OutcomeLost';
 import { CommandError } from '../CommandError';
+import { FieldErrorText, TextField } from '../Field';
 import { StateView } from '../StateView';
 
 const announce = AccessibilityInfo.announceForAccessibilityWithOptions as jest.Mock;
@@ -351,8 +346,11 @@ describe('SPK-UX-009 announcements reach VoiceOver (ui/announce)', () => {
 
   it('a field error is announced and is part of the input hint, so it is read with the field', async () => {
     const fields = [
-      <MoneyTextField
+      // The money and booking forms: "▲", announced as the bare message, an alert.
+      <TextField
         key="money"
+        errorGlyph="▲"
+        errorAnnouncement="message"
         label="Reason"
         value=""
         onChangeText={jest.fn()}
@@ -360,8 +358,11 @@ describe('SPK-UX-009 announcements reach VoiceOver (ui/announce)', () => {
         hint="For the facility"
         testID="money"
       />,
-      <RegistrationTextField
+      // The registration forms: announced as the bare message, no alert role.
+      <TextField
         key="registration"
+        errorAnnouncement="message"
+        errorAlert={false}
         label="Reason"
         value=""
         onChangeText={jest.fn()}
@@ -369,8 +370,10 @@ describe('SPK-UX-009 announcements reach VoiceOver (ui/announce)', () => {
         hint="For the facility"
         testID="registration"
       />,
-      <AccountTextField
+      // The account forms: announced as the bare message, an alert.
+      <TextField
         key="account"
+        errorAnnouncement="message"
         label="Reason"
         value=""
         onChangeText={jest.fn()}
@@ -391,7 +394,7 @@ describe('SPK-UX-009 announcements reach VoiceOver (ui/announce)', () => {
   });
 
   it('a choice error (the booking time or space) is announced as a field error', () => {
-    render(<MoneyFieldError error="Choose a time." testID="choice-error" />);
+    render(<FieldErrorText error="Choose a time." glyph="▲" testID="choice-error" />);
     expect(announced()).toEqual(['Choose a time.']);
     expect(screen.getByTestId('choice-error')).toHaveProp('accessibilityRole', 'alert');
   });

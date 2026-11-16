@@ -377,9 +377,9 @@ export const useFieldStyles = makeStyles(({ colors }) => ({
 }));
 
 /*
- * Additions for the feature kits' adapters (ADR-008, Phase 3): pieces of a field that a kit
- * composes itself when its accessible words differ from `TextField`'s, so it keeps them exactly
- * while it draws with the shared field styles. They add to the exports above and change none.
+ * Pieces of a field for a form that composes its own (ADR-008): the error with its glyph, the
+ * outlined input without words of its own, and a read-only "label: value" fact. They draw with
+ * the shared field styles.
  */
 
 export interface FieldErrorTextProps {
@@ -388,7 +388,7 @@ export interface FieldErrorTextProps {
   glyph?: string;
   /** What is announced when it appears; the bare message by default. */
   announcement?: string | null;
-  /** Exposed as an alert (default true); some kits announce a field's error without the role. */
+  /** Exposed as an alert (default true); some forms announce a field's error without the role. */
   alert?: boolean;
   testID?: string;
 }
@@ -396,7 +396,7 @@ export interface FieldErrorTextProps {
 /**
  * A field's error in words with its glyph, announced when it appears (`LiveText`; SPK-UX-008,
  * SPK-UX-009). Unlike `FieldError` it announces the bare message unless told otherwise, as the
- * feature kits always have.
+ * money, team and choice errors always have.
  */
 export function FieldErrorText({
   error,
@@ -423,7 +423,7 @@ export interface FieldInputProps extends Omit<TextInputProps, 'style' | 'editabl
   /** Draws the error border (the words are the caller's, with `FieldErrorText`). */
   invalid?: boolean;
   editable?: boolean;
-  /** Further styles after the shared box (a kit's own dimming). */
+  /** Further styles after the shared box (a form's own dimming). */
   style?: StyleProp<TextStyle>;
 }
 

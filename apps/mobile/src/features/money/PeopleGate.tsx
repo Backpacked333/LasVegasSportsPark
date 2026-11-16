@@ -7,13 +7,15 @@
  */
 import { presentationForError } from '@sportspark/api-client';
 import { useState, type ReactNode } from 'react';
+import { View } from 'react-native';
 import { useConnectivity, useNow } from '../../providers/AppProviders';
 import { QueryErrorView } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { useAccountPeople, type AccountPerson } from './people';
 import { Section } from '../../ui/Section';
 import { Text } from '../../ui/Text';
-import { PersonPicker } from './ui';
+import { ChoiceCard, ChoiceGroup } from '../../ui/ChoiceList';
+import { layout, makeStyles, spacing } from '../../ui/theme';
 
 export function PeopleGate({
   pickerLabel,
@@ -27,6 +29,7 @@ export function PeopleGate({
   const { reachable } = useConnectivity();
   const now = useNow();
   const [selected, setSelected] = useState<string | null>(null);
+  const styles = useStyles();
 
   if (me.data === undefined) {
     if (me.error) {
@@ -63,12 +66,25 @@ export function PeopleGate({
   if (!person) return null;
   return (
     <>
-      <PersonPicker
-        people={people}
-        selected={person.personId}
-        onSelect={setSelected}
-        label={pickerLabel}
-      />
+      {people.length > 1 ? (
+        // Whose records are shown; hidden when the account acts only for itself.
+        <View style={styles.picker}>
+          <Text variant="caption" tone="muted">
+            {pickerLabel}
+          </Text>
+          <ChoiceGroup label={pickerLabel}>
+            {people.map((p) => (
+              <ChoiceCard
+                key={p.personId}
+                option={{ value: p.personId, label: p.displayName }}
+                mode="single"
+                checked={person.personId === p.personId}
+                onPress={() => setSelected(p.personId)}
+              />
+            ))}
+          </ChoiceGroup>
+        </View>
+      ) : null}
       {namesLoading ? (
         <Section title="Family members">
           <Text variant="caption" tone="muted">
@@ -85,3 +101,7 @@ export function PeopleGate({
     </>
   );
 }
+
+const useStyles = makeStyles(() => ({
+  picker: { paddingHorizontal: layout.gutter, paddingVertical: spacing.sm, gap: spacing.xs },
+}));

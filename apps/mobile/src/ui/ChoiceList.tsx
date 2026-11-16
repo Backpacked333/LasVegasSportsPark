@@ -234,9 +234,9 @@ export interface ChoiceCardProps {
   /** A decorative node at the start of the card (an avatar); the glyph moves to the end. */
   leading?: ReactNode;
   onPress: () => void;
-  /** Replaces the name from `choiceName` (a feature kit's own wording; ADR-008 Phase 3). */
+  /** Replaces the name from `choiceName` (a screen's own wording, such as "Name. Detail"). */
   accessibilityLabel?: string;
-  /** Replaces the hint ("Error: …" by default), for a kit that reads more after the name. */
+  /** Replaces the hint ("Error: …" by default), for a screen that reads more after the name. */
   accessibilityHint?: string;
   testID?: string;
 }

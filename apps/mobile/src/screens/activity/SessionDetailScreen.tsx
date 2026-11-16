@@ -25,15 +25,17 @@ import { useApiQuery } from '../../api/useApiQuery';
 import { artworkFor } from '../../artwork/artworkFor';
 import { pendingMessage } from '../../copy/pending';
 import { nameOf, useMe, usePersonNames, useSignedIn } from '../../features/today/queries';
-import { Caption, Section, SectionQueryState } from '../../features/today/Section';
+import { SectionQueryState } from '../../features/today/read-state';
 import { useSessionActivity, type SessionRef } from '../../features/today/session-activity';
 import { zoneNotice } from '../../features/today/time';
 import { useNow } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
 import { LastUpdated } from '../../ui/LastUpdated';
 import { Screen } from '../../ui/Screen';
+import { Section } from '../../ui/Section';
 import { StateView } from '../../ui/StateView';
-import { spacing } from '../../ui/theme';
+import { Text } from '../../ui/Text';
+import { layout, spacing } from '../../ui/theme';
 import { ActivityHero } from './ActivityHero';
 
 type Enrollment = Schema<'Enrollment'>;
@@ -142,21 +144,27 @@ function SessionContent({
           source={artworkFor(activity.offering ?? { title: activity.model.title }, 'wide').source}
           testID="session-card"
         />
-        {notice ? <Caption>{notice}</Caption> : null}
+        {notice ? (
+          <Text variant="caption" tone="muted" style={styles.note}>
+            {notice}
+          </Text>
+        ) : null}
       </View>
       {session?.status === 'canceled' ? (
-        <Section title="Canceled" testID="session-canceled">
-          <Caption>
+        <Section variant="carousel" title="Canceled" testID="session-canceled">
+          <Text variant="caption" tone="muted" style={styles.note}>
             This session was canceled{session.cancelReason ? `: ${session.cancelReason}` : '.'}
-          </Caption>
+          </Text>
         </Section>
       ) : null}
       {activity.offering?.description ? (
-        <Section title="About">
-          <Caption>{activity.offering.description}</Caption>
+        <Section variant="carousel" title="About">
+          <Text variant="caption" tone="muted" style={styles.note}>
+            {activity.offering.description}
+          </Text>
         </Section>
       ) : null}
-      <Section title="Arrival guidance">
+      <Section variant="carousel" title="Arrival guidance">
         <View style={styles.pad}>
           <StateView
             variant="pending-decision"
@@ -204,4 +212,6 @@ export function SessionDetailRoute() {
 
 const styles = StyleSheet.create({
   pad: { paddingHorizontal: spacing.lg },
+  /** A note at the page's side margin, inside an edge-to-edge section. */
+  note: { paddingHorizontal: layout.gutter },
 });

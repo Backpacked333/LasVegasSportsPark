@@ -27,7 +27,6 @@ import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { CommandError } from '../../ui/CommandError';
 import { formatDateRange } from '../../features/money/format';
-import { ChoiceRow } from '../../features/money/ui';
 import { packageGRoutes } from '../../features/package-g/routes';
 import { formatInstant } from '../../features/registration/format';
 import {
@@ -46,6 +45,7 @@ import { Section } from '../../ui/Section';
 import { FieldValue as Field } from '../../ui/Field';
 import { Text } from '../../ui/Text';
 import { spacing } from '../../ui/theme';
+import { ChoiceCard } from '../../ui/ChoiceList';
 
 type Enrollment = Schema<'Enrollment'>;
 type Membership = Schema<'Membership'>;
@@ -135,11 +135,14 @@ function Renewal({ enrollment }: { enrollment: Enrollment }) {
       ) : (
         <View accessibilityRole="radiogroup" accessibilityLabel="Membership to renew into">
           {open.map((o) => (
-            <ChoiceRow
+            <ChoiceCard
               key={o.id}
-              mode="radio"
-              label={o.name}
-              detail={formatDateRange(o.startsOn, o.endsOn)}
+              option={{
+                value: o.name,
+                label: o.name,
+                description: formatDateRange(o.startsOn, o.endsOn),
+              }}
+              mode="single"
               checked={targetId === o.id}
               onPress={() => {
                 setTargetId(o.id);

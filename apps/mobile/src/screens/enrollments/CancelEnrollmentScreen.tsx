@@ -43,7 +43,6 @@ import {
   type Enrollment,
   type FinancialConsequence,
 } from '../../features/money/status';
-import { ChoiceRow, TextField } from '../../features/money/ui';
 import { useConnectivity } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
 import { Button } from '../../ui/Button';
@@ -57,6 +56,8 @@ import { Section } from '../../ui/Section';
 import { FieldValue as Field } from '../../ui/Field';
 import { Text } from '../../ui/Text';
 import { spacing } from '../../ui/theme';
+import { ChoiceCard } from '../../ui/ChoiceList';
+import { TextField } from '../../ui/Field';
 
 type CancelBody = Schema<'CancelEnrollmentRequest'>;
 
@@ -256,10 +257,16 @@ function CancelForm({
             error={reasonError}
             multiline
             testID="cancel-reason"
+            errorGlyph="▲"
+            errorAnnouncement="message"
+            autoCorrect
           />
-          <ChoiceRow
-            mode="checkbox"
-            label={`I understand: ${summary.headline}`}
+          <ChoiceCard
+            option={{
+              value: `I understand: ${summary.headline}`,
+              label: `I understand: ${summary.headline}`,
+            }}
+            mode="multiple"
             checked={acknowledged !== null}
             onPress={() => {
               setChanged(false);

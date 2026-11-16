@@ -43,7 +43,7 @@ import { SupportDetails } from '../../ui/SupportDetails';
 import type { StatusBadgeProps } from '../../ui/StatusBadge';
 import { spacing } from '../../ui/theme';
 import { formatDateTime } from '../account/components/account-data';
-import { Paragraph } from '../account/components/forms';
+import { Text } from '../../ui/Text';
 
 type Operation = Schema<'Operation'>;
 
@@ -214,10 +214,10 @@ function OperationState({
         status={status}
         testID="operation-status"
       />
-      <Paragraph>This is the current state. It may have changed since the link was sent.</Paragraph>
+      <Text inset>This is the current state. It may have changed since the link was sent.</Text>
       {operation.status === 'failed' && operation.error ? (
         <>
-          <Paragraph>{operation.error.message}</Paragraph>
+          <Text inset>{operation.error.message}</Text>
           <View style={styles.actions}>
             <SupportDetails errorCode={operation.error.code} reference={operation.correlationId} />
           </View>
@@ -229,12 +229,12 @@ function OperationState({
         </>
       ) : null}
       {operation.status === 'recovery_required' ? (
-        <Paragraph>The facility is resolving this. Do not repeat it.</Paragraph>
+        <Text inset>The facility is resolving this. Do not repeat it.</Text>
       ) : null}
       {operation.status === 'compensated' ? (
-        <Paragraph>
+        <Text inset>
           This request was not completed and was reversed. Check your account before trying again.
-        </Paragraph>
+        </Text>
       ) : null}
       <View style={styles.actions}>
         <Button label="Open the inbox" variant="secondary" onPress={() => navigate('/inbox')} />

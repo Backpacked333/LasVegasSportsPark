@@ -59,7 +59,7 @@ import {
   useMe,
   usePersonNames,
 } from '../../features/today/queries';
-import { SectionQueryState } from '../../features/today/Section';
+import { SectionQueryState } from '../../features/today/read-state';
 import { noticeStatus } from '../../features/today/status';
 import { displayZone, formatTime, formatWhen } from '../../features/today/time';
 import { useApp, useConnectivity, useNow } from '../../providers/AppProviders';

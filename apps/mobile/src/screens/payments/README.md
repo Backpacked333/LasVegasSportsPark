@@ -18,9 +18,9 @@ builds or devices (§6.2), including VoiceOver, TalkBack and large text.
 **Verified** (jest; the look itself is not native acceptance, §6.2). These screens use `src/ui`
 directly (`Section`, `ListRow`, `StatTile`, `Card`, `InfoCard`, `SupportDetails`, `EmptyState`,
 `ChipRow`, `ChoiceCard`, `FieldValue`, `Text`, `Screen` with pull to refresh); the shared money
-pieces are in `src/features/money/surfaces.tsx` (`MoneyEmpty`, `PAY_AT_DESK_MESSAGE`,
-`usePullToRefresh`, `Actions`, `Choices`). The `features/money/ui.tsx` kit is no longer imported by
-any screen here (it stays for the enrollment and booking screens).
+pieces are in `src/features/money/surfaces.tsx` (`PAY_AT_DESK_MESSAGE`, `usePullToRefresh`,
+`Actions`, `Choices`); an empty list is `QueryBoundary`'s illustrated empty state (`empty.source`).
+The feature kits are gone: every screen uses `src/ui`.
 
 - **Payments** opens with the person's "Amount due" stat tile (and "Credits"), then "What's due",
   then "History"; the views are "Show" chips: What's due, Payments, Receipts, Orders, Your share.

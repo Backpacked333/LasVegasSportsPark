@@ -5,8 +5,7 @@
  * nothing cached, and a protected NOT_FOUND or a denial as "not available" without implying a
  * record exists (§4.10). The page shows the age of what it displays once, not per section.
  *
- * Built on `src/ui` only (ADR-008); moved out of the today `Section` kit so screens that leave the
- * kits keep it.
+ * Built on `src/ui` only (ADR-008); moved out of the today `Section` kit, which is gone.
  */
 import { presentationForError, type ApiError } from '@sportspark/api-client';
 import { useConnectivity, useNow } from '../../providers/AppProviders';

@@ -18,7 +18,6 @@ import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { CommandError } from '../../ui/CommandError';
 import { useApiRecords, type RecordState } from '../../features/money/records';
-import { ChoiceRow } from '../../features/money/ui';
 import { formatInstantIn } from '../../features/package-g/time';
 import type { PolicyVersion } from '../../features/package-g/booking-model';
 import { formWording, useFormsStatus } from '../../features/registration/forms';
@@ -30,6 +29,7 @@ import { StatusBadge } from '../../ui/StatusBadge';
 import { Section } from '../../ui/Section';
 import { Text } from '../../ui/Text';
 import { spacing } from '../../ui/theme';
+import { ChoiceCard } from '../../ui/ChoiceList';
 
 function FormRow({
   policyVersionId,
@@ -83,9 +83,12 @@ function FormRow({
         <StatusBadge tone="success" label={`Signed ${formatInstantIn(signedAt, zone)}`} />
       ) : (
         <>
-          <ChoiceRow
-            mode="checkbox"
-            label={`I have read and agree to ${title}`}
+          <ChoiceCard
+            option={{
+              value: `I have read and agree to ${title}`,
+              label: `I have read and agree to ${title}`,
+            }}
+            mode="multiple"
             checked={agreed}
             onPress={() => setAgreed(!agreed)}
           />

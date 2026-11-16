@@ -19,7 +19,6 @@ import { useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
-import { TextField } from '../../features/money/ui';
 import { nameOf, useMe, usePersonNames, useSignedIn } from '../../features/today/queries';
 import { displayZone, formatWhen } from '../../features/today/time';
 import { useConnectivity } from '../../providers/AppProviders';
@@ -42,6 +41,7 @@ import {
 import { Section } from '../../ui/Section';
 import { FieldValue as Field } from '../../ui/Field';
 import { Text } from '../../ui/Text';
+import { TextField } from '../../ui/Field';
 
 const REPLY_NOT_FOUND: NotAvailableCopy = {
   title: 'Not available',
@@ -157,6 +157,9 @@ function CaseReplies({ request, onReload }: { request: CustomerCase; onReload: (
             hint="Answer what the team asked, or add anything that helps."
             multiline
             testID="support-reply-text"
+            errorGlyph="▲"
+            errorAnnouncement="message"
+            autoCorrect
           />
           <Button
             label="Send reply"

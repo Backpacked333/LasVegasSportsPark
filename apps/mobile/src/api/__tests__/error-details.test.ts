@@ -2,11 +2,9 @@
  * The readers of an API error's `details` (src/api/error-details.ts), moved out of the teams kit
  * (ADR-008): the eligibility reasons of ELIGIBILITY_FAILED (SPK-READY-003), the field issues of
  * VALIDATION_FAILED and a refusal's rule code (CMP-13). They keep only what is well formed, so a
- * failure view never breaks on an unexpected body (SPK-UX-008). The teams kit re-exports the same
- * functions.
+ * failure view never breaks on an unexpected body (SPK-UX-008).
  */
 import { ApiError } from '@sportspark/api-client';
-import * as teamsKit from '../../features/teams/ui';
 import { detailCodeOf, eligibilityReasonsOf, fieldIssuesOf } from '../error-details';
 
 function refusal(code: string, details: unknown): ApiError {
@@ -84,11 +82,5 @@ describe('API error details (src/api/error-details.ts)', () => {
     expect(detailCodeOf(refusal('VALIDATION_FAILED', { code: 'A'.repeat(65) }))).toBeNull();
     expect(detailCodeOf(refusal('VALIDATION_FAILED', [{ code: 'ROLE_NOT_HELD' }]))).toBeNull();
     expect(detailCodeOf(refusal('VALIDATION_FAILED', undefined))).toBeNull();
-  });
-
-  it('the teams kit re-exports the same readers', () => {
-    expect(teamsKit.eligibilityReasonsOf).toBe(eligibilityReasonsOf);
-    expect(teamsKit.fieldIssuesOf).toBe(fieldIssuesOf);
-    expect(teamsKit.detailCodeOf).toBe(detailCodeOf);
   });
 });

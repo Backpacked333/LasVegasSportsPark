@@ -46,7 +46,6 @@ import {
   type FinancialConsequence,
   type TransferPreview,
 } from '../../features/money/status';
-import { ChoiceRow } from '../../features/money/ui';
 import { useConnectivity } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
 import { Button } from '../../ui/Button';
@@ -61,6 +60,7 @@ import { Section } from '../../ui/Section';
 import { FieldValue as Field } from '../../ui/Field';
 import { Text } from '../../ui/Text';
 import { spacing } from '../../ui/theme';
+import { ChoiceCard } from '../../ui/ChoiceList';
 
 type PublicOffering = Schema<'PublicOffering'>;
 type TransferBody = Schema<'TransferEnrollmentRequest'>;
@@ -365,11 +365,14 @@ function TransferForm({ enrollment, reload }: { enrollment: Enrollment; reload: 
             {() => (
               <View accessibilityRole="radiogroup" accessibilityLabel="Activity to move to">
                 {choices.map((o) => (
-                  <ChoiceRow
+                  <ChoiceCard
                     key={o.id}
-                    mode="radio"
-                    label={o.name}
-                    detail={formatDateRange(o.startsOn, o.endsOn)}
+                    option={{
+                      value: o.name,
+                      label: o.name,
+                      description: formatDateRange(o.startsOn, o.endsOn),
+                    }}
+                    mode="single"
                     checked={targetId === o.id}
                     onPress={() => choose(o.id)}
                   />
@@ -434,9 +437,12 @@ function TransferForm({ enrollment, reload }: { enrollment: Enrollment; reload: 
           ) : (
             <>
               {needsAck && summary ? (
-                <ChoiceRow
-                  mode="checkbox"
-                  label={`I accept: ${summary.headline}`}
+                <ChoiceCard
+                  option={{
+                    value: `I accept: ${summary.headline}`,
+                    label: `I accept: ${summary.headline}`,
+                  }}
+                  mode="multiple"
                   checked={acknowledged !== null}
                   onPress={() => {
                     setChanged(false);

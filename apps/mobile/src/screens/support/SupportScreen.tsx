@@ -52,7 +52,6 @@ import { useApiQuery } from '../../api/useApiQuery';
 import type { SupportContact } from '../../config/app-config';
 import { pendingMessage } from '../../copy/pending';
 import { moneyRoutes } from '../../features/money/routes';
-import { ChoiceGroup, ChoiceRow, FieldError, TextField } from '../../features/money/ui';
 import {
   nameOf,
   useApiReads,
@@ -93,6 +92,8 @@ import {
 import { Section } from '../../ui/Section';
 import { FieldValue as Field } from '../../ui/Field';
 import { Text } from '../../ui/Text';
+import { ChoiceCard, ChoiceGroup } from '../../ui/ChoiceList';
+import { FieldErrorText, TextField } from '../../ui/Field';
 
 const CASES_KEY = ['api', '/me/cases'] as const;
 const CASES_PAGE = 20;
@@ -268,10 +269,10 @@ function SupportRequestForm({ linked }: { linked: { type: RelatedType; id: strin
           Who is this about
         </Text>
         {people.map((personId) => (
-          <ChoiceRow
+          <ChoiceCard
             key={personId}
-            mode="radio"
-            label={nameOf(names, personId)}
+            option={{ value: nameOf(names, personId), label: nameOf(names, personId) }}
+            mode="single"
             checked={subject === personId && !draft.teamEntryId}
             onPress={() =>
               update({
@@ -283,11 +284,14 @@ function SupportRequestForm({ linked }: { linked: { type: RelatedType; id: strin
           />
         ))}
         {captainOf.map((team) => (
-          <ChoiceRow
+          <ChoiceCard
             key={team.teamEntry.id}
-            mode="radio"
-            label={`Your team ${team.teamName}`}
-            detail={team.seasonName}
+            option={{
+              value: `Your team ${team.teamName}`,
+              label: `Your team ${team.teamName}`,
+              description: team.seasonName,
+            }}
+            mode="single"
             checked={draft.teamEntryId === team.teamEntry.id}
             onPress={() =>
               update({
@@ -306,10 +310,10 @@ function SupportRequestForm({ linked }: { linked: { type: RelatedType; id: strin
           What is it about
         </Text>
         {CATEGORIES.map((category) => (
-          <ChoiceRow
+          <ChoiceCard
             key={category}
-            mode="radio"
-            label={CATEGORY_LABELS[category]}
+            option={{ value: CATEGORY_LABELS[category], label: CATEGORY_LABELS[category] }}
+            mode="single"
             checked={draft.category === category}
             onPress={() =>
               update(
@@ -322,7 +326,7 @@ function SupportRequestForm({ linked }: { linked: { type: RelatedType; id: strin
           />
         ))}
         {/* Announced when it appears, like every field error (SPK-UX-009). */}
-        <FieldError error={errors.category} testID="support-category-error" />
+        <FieldErrorText error={errors.category} testID="support-category-error" glyph="▲" />
       </ChoiceGroup>
 
       {draft.category === 'registration' ? (
@@ -344,11 +348,14 @@ function SupportRequestForm({ linked }: { linked: { type: RelatedType; id: strin
             </Text>
           ) : (
             registrations.data.items.map((e) => (
-              <ChoiceRow
+              <ChoiceCard
                 key={e.id}
-                mode="radio"
-                label={e.offering?.name ?? 'Registration'}
-                detail={enrollmentStatus(e).label}
+                option={{
+                  value: e.offering?.name ?? 'Registration',
+                  label: e.offering?.name ?? 'Registration',
+                  description: enrollmentStatus(e).label,
+                }}
+                mode="single"
                 checked={enrollmentRelated === e.id}
                 onPress={() =>
                   update({
@@ -386,6 +393,9 @@ function SupportRequestForm({ linked }: { linked: { type: RelatedType; id: strin
         onChangeText={(title) => update({ title })}
         error={errors.title}
         testID="support-title"
+        errorGlyph="▲"
+        errorAnnouncement="message"
+        autoCorrect
       />
       <TextField
         label="What do you need?"
@@ -395,6 +405,9 @@ function SupportRequestForm({ linked }: { linked: { type: RelatedType; id: strin
         hint="Include the reference shown with any error message in the app."
         multiline
         testID="support-description"
+        errorGlyph="▲"
+        errorAnnouncement="message"
+        autoCorrect
       />
       <Button
         label="Send request"

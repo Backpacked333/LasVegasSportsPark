@@ -38,7 +38,6 @@ import {
   type CancellationPreview,
   type FinancialConsequence,
 } from '../../features/money/status';
-import { ChoiceRow, TextField } from '../../features/money/ui';
 import {
   bookingStatus,
   cancelBasis,
@@ -56,6 +55,8 @@ import { StatusBadge } from '../../ui/StatusBadge';
 import { Section } from '../../ui/Section';
 import { Text } from '../../ui/Text';
 import { spacing } from '../../ui/theme';
+import { ChoiceCard } from '../../ui/ChoiceList';
+import { TextField } from '../../ui/Field';
 
 const CONSEQUENCE_CODES = new Set(['CONSEQUENCE_CHANGED', 'CONSEQUENCE_ACCEPTANCE_REQUIRED']);
 
@@ -352,9 +353,12 @@ export function CancelBooking({ booking, onReload }: { booking: Booking; onReloa
               Staff approval is required before the cancellation takes effect.
             </Text>
           ) : null}
-          <ChoiceRow
-            mode="checkbox"
-            label={`I understand: ${summary.headline}`}
+          <ChoiceCard
+            option={{
+              value: `I understand: ${summary.headline}`,
+              label: `I understand: ${summary.headline}`,
+            }}
+            mode="multiple"
             checked={acknowledged !== null}
             onPress={() => {
               setChanged(false);
@@ -379,6 +383,9 @@ export function CancelBooking({ booking, onReload }: { booking: Booking; onReloa
         error={reasonError}
         multiline
         testID="cancel-reason"
+        errorGlyph="▲"
+        errorAnnouncement="message"
+        autoCorrect
       />
       {offline ? (
         <Text variant="caption" tone="muted">

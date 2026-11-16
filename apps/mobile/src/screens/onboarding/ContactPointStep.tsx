@@ -23,9 +23,11 @@ import { Button } from '../../ui/Button';
 import { ListRow } from '../../ui/ListRow';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
-import { spacing } from '../../ui/theme';
+import { layout, spacing } from '../../ui/theme';
 import { CommandError } from '../../ui/CommandError';
-import { ChoiceGroup, Paragraph, SectionHeader, TextField } from '../account/components/forms';
+import { Text } from '../../ui/Text';
+import { TextField } from '../../ui/Field';
+import { ChoiceList } from '../../ui/ChoiceList';
 
 type ContactPoint = Schema<'ContactPoint'>;
 type PersonDetail = Schema<'PersonDetail'>;
@@ -57,10 +59,12 @@ export function ContactPointStep({ personId }: { personId: string }) {
   const detail = useApiQuery({ path: '/people/{id}', request: { path: { id: personId } } });
   return (
     <View>
-      <SectionHeader
-        title="Email or phone"
-        detail="Facility messages and invitations use a verified email or phone."
-      />
+      <View style={styles.header}>
+        <Text variant="title3" heading>
+          Email or phone
+        </Text>
+        <Text>Facility messages and invitations use a verified email or phone.</Text>
+      </View>
       <QueryBoundary
         query={detail}
         label="your contact details"
@@ -70,7 +74,9 @@ export function ContactPointStep({ personId }: { personId: string }) {
         {(person) => (
           <View>
             {person.contactPoints.length === 0 ? (
-              <Paragraph muted>No email or phone has been added yet.</Paragraph>
+              <Text tone="muted" inset>
+                No email or phone has been added yet.
+              </Text>
             ) : (
               <View accessibilityRole="list">
                 {person.contactPoints.map((point) => (
@@ -161,9 +167,7 @@ function ContactPointRow({ point, person }: { point: ContactPoint; person: Perso
       />
       {confirming ? (
         <View style={styles.rowActions}>
-          <Paragraph inset={false}>
-            {`Remove ${point.value}? Messages and invitations will no longer use it.`}
-          </Paragraph>
+          <Text>{`Remove ${point.value}? Messages and invitations will no longer use it.`}</Text>
           <Button
             label={`Confirm removing ${point.value}`}
             onPress={() => void sendRemove(person.revision)}
@@ -292,7 +296,10 @@ function AddContactPoint({
 
   return (
     <View style={styles.form}>
-      <ChoiceGroup<ContactKind>
+      <ChoiceList<ContactKind>
+        mode="single"
+        notifyReselect
+        style={styles.field}
         label="Add"
         value={kind}
         onChange={(next) => {
@@ -307,6 +314,9 @@ function AddContactPoint({
       />
       <TextField
         label={kind === 'email' ? 'Email address' : 'Phone number'}
+        autoCapitalize="none"
+        errorAnnouncement="message"
+        style={styles.field}
         value={value}
         onChangeText={(next) => {
           setValue(next);
@@ -337,6 +347,8 @@ function AddError({ error, onRetry }: { error: ApiError; onRetry: () => Promise<
 }
 
 const styles = StyleSheet.create({
+  header: { paddingHorizontal: layout.gutter, paddingTop: spacing.xl, gap: spacing.xs },
+  field: { paddingHorizontal: layout.gutter },
   form: { gap: spacing.md, paddingTop: spacing.md },
   actions: { paddingHorizontal: spacing.lg },
   rowActions: { paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, gap: spacing.sm },

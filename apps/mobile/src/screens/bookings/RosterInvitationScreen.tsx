@@ -31,11 +31,9 @@ import { Text, View } from 'react-native';
 import { usePermissions } from '../../api/permissions';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
-import { TextField } from '../../features/money/ui';
 import { routeId } from '../../features/package-g/routes';
 import { CommandError } from '../../ui/CommandError';
 import { useMe, useParticipantNames } from '../../features/registration/participants';
-import { ChoiceRow } from '../../features/registration/ui';
 import { displayZone, formatRange } from '../../features/today/time';
 import { WaiverCard } from '../../features/waivers/WaiverCard';
 import { formatCalendarDate } from '../../features/waivers/waivers';
@@ -52,6 +50,8 @@ import { NotFoundScreen } from '../not-found/NotFoundScreen';
 import { Section } from '../../ui/Section';
 import { FieldValue as Field } from '../../ui/Field';
 import { Text as UiText } from '../../ui/Text';
+import { ChoiceCard } from '../../ui/ChoiceList';
+import { TextField } from '../../ui/Field';
 
 type InvitationView = Schema<'BookingRosterInvitationView'>;
 
@@ -248,19 +248,22 @@ function InvitationBody({
         <Section title="Your answer">
           {children.length > 0 ? (
             <View accessibilityRole="radiogroup" accessibilityLabel="Who is joining">
-              <ChoiceRow
-                mode="radio"
-                label="I am joining"
+              <ChoiceCard
+                option={{ value: 'I am joining', label: 'I am joining' }}
+                mode="single"
                 checked={who === selfId}
-                onToggle={() => setJoiner(selfId)}
+                onPress={() => setJoiner(selfId)}
               />
               {children.map((childId) => (
-                <ChoiceRow
+                <ChoiceCard
                   key={childId}
-                  mode="radio"
-                  label={`${names(childId)} is joining`}
+                  option={{
+                    value: `${names(childId)} is joining`,
+                    label: `${names(childId)} is joining`,
+                  }}
+                  mode="single"
                   checked={who === childId}
-                  onToggle={() => setJoiner(childId)}
+                  onPress={() => setJoiner(childId)}
                 />
               ))}
             </View>
@@ -394,6 +397,9 @@ function EnterCode() {
         hint="The renter gives it to you."
         error={attempted && !parsed ? 'That is not an invitation code.' : null}
         testID="roster-invitation-code-field"
+        errorGlyph="▲"
+        errorAnnouncement="message"
+        autoCorrect
       />
       <View style={buttonRow}>
         <Button
