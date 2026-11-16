@@ -24,7 +24,7 @@
  *   stopped by its holder. The reference itself can never be shown again (only its hash is kept).
  * - The scannable symbol depends on the desk scanners, which are DEC-023 (Technical lead/account
  *   owners): until then the reference is shown as text, and that is labelled as pending.
- * - A failed issue or withdrawal is shown by the shared account `CommandError` (§4.9, SPK-UX-008):
+ * - A failed issue or withdrawal is shown by the shared `ui/CommandError` (§4.9, SPK-UX-008):
  *   no definite answer (`mayHaveTakenEffect`) reads "No answer yet" with "Check again", which
  *   resends the same request under the same key; IDEMPOTENCY_OUTCOME_UNAVAILABLE reads "This may
  *   already have been done" with "Reload", after which a pass it made is listed under "Other active
@@ -41,9 +41,12 @@
  *   `GET /v1/me/passes` lists the previous pass as revoked, which settles it.
  * - Every result here (a failure, the replace flow's outcomes, a withdrawal) is announced to screen
  *   readers (`ui/announce`, SPK-UX-009).
- * - Look (park system): the pass is a night pitch card holding a white ticket with the reference
- *   in large condensed figures. No name is printed on it (SPK-ENTRY-002), and no symbol is drawn
- *   until DEC-023 decides the scanners.
+ * - Look (ADR-008, PA-11): the pass is a full-height night card over the lines of a pitch
+ *   (PassCard.tsx) with the reference in large tabular figures, "Show this at the front desk" and
+ *   "Works offline". No name is printed on it (SPK-ENTRY-002), and no symbol is drawn until DEC-023
+ *   decides the scanners. "Replace pass", what the pass carries and the pending scanner decision are
+ *   behind the "More" fold, so the card is all a person sees at the desk. Codes of a failed request
+ *   are in the "Details for support" fold (PA-11). Pull to refresh reads the passes again.
  */
 import {
   formatAge,
@@ -53,7 +56,7 @@ import {
 } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import {
   keepsIntentAfterFailure,
   secretWithheldOf,
@@ -62,20 +65,28 @@ import {
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery, type ApiQueryResult } from '../../api/useApiQuery';
 import { useMe } from '../../features/today/queries';
-import { Caption, Section, SectionQueryState } from '../../features/today/Section';
-import { displayZone, formatWhen } from '../../features/today/time';
+import { SectionQueryState } from '../../features/today/read-state';
+import { useKnownFacilityZone } from '../../features/today/known-zone';
+import { formatWhen } from '../../features/today/time';
 import { useApp, useConnectivity, useNow } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
 import { LiveRegion, sentences } from '../../ui/announce';
 import { Button } from '../../ui/Button';
+import { Disclosure } from '../../ui/Disclosure';
 import { OutcomeLost } from '../../ui/OutcomeLost';
 import { Screen } from '../../ui/Screen';
+import { Section } from '../../ui/Section';
 import { StateView } from '../../ui/StateView';
-import { Icon } from '../../ui/Icon';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { fonts, makeStyles, radius, spacing, type, useTheme } from '../../ui/theme';
-import { CommandError, type NotAvailableCopy } from '../account/components/CommandError';
+import { SupportDetails } from '../../ui/SupportDetails';
+import { Text } from '../../ui/Text';
+import { continuousCorners, layout, makeStyles, radius, spacing } from '../../ui/theme';
+import { CommandError, type NotAvailableCopy } from '../../ui/CommandError';
+import { NightCard, PassCard } from './PassCard';
 import { usePassStore, type StoredPass } from './pass-store';
+import { pendingMessage } from '../../copy/pending';
+
+export { groupReference, referenceRuns } from './PassCard';
 
 type MyPass = Schema<'MyPass'>;
 
@@ -133,21 +144,17 @@ export function otherActivePasses(
   );
 }
 
-/** "SPK1 ABCD …": groups of four so the reference can be read out at the desk. */
-export function groupReference(reference: string): string {
-  return reference.match(/.{1,4}/g)?.join(' ') ?? reference;
-}
-
 /** Codes after which the old pass is known to be unusable already (revoked or gone). */
 const ALREADY_WITHDRAWN = new Set(['STALE_REVISION', 'INVALID_TRANSITION', 'NOT_FOUND']);
 
 function PassContent() {
-  const { colors } = useTheme();
   const styles = useStyles();
   const { session } = useApp();
   const { reachable } = useConnectivity();
   const offline = reachable === false;
   const now = useNow();
+  // The pass carries no facility: the facility clock the app knows, else the device's (SPK-SCHED-008).
+  const knownZone = useKnownFacilityZone();
   const store = usePassStore();
   const me = useMe();
   // The pass is kept under the account the API names (or the session's), never under a shared
@@ -273,234 +280,266 @@ function PassContent() {
     if (next.pendingRevoke) await revokePrevious(next);
   }, [personId, accountKey, stored.pass, held.kind, passes.data, issue, store, revokePrevious]);
 
+  const [refreshing, setRefreshing] = useState(false);
+  const refresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await Promise.all([passes.refetch(), me.refetch()]);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [passes, me]);
+
   if (!accountKey) {
-    if (me.data === undefined) return <SectionQueryState read={me} label="your pass" />;
+    if (me.data === undefined) {
+      return (
+        <Screen>
+          <SectionQueryState read={me} label="your pass" />
+        </Screen>
+      );
+    }
     return (
-      <StateView
-        variant="unavailable"
-        title="Pass unavailable"
-        description="A pass needs a signed-in account. Contact the front desk."
-      />
+      <Screen>
+        <StateView
+          variant="unavailable"
+          title="Pass unavailable"
+          description="A pass needs a signed-in account. Ask the front desk."
+        />
+      </Screen>
     );
   }
-  if (!stored.loaded) return <StateView variant="loading" label="your pass" />;
+  if (!stored.loaded) {
+    return (
+      <Screen>
+        <StateView variant="loading" label="your pass" />
+      </Screen>
+    );
+  }
 
   const pass = stored.pass;
-  const zone = displayZone(null);
+  const zone = knownZone;
   const unlinked = me.data !== undefined && !personId;
+  const canAct = me.data !== undefined && !unlinked;
+  const revoked = pass !== null && held.kind === 'revoked';
+  const others = otherActivePasses(passes.data, pass);
 
   return (
-    <View testID="pass-content">
-      {pass && held.kind === 'revoked' ? (
-        <Section title="Your facility pass" testID="pass-revoked">
-          <View style={styles.pad}>
+    <Screen onRefresh={() => void refresh()} refreshing={refreshing}>
+      <View testID="pass-content" style={styles.page}>
+        {revoked ? (
+          <View style={styles.block} testID="pass-revoked">
+            <Text variant="title3" heading>
+              Your facility pass
+            </Text>
             <StatusBadge tone="danger" label="Pass revoked" testID="pass-state" />
-            <Caption>
+            <Text variant="callout">
               The pass on this device was withdrawn
               {held.revokedAt ? ` on ${formatWhen(held.revokedAt, zone.zone)}` : ''}, so the front
               desk will not accept it. Get a new pass to show at the desk.
-            </Caption>
+            </Text>
           </View>
-        </Section>
-      ) : pass ? (
-        <Section title="Your facility pass" testID="pass-ready">
-          <View style={styles.hero}>
-            <Text style={styles.heroLabel}>Facility pass</Text>
-            <View
-              style={styles.reference}
-              accessible
-              // Spelled out, so VoiceOver and TalkBack read the reference itself (SPK-UX-009).
-              accessibilityLabel={`Facility pass reference: ${groupReference(pass.reference).split('').join(' ')}. Show this at the front desk.`}
-              testID="pass-reference"
-            >
-              <Text style={styles.referenceText} selectable>
-                {groupReference(pass.reference)}
-              </Text>
-              <Text style={styles.referenceHint}>Show at the front desk</Text>
-            </View>
-            <View style={styles.heroNote}>
-              <Icon name="location_on" size={22} color={colors.floodlight} />
-              <Text style={styles.heroNoteText}>
-                Kept on this device, so it shows without a connection.
-              </Text>
-            </View>
+        ) : pass ? (
+          <View testID="pass-ready">
+            <PassCard
+              reference={pass.reference}
+              issued={`Issued ${formatWhen(pass.issuedAt, zone.zone)} (${formatAge(new Date(pass.issuedAt), now)}).`}
+            />
+            <PassStateLine held={held} passes={passes} offline={offline} now={now} />
           </View>
-          <Caption testID="pass-issued">
-            Issued {formatWhen(pass.issuedAt, zone.zone)} ({formatAge(new Date(pass.issuedAt), now)}
-            ).
-          </Caption>
-          <Caption>
-            Show this at the front desk. It does not contain your name or any family details; staff
-            choose who is arriving after it is scanned.
-          </Caption>
-          <PassStateLine held={held} passes={passes} offline={offline} now={now} />
-          <View style={styles.pad}>
+        ) : (
+          <LiveRegion announcement={sentences(NO_PASS_TITLE, NO_PASS_TEXT)} testID="pass-none">
+            <NightCard>
+              <Text variant="title1" tone="inverse" heading>
+                {NO_PASS_TITLE}
+              </Text>
+              <Text variant="body" tone="inverse">
+                {NO_PASS_TEXT}
+              </Text>
+            </NightCard>
+          </LiveRegion>
+        )}
+
+        {me.data === undefined ? (
+          <SectionQueryState read={me} label="your account" />
+        ) : unlinked ? (
+          <StateView
+            variant="unavailable"
+            description="A pass needs your account to be linked to a person. Finish setting up your account first."
+          />
+        ) : !pass || revoked ? (
+          <View style={styles.actions}>
+            <Button
+              label={revoked ? 'Get a new pass' : 'Get my pass'}
+              busy={issue.isProcessing}
+              disabled={offline}
+              onPress={() => void getPass()}
+              testID={revoked ? 'pass-get-new' : 'pass-get'}
+            />
+            {offline ? (
+              <Text variant="footnote" tone="muted">
+                Getting or replacing a pass needs a connection.
+              </Text>
+            ) : null}
+          </View>
+        ) : null}
+
+        {pass && !revoked ? (
+          <Disclosure
+            title="More"
+            accessibilityHint="Shows how to replace this pass and what it carries"
+            style={styles.more}
+            testID="pass-more"
+          >
+            <Text variant="callout" tone="muted">
+              The pass carries no name or family details. At the front desk, staff choose who is
+              arriving.
+            </Text>
             <StateView
               variant="pending-decision"
               subject="A scannable code for this pass"
               decisions={['DEC-023']}
               owner="Technical lead/account owners"
+              message={SCANNABLE_CODE_MESSAGE}
             />
-          </View>
-        </Section>
-      ) : (
-        <StateView
-          variant="empty"
-          title="No pass on this device"
-          description="Get a personal facility pass to show at the front desk. Passes for a household are issued by staff at the desk."
-        />
-      )}
-
-      {me.data === undefined ? (
-        <SectionQueryState read={me} label="your account" />
-      ) : unlinked ? (
-        <StateView
-          variant="unavailable"
-          description="A pass needs your account to be linked to a person. Finish setting up your account first."
-        />
-      ) : (
-        <View style={styles.actions}>
-          {pass && held.kind === 'revoked' ? (
-            <Button
-              label="Get a new pass"
-              busy={issue.isProcessing}
-              disabled={offline}
-              onPress={() => void getPass()}
-              testID="pass-get-new"
-            />
-          ) : null}
-          {pass && held.kind !== 'revoked' && !confirmReplace ? (
-            <Button
-              label="Replace pass"
-              variant="secondary"
-              disabled={offline}
-              onPress={() => setConfirmReplace(true)}
-              accessibilityHint="Asks before replacing; the current pass stops working"
-              testID="pass-replace"
-            />
-          ) : null}
-          {pass && held.kind !== 'revoked' && confirmReplace ? (
-            <LiveRegion style={styles.confirm} announcement={REPLACE_QUESTION}>
-              <Text style={styles.body}>{REPLACE_QUESTION}</Text>
+            {canAct && !confirmReplace ? (
               <Button
-                label="Replace"
-                busy={issue.isProcessing || revoke.isProcessing}
-                disabled={offline}
-                onPress={() => void getPass()}
-                testID="pass-replace-confirm"
-              />
-              <Button
-                label="Keep this pass"
+                label="Replace pass"
                 variant="secondary"
-                onPress={() => setConfirmReplace(false)}
+                disabled={offline}
+                onPress={() => setConfirmReplace(true)}
+                accessibilityHint="Asks before replacing; the current pass stops working"
+                testID="pass-replace"
               />
-            </LiveRegion>
-          ) : null}
-          {!pass ? (
-            <Button
-              label="Get my pass"
-              busy={issue.isProcessing}
-              disabled={offline}
-              onPress={() => void getPass()}
-              testID="pass-get"
-            />
-          ) : null}
-          {offline ? <Caption>Getting or replacing a pass needs a connection.</Caption> : null}
-        </View>
-      )}
+            ) : null}
+            {canAct && confirmReplace ? (
+              <LiveRegion style={styles.confirm} announcement={REPLACE_QUESTION}>
+                <Text variant="body">{REPLACE_QUESTION}</Text>
+                <Button
+                  label="Replace"
+                  variant="destructive"
+                  busy={issue.isProcessing || revoke.isProcessing}
+                  disabled={offline}
+                  onPress={() => void getPass()}
+                  testID="pass-replace-confirm"
+                />
+                <Button
+                  label="Keep this pass"
+                  variant="secondary"
+                  onPress={() => setConfirmReplace(false)}
+                />
+              </LiveRegion>
+            ) : null}
+            {canAct && offline ? (
+              <Text variant="footnote" tone="muted">
+                Getting or replacing a pass needs a connection.
+              </Text>
+            ) : null}
+          </Disclosure>
+        ) : null}
 
-      {otherActivePasses(passes.data, pass).length > 0 ? (
-        <Section title="Other active passes" testID="pass-others">
-          <Caption>
-            {pass
-              ? 'These passes are still active, but their references are not on this device. A reference is shown only once, when the pass is issued. Withdraw any you no longer have.'
-              : 'You have an active pass, but its reference is not on this device: a reference is shown only once, when the pass is issued. Withdraw it if you no longer have it, and get a new one here.'}
-          </Caption>
-          <View accessibilityRole="list">
-            {otherActivePasses(passes.data, pass).map((other) => (
-              <OtherPass
-                key={other.id}
-                pass={other}
-                zone={zone.zone}
-                offline={offline}
-                onReload={() => void passes.refetch()}
-              />
-            ))}
-          </View>
-        </Section>
-      ) : null}
+        {others.length > 0 ? (
+          <Section title="Other active passes" testID="pass-others">
+            <Text variant="callout" tone="muted" style={styles.othersIntro}>
+              {pass
+                ? 'These passes are still active, but their references are not on this device. A reference is shown only once, when the pass is issued. Withdraw any you no longer have.'
+                : 'You have an active pass, but its reference is not on this device: a reference is shown only once, when the pass is issued. Withdraw it if you no longer have it, and get a new one here.'}
+            </Text>
+            <View accessibilityRole="list">
+              {others.map((other) => (
+                <OtherPass
+                  key={other.id}
+                  pass={other}
+                  zone={zone.zone}
+                  offline={offline}
+                  onReload={() => void passes.refetch()}
+                />
+              ))}
+            </View>
+          </Section>
+        ) : null}
 
-      {issue.error && issueWithheld ? (
-        <IssueWithheld error={issue.error} hasPass={pass !== null} />
-      ) : issue.error ? (
-        // "Check again" after no answer resends the same issue (same key), so one pass is issued.
-        <CommandError
-          error={issue.error}
-          onRetry={() => void getPass()}
-          notFound={ISSUE_NOT_AVAILABLE}
-          denied={ISSUE_NOT_AVAILABLE}
-        />
-      ) : null}
-      {saveProblem ? (
-        <LiveRegion
-          style={styles.pad}
-          testID="pass-save-problem"
-          announcement={sentences(SAVE_PROBLEM_LABEL, SAVE_PROBLEM_TEXT)}
-        >
-          <StatusBadge tone="warning" label={SAVE_PROBLEM_LABEL} />
-          <Caption>{SAVE_PROBLEM_TEXT}</Caption>
-        </LiveRegion>
-      ) : null}
-      {pass?.pendingRevoke && revokeProblem && tookEffectOutcomeLost(revokeProblem) ? (
-        // The withdrawal committed before its answer was lost: never "still active". Reload reads
-        // the passes again, and the list showing the previous pass revoked settles it.
-        <OutcomeLost
-          error={revokeProblem}
-          what="the withdrawal of your previous pass"
-          testID="pass-revoke-outcome-lost"
-        />
-      ) : pass?.pendingRevoke && (!revokeProblem || keepsIntentAfterFailure(revokeProblem)) ? (
-        <LiveRegion
-          style={styles.pad}
-          testID="pass-revoke-unconfirmed"
-          // Not while the withdrawal is being sent again: its answer is announced instead.
-          announcement={
-            revoke.isProcessing
-              ? null
-              : sentences(UNCONFIRMED_LABEL, UNCONFIRMED_TEXT, offline ? null : 'Try again')
-          }
-          occurrence={revokeProblem}
-        >
-          <StatusBadge tone="warning" label={UNCONFIRMED_LABEL} />
-          <Caption>
-            We could not confirm the previous pass was withdrawn
-            {revokeProblem ? ` (error code ${revokeProblem.code})` : ''}. Your new pass is ready.
-          </Caption>
-          <Button
-            label="Try again"
-            variant="secondary"
-            busy={revoke.isProcessing}
-            disabled={offline}
-            onPress={() => void revokePrevious(pass)}
+        {issue.error && issueWithheld ? (
+          <IssueWithheld error={issue.error} hasPass={pass !== null} />
+        ) : issue.error ? (
+          // "Check again" after no answer resends the same issue (same key), so one pass is issued.
+          <CommandError
+            error={issue.error}
+            onRetry={() => void getPass()}
+            notFound={ISSUE_NOT_AVAILABLE}
+            denied={ISSUE_NOT_AVAILABLE}
           />
-        </LiveRegion>
-      ) : revokeProblem ? (
-        <LiveRegion
-          style={styles.pad}
-          testID="pass-revoke-problem"
-          announcement={sentences(STILL_ACTIVE_LABEL, STILL_ACTIVE_TEXT)}
-          occurrence={revokeProblem}
-        >
-          <StatusBadge tone="warning" label={STILL_ACTIVE_LABEL} />
-          <Caption>
-            Your new pass is ready, but the previous one could not be withdrawn (error code{' '}
-            {revokeProblem.code}). Ask the front desk to revoke it.
-          </Caption>
-        </LiveRegion>
-      ) : null}
-    </View>
+        ) : null}
+        {saveProblem ? (
+          <LiveRegion
+            style={styles.block}
+            testID="pass-save-problem"
+            announcement={sentences(SAVE_PROBLEM_LABEL, SAVE_PROBLEM_TEXT)}
+          >
+            <StatusBadge tone="warning" label={SAVE_PROBLEM_LABEL} />
+            <Text variant="callout">{SAVE_PROBLEM_TEXT}</Text>
+          </LiveRegion>
+        ) : null}
+        {pass?.pendingRevoke && revokeProblem && tookEffectOutcomeLost(revokeProblem) ? (
+          // The withdrawal committed before its answer was lost: never "still active". Reload
+          // reads the passes again, and the list showing the previous pass revoked settles it.
+          <OutcomeLost
+            error={revokeProblem}
+            what="the withdrawal of your previous pass"
+            testID="pass-revoke-outcome-lost"
+          />
+        ) : pass?.pendingRevoke && (!revokeProblem || keepsIntentAfterFailure(revokeProblem)) ? (
+          <LiveRegion
+            style={styles.block}
+            testID="pass-revoke-unconfirmed"
+            // Not while the withdrawal is being sent again: its answer is announced instead.
+            announcement={
+              revoke.isProcessing
+                ? null
+                : sentences(UNCONFIRMED_LABEL, UNCONFIRMED_TEXT, offline ? null : 'Try again')
+            }
+            occurrence={revokeProblem}
+          >
+            <StatusBadge tone="warning" label={UNCONFIRMED_LABEL} />
+            <Text variant="callout">{UNCONFIRMED_TEXT}</Text>
+            <Button
+              label="Try again"
+              variant="secondary"
+              busy={revoke.isProcessing}
+              disabled={offline}
+              onPress={() => void revokePrevious(pass)}
+            />
+            {revokeProblem ? (
+              <SupportDetails
+                errorCode={revokeProblem.code}
+                reference={revokeProblem.correlationId}
+              />
+            ) : null}
+          </LiveRegion>
+        ) : revokeProblem ? (
+          <LiveRegion
+            style={styles.block}
+            testID="pass-revoke-problem"
+            announcement={sentences(STILL_ACTIVE_LABEL, STILL_ACTIVE_TEXT)}
+            occurrence={revokeProblem}
+          >
+            <StatusBadge tone="warning" label={STILL_ACTIVE_LABEL} />
+            <Text variant="callout">{STILL_ACTIVE_TEXT}</Text>
+            <SupportDetails
+              errorCode={revokeProblem.code}
+              reference={revokeProblem.correlationId}
+            />
+          </LiveRegion>
+        ) : null}
+      </View>
+    </Screen>
   );
 }
+
+const NO_PASS_TITLE = 'No pass on this device';
+const NO_PASS_TEXT =
+  'Get your own pass to show at the front desk. A pass for your whole family comes from the front desk.';
+/** The scanner decision (DEC-023) is open: what the person does at the desk until then. */
+export const SCANNABLE_CODE_MESSAGE = pendingMessage('DEC-023');
 
 const SAVE_PROBLEM_LABEL = 'New pass not saved';
 const SAVE_PROBLEM_TEXT =
@@ -526,16 +565,14 @@ function IssueWithheld({ error, hasPass }: { error: ApiError; hasPass: boolean }
     : 'Your earlier request issued a pass, but its reference is shown only once, in an answer that did not reach this device. It is listed under "Other active passes": withdraw it there, then get a new pass.';
   return (
     <LiveRegion
-      style={styles.pad}
+      style={styles.block}
       testID="pass-issue-withheld"
       announcement={sentences(ISSUE_WITHHELD_LABEL, text)}
       occurrence={error}
     >
       <StatusBadge tone="warning" label={ISSUE_WITHHELD_LABEL} />
-      <Caption>{text}</Caption>
-      <Caption>
-        {`Error code: ${error.code}${error.correlationId ? `. Reference: ${error.correlationId}` : ''}`}
-      </Caption>
+      <Text variant="callout">{text}</Text>
+      <SupportDetails errorCode={error.code} reference={error.correlationId} />
     </LiveRegion>
   );
 }
@@ -558,11 +595,11 @@ function PassStateLine({
     return (
       <View style={styles.pad}>
         <StatusBadge tone="warning" label="Shown from this device" />
-        <Caption>
+        <Text variant="callout" tone="muted">
           You are offline. This is the pass stored on this device
           {held.kind === 'active' && checked ? `; it was active when checked ${checked}` : ''}. The
           desk checks it when scanned and may refuse it if it was revoked.
-        </Caption>
+        </Text>
       </View>
     );
   }
@@ -570,7 +607,11 @@ function PassStateLine({
     return (
       <View style={styles.pad}>
         <StatusBadge tone="success" label="Active" testID="pass-state" />
-        {checked ? <Caption>Checked {checked}.</Caption> : null}
+        {checked ? (
+          <Text variant="callout" tone="muted">
+            Checked {checked}.
+          </Text>
+        ) : null}
       </View>
     );
   }
@@ -578,25 +619,27 @@ function PassStateLine({
     return (
       <View style={styles.pad}>
         <StatusBadge tone="warning" label="Not confirmed" testID="pass-state" />
-        <Caption>
+        <Text variant="callout" tone="muted">
           Your passes do not include this one, so the app cannot confirm it is active. If the desk
           cannot accept it, replace it here.
-        </Caption>
+        </Text>
       </View>
     );
   }
   if (passes.error && presentationForError(passes.error) !== 'offline') {
     if (presentationForError(passes.error) === 'unavailable') {
       return (
-        <Caption>
+        <Text variant="callout" tone="muted">
           Whether this pass is still active is not available to this account. If the desk cannot
           accept it, replace it here.
-        </Caption>
+        </Text>
       );
     }
     return (
       <View style={styles.pad} testID="pass-state-error">
-        <Caption>Could not check whether this pass is still active.</Caption>
+        <Text variant="callout" tone="muted">
+          Could not check whether this pass is still active.
+        </Text>
         <StateView variant="error" error={passes.error} onRetry={() => void passes.refetch()} />
       </View>
     );
@@ -632,7 +675,7 @@ function OtherPass({
   const error = withdraw.error;
   return (
     <View style={styles.other} testID={`pass-other-${pass.id}`}>
-      <Text style={styles.body}>Pass issued {formatWhen(pass.issuedAt, zone)}</Text>
+      <Text variant="body">Pass issued {formatWhen(pass.issuedAt, zone)}</Text>
       {withdraw.status !== 'success' ? <StatusBadge tone="success" label="Active" /> : null}
       {withdraw.status === 'success' ? (
         <LiveRegion announcement="Withdrawn">
@@ -640,7 +683,7 @@ function OtherPass({
         </LiveRegion>
       ) : confirming ? (
         <View style={styles.confirm}>
-          <Text style={styles.body}>
+          <Text variant="body">
             Withdraw this pass? It stops working at the desk straight away.
           </Text>
           <Button
@@ -676,64 +719,37 @@ function OtherPass({
 }
 
 export function PassScreen() {
+  const { session } = useApp();
+  // Signed in: the pass screen draws its own frame, with pull to refresh.
+  if (session.status === 'signed_in') return <PassContent />;
   return (
     <Screen>
-      <RequireSession what="your facility pass">
-        <PassContent />
-      </RequireSession>
+      <RequireSession what="your facility pass">{null}</RequireSession>
     </Screen>
   );
 }
 
-const useStyles = makeStyles(({ colors, dark }) => ({
-  hero: {
-    marginHorizontal: spacing.lg,
+const useStyles = makeStyles(({ colors }) => ({
+  page: { gap: spacing.lg, paddingBottom: spacing.xl },
+  block: {
+    marginHorizontal: layout.gutter,
     padding: spacing.lg,
-    gap: spacing.md,
-    borderRadius: radius.xl,
-    backgroundColor: colors.night,
-    // A hairline keeps the pass's edge on a page that is itself dark (Legends mode).
-    borderWidth: 1,
-    borderColor: dark ? colors.nightLine : colors.night,
-    alignItems: 'stretch',
-  },
-  heroLabel: { ...type.eyebrow, color: colors.nightMuted, textAlign: 'center' },
-  reference: {
-    paddingVertical: spacing.xl,
-    paddingHorizontal: spacing.lg,
     gap: spacing.sm,
-    borderRadius: 28,
+    borderRadius: radius.lg,
+    ...continuousCorners,
     backgroundColor: colors.background,
-    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: colors.border,
   },
-  referenceText: {
-    ...type.title,
-    fontSize: 34,
-    lineHeight: 40,
-    color: colors.text,
-    letterSpacing: 2,
-    textAlign: 'center',
-  },
-  referenceHint: { ...type.caption, color: colors.textMuted, textAlign: 'center' },
-  heroNote: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingVertical: spacing.md,
-    paddingHorizontal: 14,
-    borderRadius: radius.md,
-    backgroundColor: colors.nightRaised,
-  },
-  heroNoteText: { ...type.caption, ...fonts.semibold, color: colors.onNight, flex: 1 },
-  pad: { paddingHorizontal: spacing.lg, gap: spacing.xs },
-  actions: { padding: spacing.lg, gap: spacing.sm },
+  pad: { paddingHorizontal: layout.gutter, paddingTop: spacing.md, gap: spacing.xs },
+  actions: { paddingHorizontal: layout.gutter, gap: spacing.sm },
+  more: { marginHorizontal: layout.gutter },
   confirm: { gap: spacing.sm },
+  othersIntro: { paddingHorizontal: layout.gutter },
   other: {
-    marginHorizontal: spacing.lg,
     paddingVertical: spacing.sm,
     gap: spacing.sm,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.border,
   },
-  body: { ...type.body, color: colors.text },
 }));

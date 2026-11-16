@@ -28,10 +28,14 @@ import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { useApp, useConnectivity } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
+import { ChoiceCard } from '../../ui/ChoiceList';
+import { TextField } from '../../ui/Field';
 import { ListRow } from '../../ui/ListRow';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { SecretWithheld } from '../../ui/SecretWithheld';
+import { Section } from '../../ui/Section';
 import { StatusBadge } from '../../ui/StatusBadge';
+import { Text } from '../../ui/Text';
 import { spacing } from '../../ui/theme';
 import {
   formatDateTime,
@@ -39,8 +43,7 @@ import {
   usePersonName,
   useMe,
 } from '../account/components/account-data';
-import { CommandError } from '../account/components/CommandError';
-import { CheckboxRow, Paragraph, SectionHeader, TextField } from '../account/components/forms';
+import { CommandError } from '../../ui/CommandError';
 
 type CalendarFeed = Schema<'CalendarFeed'>;
 type CalendarFeedCreated = Schema<'CalendarFeedCreated'>;
@@ -67,11 +70,11 @@ function feedScopeText(feed: CalendarFeed): string {
 export function CalendarFeedsSection() {
   const feeds = useApiQuery({ path: '/me/calendar-feeds' });
   return (
-    <View>
-      <SectionHeader
-        title="Calendar feed"
-        detail="A private link your calendar app can subscribe to. You can revoke it at any time."
-      />
+    <Section
+      title="Calendar feed"
+      subtitle="A private link your calendar app can subscribe to. You can revoke it at any time."
+      variant="plain"
+    >
       <QueryBoundary
         query={feeds}
         label="calendar feeds"
@@ -81,7 +84,9 @@ export function CalendarFeedsSection() {
         {(data) => (
           <View>
             {data.feeds.length === 0 ? (
-              <Paragraph muted>No calendar feeds yet.</Paragraph>
+              <Text variant="body" tone="muted">
+                No calendar feeds yet.
+              </Text>
             ) : (
               <View accessibilityRole="list">
                 {data.feeds.map((feed) => (
@@ -93,7 +98,7 @@ export function CalendarFeedsSection() {
           </View>
         )}
       </QueryBoundary>
-    </View>
+    </Section>
   );
 }
 
@@ -130,16 +135,16 @@ function FeedRow({ feed }: { feed: CalendarFeed }) {
       />
       {revoked ? (
         revoke.data ? (
-          <Paragraph>{FEED_REVOKED_TEXT}</Paragraph>
+          <Text variant="body">{FEED_REVOKED_TEXT}</Text>
         ) : null
       ) : (
         <View style={styles.actions}>
           {confirming ? (
             <>
-              <Paragraph inset={false}>
+              <Text variant="body">
                 Revoking stops your calendar app from getting new updates. Events already copied are
                 not removed.
-              </Paragraph>
+              </Text>
               <Button
                 label="Revoke now"
                 onPress={() => void submit()}
@@ -186,11 +191,12 @@ function PersonCheckbox({
 }) {
   const name = usePersonName(personId);
   return (
-    <CheckboxRow
-      label={personNameText(name)}
+    <ChoiceCard
+      option={{ value: personId, label: personNameText(name) }}
+      mode="multiple"
       checked={checked}
       disabled={disabled || name.status !== 'ready'}
-      onChange={onChange}
+      onPress={() => onChange(!checked)}
     />
   );
 }
@@ -249,7 +255,7 @@ function CreateFeed() {
       />
       {viewable.length > 0 ? (
         <View style={styles.people} accessibilityRole="list" accessibilityLabel="Also include">
-          <Paragraph inset={false}>Also include</Paragraph>
+          <Text variant="body">Also include</Text>
           {viewable.map((a) => (
             <PersonCheckbox
               key={a.subjectPersonId}
@@ -317,10 +323,10 @@ function FeedCreated({
       <View style={styles.actions}>
         <StatusBadge tone="success" label="Calendar feed active" />
       </View>
-      <Paragraph>
+      <Text variant="body">
         {feed.label ?? 'Your calendar feed'} is ready. Add the link to your calendar app. The link
         is shown only now; anyone who has it can see these events until you revoke it.
-      </Paragraph>
+      </Text>
       <View style={styles.actions}>
         <Button label="Share calendar link" onPress={() => void Share.share({ message: url })} />
         <Button label="Done" variant="secondary" onPress={onDone} />

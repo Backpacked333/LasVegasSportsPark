@@ -13,22 +13,29 @@
  *
  * States: loading; empty (nothing public; nothing scheduled); ready with "Last updated"; not
  * available (the organization has not turned public views on, or took the view down); offline
- * (the cached answer with its age, as every read in the app); error with retry.
+ * (the cached answer with its age, as every read in the app); error with retry; pull to refresh.
+ *
+ * Look (ADR-008 visual system v2): sections and rows of `src/ui`, a choice among several
+ * facilities or competitions as chips.
  */
 import type { Schema } from '@sportspark/api-client';
+import { useQueryClient } from '@tanstack/react-query';
 import { Stack, useRouter } from 'expo-router';
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { View } from 'react-native';
 import { useApiQuery } from '../../api/useApiQuery';
 import { formatInstant } from '../../features/teams/format';
-import { Body, ButtonRow, Detail, Section } from '../../features/teams/ui';
 import { useApp } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { Card } from '../../ui/Card';
+import { ChipRow } from '../../ui/Chip';
+import { FieldValue } from '../../ui/Field';
 import { ListRow } from '../../ui/ListRow';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
+import { Section } from '../../ui/Section';
 import { StateView } from '../../ui/StateView';
+import { Text } from '../../ui/Text';
 import { makeStyles, spacing } from '../../ui/theme';
 
 type Directory = Schema<'PublicDirectory'>;
@@ -74,6 +81,39 @@ function useDirectory(slug: string | null) {
   });
 }
 
+/**
+ * Pull to refresh for a public screen: reads every public view on it again (the directory and
+ * the schedule or standings below it).
+ */
+function usePublicRefresh() {
+  const queryClient = useQueryClient();
+  const [refreshing, setRefreshing] = useState(false);
+  const onRefresh = () => {
+    setRefreshing(true);
+    void queryClient
+      .invalidateQueries({
+        predicate: (query) =>
+          query.queryKey[0] === 'api' &&
+          typeof query.queryKey[1] === 'string' &&
+          query.queryKey[1].startsWith('/public/'),
+      })
+      .finally(() => setRefreshing(false));
+  };
+  return { onRefresh, refreshing };
+}
+
+function Detail({ label, value, testID }: { label: string; value: string; testID?: string }) {
+  return <FieldValue label={label} value={value} layout="inline" testID={testID} />;
+}
+
+function Note({ children }: { children: ReactNode }) {
+  return (
+    <Text variant="footnote" tone="muted">
+      {children}
+    </Text>
+  );
+}
+
 function NoOrganization() {
   return (
     <Screen>
@@ -86,7 +126,7 @@ function NoOrganization() {
   );
 }
 
-/** A choice among several public things (facilities, competitions), by name. */
+/** A choice among several public things (facilities, competitions), by name, as chips. */
 function Choice({
   label,
   options,
@@ -98,21 +138,17 @@ function Choice({
   value: string;
   onChange: (code: string) => void;
 }) {
+  const styles = useStyles();
   if (options.length < 2) return null;
   return (
-    <View accessibilityLabel={label}>
-      <ButtonRow>
-        {options.map((option) => (
-          <Button
-            key={option.code}
-            label={option.name}
-            variant={option.code === value ? 'primary' : 'secondary'}
-            onPress={() => onChange(option.code)}
-            accessibilityHint={option.code === value ? 'Selected' : 'Shows this one instead'}
-          />
-        ))}
-      </ButtonRow>
-    </View>
+    <ChipRow
+      mode="single"
+      label={label}
+      options={options.map((option) => ({ value: option.code, label: option.name }))}
+      value={value}
+      onChange={(code) => (code ? onChange(code) : undefined)}
+      style={styles.choice}
+    />
   );
 }
 
@@ -150,7 +186,7 @@ function DaySchedule({ slug, code }: { slug: string; code: string }) {
             value={formatInstant(data.computedAt, data.timezone)}
             testID="public-updated"
           />
-          <Body muted>Times are in the facility&apos;s time zone.</Body>
+          <Note>Times are in the facility&apos;s time zone.</Note>
         </Section>
       )}
     </QueryBoundary>
@@ -161,9 +197,10 @@ export function PublicScheduleScreen() {
   const slug = useSlug();
   const directory = useDirectory(slug);
   const [chosen, setChosen] = useState<string | null>(null);
+  const refresh = usePublicRefresh();
   if (slug === null) return <NoOrganization />;
   return (
-    <Screen>
+    <Screen {...refresh}>
       <QueryBoundary
         query={directory}
         label="the public schedule"
@@ -251,9 +288,10 @@ export function PublicStandingsScreen() {
   const slug = useSlug();
   const directory = useDirectory(slug);
   const [chosen, setChosen] = useState<string | null>(null);
+  const refresh = usePublicRefresh();
   if (slug === null) return <NoOrganization />;
   return (
-    <Screen>
+    <Screen {...refresh}>
       <QueryBoundary
         query={directory}
         label="the public standings"
@@ -287,15 +325,16 @@ export function PublicStandingsScreen() {
  * public, so a visitor is never sent to an empty page.
  */
 export function PublicLinks() {
+  const styles = useStyles();
   const router = useRouter();
   const slug = useSlug();
   const directory = useDirectory(slug);
   const data = directory.data;
   if (!data || (data.schedules.length === 0 && data.competitions.length === 0)) return null;
   return (
-    <Card testID="public-links">
-      <Body>See what is on at {data.organizationName} without signing in.</Body>
-      <ButtonRow>
+    <Card testID="public-links" style={styles.links}>
+      <Text variant="body">{`See what is on at ${data.organizationName} without signing in.`}</Text>
+      <View style={styles.buttons}>
         {data.schedules.length > 0 ? (
           <Button
             label="Today's schedule"
@@ -312,7 +351,7 @@ export function PublicLinks() {
             accessibilityHint="Shows the standings of public leagues and tournaments"
           />
         ) : null}
-      </ButtonRow>
+      </View>
     </Card>
   );
 }
@@ -339,4 +378,7 @@ export function PublicStandingsRoute() {
 
 const useStyles = makeStyles(() => ({
   stack: { gap: spacing.md },
+  choice: { paddingVertical: spacing.sm },
+  links: { gap: spacing.md },
+  buttons: { gap: spacing.sm },
 }));

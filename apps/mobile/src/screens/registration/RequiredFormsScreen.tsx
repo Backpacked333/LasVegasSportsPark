@@ -1,8 +1,10 @@
 /**
  * SCR-C-13 Required forms and acknowledgments (SPK-IAM-003, SPK-REG-009, POL-037,
  * MISSING_ACKNOWLEDGMENT; journeys A4, C2). For every participant of a basket (or of a waitlist
- * offer), lists the required form versions with their wording, and records each signature with
- * `POST /v1/acknowledgments`.
+ * offer), lists the required form versions, and records each signature with
+ * `POST /v1/acknowledgments`. The Forms step of registering (PA-11, ADR-008): each form is a card
+ * with its status and a "Read and sign" button that opens a `Sheet` with the wording, the
+ * agreement and the Sign button; signing closes it. From a waitlist offer the steps are not shown.
  *
  * Signer rules: the signed-in customer signs as themselves; the API records them as the signer
  * (the app never sends another signer). An adult signs their own forms; a guardian holding
@@ -25,12 +27,12 @@
  */
 import type { ApiError, Schema } from '@sportspark/api-client';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
-import { useState, type ReactNode } from 'react';
+import { useRef, useState, type ReactNode } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { usePermissions } from '../../api/permissions';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
-import { CommandError } from '../../features/registration/CommandError';
+import { CommandError } from '../../ui/CommandError';
 import {
   formWording,
   useFormsStatus,
@@ -40,7 +42,7 @@ import { formatInstant } from '../../features/registration/format';
 import { useMe, useParticipantNames } from '../../features/registration/participants';
 import { useApiRecords, type RecordState } from '../../features/registration/queries';
 import { param, registrationRoutes } from '../../features/registration/routes';
-import { Body, ButtonRow, ChoiceRow, Section } from '../../features/registration/ui';
+import { RegistrationSteps } from '../../features/registration/steps';
 import { WaiverCard } from '../../features/waivers/WaiverCard';
 import { useApp, useConnectivity } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
@@ -48,8 +50,12 @@ import { Button } from '../../ui/Button';
 import { QueryErrorView } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
+import { ChoiceCard } from '../../ui/ChoiceList';
+import { Section } from '../../ui/Section';
+import { Sheet } from '../../ui/Sheet';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { makeStyles, spacing } from '../../ui/theme';
+import { Text } from '../../ui/Text';
+import { layout, makeStyles, spacing } from '../../ui/theme';
 
 type PolicyVersion = Schema<'PolicyVersion'>;
 
@@ -176,7 +182,9 @@ function RequiredWaivers({
                 }}
               />
             ) : !read?.data ? (
-              <Body muted>Checking the waiver…</Body>
+              <Text variant="caption" tone="muted">
+                Checking the waiver…
+              </Text>
             ) : (
               keys.map((policyKey) => {
                 const waiver = read.data?.waivers.find((w) => w.policyKey === policyKey);
@@ -229,11 +237,17 @@ function FormCard({
   const { services } = useApp();
   const policy = record?.data;
   const [agreed, setAgreed] = useState(false);
+  const [open, setOpen] = useState(false);
+  const trigger = useRef<View>(null);
   const [failure, setFailure] = useState<ApiError | null>(null);
   const sign = useApiCommand('post', '/acknowledgments', {
     invalidate: [['api', '/acknowledgments']],
   });
   const title = policy?.title ?? 'Required form';
+  const forSelf = participantName === 'You';
+  const agreeLabel = forSelf
+    ? `I have read "${title}" and agree`
+    : `I have read "${title}" and agree for ${participantName}`;
 
   const submit = async () => {
     setFailure(null);
@@ -245,18 +259,21 @@ function FormCard({
           evidence: { channel: 'customer_app', appVersion: services.config.appVersion },
         },
       });
+      setOpen(false);
       onSigned();
     } catch (error) {
       const apiError = error as ApiError;
       // Already signed (by this or another permitted signer): the record is what counts.
-      if (apiError.code === 'RESOURCE_CONFLICT') onSigned();
-      else setFailure(apiError);
+      if (apiError.code === 'RESOURCE_CONFLICT') {
+        setOpen(false);
+        onSigned();
+      } else setFailure(apiError);
     }
   };
 
   return (
     <View style={styles.card} testID={`form-${policyVersionId}-${participantPersonId}`}>
-      <Body>{policy ? `${title} (version ${policy.version})` : title}</Body>
+      <Text variant="headline">{policy ? `${title} (version ${policy.version})` : title}</Text>
       {signedAt ? (
         <StatusBadge tone="success" label={`Signed on ${formatInstant(signedAt)}`} />
       ) : canSign ? (
@@ -264,11 +281,7 @@ function FormCard({
       ) : (
         <StatusBadge tone="neutral" label="Needs a guardian who can complete forms" />
       )}
-      {policy ? (
-        formWording(policy.content).map((paragraph, i) => (
-          <Body key={`${policyVersionId}-${i}`}>{paragraph}</Body>
-        ))
-      ) : record?.error ? (
+      {policy ? null : record?.error ? (
         <QueryErrorView
           error={record.error}
           onRetry={record.refetch}
@@ -278,44 +291,81 @@ function FormCard({
           }}
         />
       ) : (
-        <Body muted>Loading the wording…</Body>
+        <Text variant="caption" tone="muted">
+          Loading the wording…
+        </Text>
       )}
       {!signedAt && canSign && policy ? (
-        <>
-          <ChoiceRow
-            label={
-              participantName === 'You'
-                ? `I have read "${title}" and agree`
-                : `I have read "${title}" and agree for ${participantName}`
-            }
-            checked={agreed}
-            onToggle={() => setAgreed((v) => !v)}
-            testID={`agree-${policyVersionId}-${participantPersonId}`}
-          />
+        <View ref={trigger} collapsable={false}>
           <Button
             label={
-              participantName === 'You'
-                ? `Sign "${title}"`
-                : `Sign "${title}" for ${participantName}`
+              forSelf
+                ? `Read and sign "${title}"`
+                : `Read and sign "${title}" for ${participantName}`
             }
-            onPress={() => void submit()}
-            disabled={!agreed || offline}
-            busy={sign.isProcessing}
+            variant={agreed ? 'primary' : 'secondary'}
+            onPress={() => setOpen(true)}
+            accessibilityHint="Opens the wording to read, then sign"
           />
-          {offline ? <Body muted>Signing needs a connection. Your answer is kept.</Body> : null}
-        </>
+        </View>
       ) : null}
       {!signedAt && !canSign ? (
-        <Body muted>
+        <Text variant="caption" tone="muted">
           {`Your account cannot sign forms for ${participantName}. A guardian with permission to complete forms must sign.`}
-        </Body>
+        </Text>
       ) : null}
-      <CommandError error={failure} onRetry={() => void submit()} onReload={onSigned} />
+      {policy && !signedAt && canSign ? (
+        <Sheet
+          open={open}
+          onClose={() => setOpen(false)}
+          title={title}
+          returnFocusTo={trigger}
+          footer={
+            <>
+              <Button
+                label={forSelf ? `Sign "${title}"` : `Sign "${title}" for ${participantName}`}
+                onPress={() => void submit()}
+                disabled={!agreed || offline}
+                busy={sign.isProcessing}
+                size="lg"
+                block
+              />
+              {offline ? (
+                <Text variant="caption" tone="muted">
+                  Signing needs a connection. Your answer is kept.
+                </Text>
+              ) : null}
+            </>
+          }
+        >
+          <Text variant="caption" tone="muted">{`Version ${policy.version}`}</Text>
+          {formWording(policy.content).map((paragraph, i) => (
+            <Text key={`${policyVersionId}-${i}`} variant="body">
+              {paragraph}
+            </Text>
+          ))}
+          <ChoiceCard
+            option={{ value: 'agree', label: agreeLabel }}
+            mode="multiple"
+            checked={agreed}
+            onPress={() => setAgreed((v) => !v)}
+            accessibilityLabel={agreeLabel}
+            testID={`agree-${policyVersionId}-${participantPersonId}`}
+          />
+          <CommandError
+            wording="registration"
+            error={failure}
+            onRetry={() => void submit()}
+            onReload={onSigned}
+          />
+        </Sheet>
+      ) : null}
     </View>
   );
 }
 
 function FormsContent({ source }: { source: FormsSource }) {
+  const styles = useStyles();
   const router = useRouter();
   const { reachable } = useConnectivity();
   const offline = reachable === false;
@@ -364,13 +414,20 @@ function FormsContent({ source }: { source: FormsSource }) {
     ) : (
       (whenNone ?? null)
     );
+  // From a cart, Forms is step 3 of 5 whichever forms or waivers it holds.
+  const steps = source.basketId ? <RegistrationSteps step="Forms" /> : null;
   if (groups.length === 0) {
-    return requiredWaivers(
-      <StateView
-        variant="empty"
-        title="No forms required"
-        description="Nothing needs to be signed for this registration."
-      />,
+    return (
+      <View>
+        {steps}
+        {requiredWaivers(
+          <StateView
+            variant="empty"
+            title="No forms required"
+            description="Nothing needs to be signed for this registration."
+          />,
+        )}
+      </View>
     );
   }
   const signed = status.total - status.outstanding;
@@ -380,7 +437,9 @@ function FormsContent({ source }: { source: FormsSource }) {
 
   return (
     <View>
-      <Section title="Required forms">
+      {steps}
+      {/* The screen's title is "Required forms": this section says how far signing has got. */}
+      <Section title="Signing progress">
         <StatusBadge
           tone={status.outstanding === 0 && !status.loading ? 'success' : 'pending'}
           label={
@@ -392,9 +451,9 @@ function FormsContent({ source }: { source: FormsSource }) {
           }
           testID="forms-summary"
         />
-        <Body muted>
+        <Text variant="caption" tone="muted">
           You sign as yourself. A guardian signs for a child; staff never sign for you.
-        </Body>
+        </Text>
       </Section>
       {groups.map(([personId, list]) => {
         const name = names(personId);
@@ -423,13 +482,13 @@ function FormsContent({ source }: { source: FormsSource }) {
         );
       })}
       {requiredWaivers()}
-      <ButtonRow>
+      <View style={styles.actions}>
         <Button
-          label={source.basketId ? 'Back to your basket' : 'Back to the waitlist offer'}
+          label={source.basketId ? 'Back to your cart' : 'Back to the waitlist offer'}
           variant={status.outstanding === 0 ? 'primary' : 'secondary'}
           onPress={back}
         />
-      </ButtonRow>
+      </View>
     </View>
   );
 }
@@ -469,4 +528,5 @@ const useStyles = makeStyles(({ colors }) => ({
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: colors.border,
   },
+  actions: { gap: spacing.sm, paddingHorizontal: layout.gutter, paddingVertical: spacing.lg },
 }));

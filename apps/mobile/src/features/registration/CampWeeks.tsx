@@ -34,7 +34,9 @@ import { fonts, makeStyles, spacing, type, useTheme } from '../../ui/theme';
 import { formatMoney } from './format';
 import { promotionText } from './promotions';
 import { offeringDates, registrationWindowStatus } from './status';
-import { Body, ChoiceRow, Section } from './ui';
+import { ChoiceCard } from '../../ui/ChoiceList';
+import { Section } from '../../ui/Section';
+import { Text as UiText } from '../../ui/Text';
 
 type Offering = Schema<'Offering'>;
 type PublicOffering = Schema<'PublicOffering'>;
@@ -129,7 +131,7 @@ export function CampWeekPicker({
   const { weeks, availabilityOf, list, availability } = camp;
   return (
     <Section title="Weeks" testID="camp-weeks">
-      <View accessibilityRole="list">
+      <View accessibilityRole="list" style={{ gap: spacing.sm }}>
         {weeks.map((week) => {
           const places = placesStatus(availabilityOf(week.id));
           const choosable = weekChoosable(week);
@@ -150,13 +152,14 @@ export function CampWeekPicker({
             .filter(Boolean)
             .join(' · ');
           return (
-            <ChoiceRow
+            <ChoiceCard
               key={week.id}
-              label={week.name}
-              detail={detail}
+              option={{ value: week.id, label: week.name, description: detail }}
+              mode="multiple"
               checked={checked && choosable}
               disabled={!choosable}
-              onToggle={() => onToggle(week.id)}
+              onPress={() => onToggle(week.id)}
+              accessibilityLabel={`${week.name}. ${detail}`}
               testID={`camp-week-${week.id}`}
             />
           );
@@ -164,7 +167,9 @@ export function CampWeekPicker({
       </View>
       {list.data === undefined && list.error ? (
         <>
-          <Body muted>The other weeks of this camp could not be loaded.</Body>
+          <UiText variant="caption" tone="muted">
+            The other weeks of this camp could not be loaded.
+          </UiText>
           <QueryErrorView error={list.error} onRetry={() => void list.refetch()} />
         </>
       ) : list.data === undefined ? (
@@ -172,18 +177,22 @@ export function CampWeekPicker({
       ) : null}
       {availability.data === undefined && availability.error ? (
         <>
-          <Body muted>Places left could not be loaded. Places are checked at checkout.</Body>
+          <UiText variant="caption" tone="muted">
+            Spots left could not be loaded. Spots are checked at checkout.
+          </UiText>
           <QueryErrorView error={availability.error} onRetry={() => void availability.refetch()} />
         </>
       ) : null}
       {weeks.some(
         (w) => chosen.includes(w.id) && placesStatus(availabilityOf(w.id))?.label === 'Full',
       ) ? (
-        <Body>A full week can still be added: your basket offers its waitlist.</Body>
+        <UiText variant="body">
+          A full week can still be added: your cart offers its waitlist.
+        </UiText>
       ) : null}
-      <Body muted>
-        Places left change as other families register. A place is held for you only at checkout.
-      </Body>
+      <UiText variant="caption" tone="muted">
+        Spots left change as other families register. Your spots are saved only at checkout.
+      </UiText>
     </Section>
   );
 }
@@ -274,7 +283,7 @@ export function CampPriceBar({
   } else if (unpriced || currency === null) {
     content = (
       <Text style={styles.note}>
-        A total cannot be shown here for these weeks. Your quote gives the price.
+        A total cannot be shown here for these weeks. The review gives the price.
       </Text>
     );
   } else if (offline) {
@@ -290,7 +299,7 @@ export function CampPriceBar({
           ...applied.map(
             (d) => `${d.name} applied, ${formatMoney(d.amountMinor, preview.data.currency)} off`,
           ),
-          'Your quote gives the binding price',
+          'The review gives the final price',
         ].join('. ')}
         testID="camp-total"
       >
@@ -300,15 +309,15 @@ export function CampPriceBar({
           </Text>
         ))}
         <Text style={styles.total}>{total}</Text>
-        <Text style={styles.note}>
-          Estimate before credits. Your quote gives the binding price.
-        </Text>
+        <Text style={styles.note}>Estimate before credits. The review gives the final price.</Text>
       </View>
     );
   } else if (preview.error) {
     content = (
       <View style={styles.light}>
-        <Body>The total could not be worked out. Your quote gives the price.</Body>
+        <UiText variant="body">
+          The total could not be worked out. The review gives the price.
+        </UiText>
         <QueryErrorView error={preview.error} onRetry={() => void preview.refetch()} />
       </View>
     );

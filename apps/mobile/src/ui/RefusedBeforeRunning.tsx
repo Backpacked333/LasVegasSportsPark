@@ -1,8 +1,8 @@
 /**
  * RefusedBeforeRunning: a command the service refused before running it (`refusedBeforeRunning`:
  * INTEGRATION_UNAVAILABLE with `details.reason` `recovery_mode` or `disabled`, from a kernel guard
- * that answers before the idempotency key is claimed). Shown by every shared failure view (account
- * `CommandError`, teams and money `CommandFailure`, registration `CommandError`) and by the payment
+ * that answers before the idempotency key is claimed). Shown by the shared failure view
+ * (`ui/CommandError`) and by the payment
  * screens (SCR-C-14, SCR-C-15, SCR-C-25, SCR-C-34) (§4.9, §4.10 permitted next action, SPK-UX-008,
  * SPK-AT-028, R4-CLIENTS-A11Y-COPY-01).
  *
@@ -19,6 +19,7 @@
  *   was changed"; "Check again" asks again with the same request. The screen keeps its own
  *   "Payment outcome being confirmed. Do not pay again." state and paying blocked beside it.
  *
+ * The error code and reference are in the "Details for support" fold (`SupportDetails`, PA-11).
  * Offline the button is disabled and says it needs a connection. It is announced to screen readers
  * when it appears (`ui/announce`: a live region on Android, an announcement on iOS), with its next
  * action (SPK-UX-009, NA-A01).
@@ -30,6 +31,7 @@ import { useConnectivity } from '../providers/AppProviders';
 import { LiveRegion, sentences } from './announce';
 import { Button } from './Button';
 import { StatusBadge } from './StatusBadge';
+import { SupportDetails } from './SupportDetails';
 import { makeStyles, spacing, type } from './theme';
 
 export const REFUSED_BEFORE_RUNNING_LABEL = 'Not done';
@@ -93,9 +95,6 @@ export function RefusedBeforeRunning({
       <StatusBadge tone={priorUnknown ? 'warning' : 'danger'} label={label} />
       <Text style={styles.body}>{error.message}</Text>
       <Text style={styles.body}>{explanation}</Text>
-      <Text style={styles.caption} selectable>
-        {`Error code: ${error.code}${error.correlationId ? `. Reference: ${error.correlationId}` : ''}`}
-      </Text>
       {retry ? (
         <>
           <Button
@@ -110,6 +109,7 @@ export function RefusedBeforeRunning({
       ) : (
         <Text style={styles.body}>{nextAction}</Text>
       )}
+      <SupportDetails errorCode={error.code} reference={error.correlationId} />
     </LiveRegion>
   );
 }

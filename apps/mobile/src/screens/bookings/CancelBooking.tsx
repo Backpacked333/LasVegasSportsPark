@@ -31,14 +31,13 @@ import { useState, type ReactNode } from 'react';
 import { View } from 'react-native';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
-import { CommandFailure } from '../../features/money/CommandFailure';
+import { CommandError } from '../../ui/CommandError';
 import {
   consequenceSummary,
   sameConsequence,
   type CancellationPreview,
   type FinancialConsequence,
 } from '../../features/money/status';
-import { Body, ButtonRow, Caption, ChoiceRow, Section, TextField } from '../../features/money/ui';
 import {
   bookingStatus,
   cancelBasis,
@@ -53,6 +52,11 @@ import { Button } from '../../ui/Button';
 import { QueryErrorView } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
+import { Section } from '../../ui/Section';
+import { Text } from '../../ui/Text';
+import { spacing } from '../../ui/theme';
+import { ChoiceCard } from '../../ui/ChoiceList';
+import { TextField } from '../../ui/Field';
 
 const CONSEQUENCE_CODES = new Set(['CONSEQUENCE_CHANGED', 'CONSEQUENCE_ACCEPTANCE_REQUIRED']);
 
@@ -75,12 +79,12 @@ function Canceled({
       {/* The cancellation's outcome is announced (SPK-UX-009). */}
       <LiveRegion announcement={sentences(status.label, said)}>
         <StatusBadge {...status} testID="cancel-success" />
-        <Body>{said}</Body>
+        <Text variant="body">{said}</Text>
         {summary ? (
-          <Caption>
+          <Text variant="caption" tone="muted">
             Refunds and credits are carried out by the facility. This app cannot show their progress
             yet; ask the front desk if you have a question.
-          </Caption>
+          </Text>
         ) : null}
       </LiveRegion>
     </Section>
@@ -130,14 +134,14 @@ export function CancelBooking({ booking, onReload }: { booking: Booking; onReloa
   if (!open) {
     return (
       <Section title="Cancel" testID="booking-cancel">
-        <ButtonRow>
+        <View style={buttonRow}>
           <Button
             label="Cancel this booking"
             variant="secondary"
             onPress={() => setOpen(true)}
             accessibilityHint="Shows what canceling releases and any money consequence before anything is sent"
           />
-        </ButtonRow>
+        </View>
       </Section>
     );
   }
@@ -217,12 +221,16 @@ export function CancelBooking({ booking, onReload }: { booking: Booking; onReloa
   let ready = false;
   if (basis === 'request') {
     ready = true;
-    consequence = <Body>Your request is withdrawn. Nothing was reserved or charged.</Body>;
+    consequence = (
+      <Text variant="body">Your request is withdrawn. Nothing was reserved or charged.</Text>
+    );
   } else if (basis === 'hold') {
     if (booking.basketId === null) {
       ready = true;
       consequence = (
-        <Body>The time held for you is released. Nothing has been charged for this booking.</Body>
+        <Text variant="body">
+          The time held for you is released. Nothing has been charged for this booking.
+        </Text>
       );
     } else if (basket.error) {
       consequence = <QueryErrorView error={basket.error} onRetry={() => void basket.refetch()} />;
@@ -234,35 +242,35 @@ export function CancelBooking({ booking, onReload }: { booking: Booking; onReloa
       if (payment === 'paying') {
         const paying = 'A payment for this booking may be on its way';
         const payingBody =
-          'Canceling is not offered while the basket is being paid. Open the basket to see the payment outcome first, and do not pay again.';
+          'Canceling is not offered while your cart is being paid. Open your cart to see the payment outcome first, and do not pay again.';
         consequence = (
           <LiveRegion
             testID="cancel-payment-in-progress"
-            announcement={sentences(paying, payingBody, 'Open the basket')}
+            announcement={sentences(paying, payingBody, 'Open your cart')}
           >
             <StatusBadge tone="warning" label={paying} />
-            <Body>{payingBody}</Body>
-            <ButtonRow>
+            <Text variant="body">{payingBody}</Text>
+            <View style={buttonRow}>
               <Button
-                label="Open the basket"
+                label="Open your cart"
                 variant="secondary"
                 onPress={() => router.push(registrationRoutes.basket(basketId))}
               />
-            </ButtonRow>
+            </View>
           </LiveRegion>
         );
       } else if (payment === 'paid') {
         const received = 'Payment received: this booking is being updated';
         const receivedBody =
-          "The basket's checkout completed, so there is no hold to release. Once this booking shows it is paid, canceling it shows the refund or credit it would give.";
+          "Your cart's checkout completed, so there is no saved time to release. Once this booking shows it is paid, canceling it shows the refund or credit it would give.";
         consequence = (
           <LiveRegion
             testID="cancel-payment-received"
             announcement={sentences(received, receivedBody, 'Check again')}
           >
             <StatusBadge tone="info" label={received} />
-            <Body>{receivedBody}</Body>
-            <ButtonRow>
+            <Text variant="body">{receivedBody}</Text>
+            <View style={buttonRow}>
               <Button
                 label="Check again"
                 variant="secondary"
@@ -272,14 +280,16 @@ export function CancelBooking({ booking, onReload }: { booking: Booking; onReloa
                 }}
                 accessibilityHint="Reads this booking again"
               />
-            </ButtonRow>
+            </View>
           </LiveRegion>
         );
       } else if (payment === 'ended') {
         consequence = (
           <View testID="cancel-hold-ended">
             <StatusBadge tone="neutral" label="The time held for this booking was released" />
-            <Body>There is nothing left to cancel. This booking updates shortly.</Body>
+            <Text variant="body">
+              There is nothing left to cancel. This booking updates shortly.
+            </Text>
           </View>
         );
       } else {
@@ -287,11 +297,15 @@ export function CancelBooking({ booking, onReload }: { booking: Booking; onReloa
         ready = !basket.isFetching;
         consequence = (
           <View testID="cancel-hold-release">
-            <Body>
-              The time held for you is released and your basket is emptied. Nothing has been charged
+            <Text variant="body">
+              The time saved for you is released and your cart is emptied. Nothing has been charged
               for this booking.
-            </Body>
-            {basket.isFetching ? <Caption>Checking that no payment has started…</Caption> : null}
+            </Text>
+            {basket.isFetching ? (
+              <Text variant="caption" tone="muted">
+                Checking that no payment has started…
+              </Text>
+            ) : null}
           </View>
         );
       }
@@ -333,13 +347,18 @@ export function CancelBooking({ booking, onReload }: { booking: Booking; onReloa
             />
           ) : null}
           <StatusBadge tone={summary.tone} label={summary.headline} testID="consequence" />
-          <Body>{summary.explanation}</Body>
+          <Text variant="body">{summary.explanation}</Text>
           {p.requiredApproval ? (
-            <Caption>Staff approval is required before the cancellation takes effect.</Caption>
+            <Text variant="caption" tone="muted">
+              Staff approval is required before the cancellation takes effect.
+            </Text>
           ) : null}
-          <ChoiceRow
-            mode="checkbox"
-            label={`I understand: ${summary.headline}`}
+          <ChoiceCard
+            option={{
+              value: `I understand: ${summary.headline}`,
+              label: `I understand: ${summary.headline}`,
+            }}
+            mode="multiple"
             checked={acknowledged !== null}
             onPress={() => {
               setChanged(false);
@@ -364,9 +383,16 @@ export function CancelBooking({ booking, onReload }: { booking: Booking; onReloa
         error={reasonError}
         multiline
         testID="cancel-reason"
+        errorGlyph="▲"
+        errorAnnouncement="message"
+        autoCorrect
       />
-      {offline ? <Caption>Canceling needs a connection.</Caption> : null}
-      <ButtonRow>
+      {offline ? (
+        <Text variant="caption" tone="muted">
+          Canceling needs a connection.
+        </Text>
+      ) : null}
+      <View style={buttonRow}>
         <Button
           label="Cancel booking"
           onPress={() => void confirm()}
@@ -384,9 +410,10 @@ export function CancelBooking({ booking, onReload }: { booking: Booking; onReloa
             setChanged(false);
           }}
         />
-      </ButtonRow>
+      </View>
       {failure ? (
-        <CommandFailure
+        <CommandError
+          wording="money"
           error={failure}
           what={failureRead ? 'what canceling would change' : 'the cancellation'}
           read={failureRead}
@@ -402,3 +429,5 @@ export function CancelBooking({ booking, onReload }: { booking: Booking; onReloa
     </Section>
   );
 }
+
+const buttonRow = { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm } as const;

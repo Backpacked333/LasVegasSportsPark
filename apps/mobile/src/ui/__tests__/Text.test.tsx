@@ -6,7 +6,7 @@
 import { render, screen } from '@testing-library/react-native';
 import { drawnStyle, renderUi, THEME_NAMES } from '../../testing/ui-actions';
 import { Text, TEXT_TONES, TEXT_VARIANTS, type TextTone, type TextVariant } from '../Text';
-import { THEMES, type } from '../theme';
+import { layout, THEMES, type } from '../theme';
 
 const VARIANTS = Object.keys(TEXT_VARIANTS) as TextVariant[];
 const TONES = Object.keys(TEXT_TONES) as TextTone[];
@@ -28,6 +28,17 @@ describe('Text (ADR-008)', () => {
       </Text>,
     );
     expect(screen.getByRole('header', { name: 'Your week' })).toBeOnTheScreen();
+  });
+
+  it('inset keeps the line at the page margin; without it there is no side padding', () => {
+    render(
+      <>
+        <Text inset>On the page</Text>
+        <Text>In a card</Text>
+      </>,
+    );
+    expect(drawnStyle(screen.getByText('On the page')).paddingHorizontal).toBe(layout.gutter);
+    expect(drawnStyle(screen.getByText('In a card')).paddingHorizontal).toBeUndefined();
   });
 
   it('the variant alone never makes a header', () => {

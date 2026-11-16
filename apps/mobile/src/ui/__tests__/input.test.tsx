@@ -1,10 +1,10 @@
 /**
  * Text fields show their focus and follow the theme (`useInputChrome`; SPK-UX-009 visible focus,
- * SPK-UX-010 one visual system): checked on the account form's field, which every form shares.
+ * SPK-UX-010 one visual system): checked on the shared `TextField`, which every form uses.
  */
 import { fireEvent, render, screen } from '@testing-library/react-native';
 import { StyleSheet } from 'react-native';
-import { TextField } from '../../screens/account/components/forms';
+import { TextField } from '../Field';
 import { ThemeProvider } from '../ThemeProvider';
 import { classicTheme, legendsTheme } from '../theme';
 import { MemoryThemeStore } from '../theme-preference';

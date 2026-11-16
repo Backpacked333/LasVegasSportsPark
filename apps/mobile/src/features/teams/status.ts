@@ -283,7 +283,7 @@ export function severityStatus(severity: Schema<'EligibilitySeverity'>): StatusB
 export const OBLIGATION_MODE_LABELS: Record<Schema<'ObligationMode'>, string> = {
   individual: 'Individual player billing',
   single_team_payer: 'One responsible team payer',
-  team_with_contributions: 'Team obligation with player contributions',
+  team_with_contributions: 'Team fee with a share for each player',
 };
 
 export function obligationStatus(status: Schema<'ObligationStatus'>): StatusBadgeProps {

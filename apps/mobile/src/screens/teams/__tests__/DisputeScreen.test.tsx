@@ -97,11 +97,11 @@ describe('SCR-C-29 DisputeScreen', () => {
       'https://video.example.test/clip-7',
     );
     fireEvent.press(screen.getByRole('button', { name: 'Submit the dispute' }));
-    expect(
-      screen.getByLabelText(
-        'Evidence 1: kind. Give the kind and the reference, or remove this evidence.',
-      ),
-    ).toBeOnTheScreen();
+    // The error is read with the field (its hint) and shown under it.
+    expect(screen.getByLabelText('Evidence 1: kind')).toHaveProp(
+      'accessibilityHint',
+      'For example video, photo or witness statement. Error: Give the kind and the reference, or remove this evidence.',
+    );
     expect(app.requestsTo('POST', '/fixtures/{id}/disputes')).toHaveLength(0);
     expect(screen.getByLabelText(/^Evidence 1: reference/)).toHaveProp(
       'value',
@@ -125,7 +125,11 @@ describe('SCR-C-29 DisputeScreen', () => {
   it('requires a reason before sending', async () => {
     const app = renderDispute();
     fireEvent.press(await screen.findByRole('button', { name: 'Submit the dispute' }));
-    expect(screen.getByLabelText('Reason. Give the reason for the dispute.')).toBeOnTheScreen();
+    expect(screen.getByLabelText('Reason')).toHaveProp(
+      'accessibilityHint',
+      'What happened and what you ask the league to review. Error: Give the reason for the dispute.',
+    );
+    expect(screen.getByText('✕ Give the reason for the dispute.')).toBeOnTheScreen();
     expect(app.requestsTo('POST', '/fixtures/{id}/disputes')).toHaveLength(0);
   });
 
@@ -156,6 +160,7 @@ describe('SCR-C-29 DisputeScreen', () => {
         `The dispute window closed ${formatInstant('2026-10-25T10:00:00.000Z')}. Your draft is kept.`,
       ),
     ).toBeOnTheScreen();
+    await openSupportDetails(within(closed));
     expect(within(closed).getByText('Error code: VALIDATION_FAILED')).toBeOnTheScreen();
     expect(screen.getByLabelText('Reason').props.value).toBe('Late goal.');
   });
@@ -203,7 +208,7 @@ describe('SCR-C-29 DisputeScreen', () => {
     expect(screen.getByText('Decision: The goal was before the whistle.')).toBeOnTheScreen();
     expect(
       screen.getByLabelText(
-        "How appeals of a dispute decision work. This isn't available in the app yet.",
+        'How appeals of a dispute decision work. Ask the front desk how to make an appeal.',
       ),
     ).toBeOnTheScreen();
     await openSupportDetails(screen);
@@ -248,9 +253,10 @@ describe('SCR-C-29 DisputeScreen', () => {
       fireEvent.press(within(item).getByRole('button', { name: 'Withdraw this dispute' }));
       fireEvent.press(within(item).getByRole('button', { name: 'Withdraw the dispute' }));
       // A reason is required and nothing is sent without one.
-      expect(
-        within(item).getByLabelText('Reason for withdrawing. Give the reason for withdrawing.'),
-      ).toBeOnTheScreen();
+      expect(within(item).getByLabelText('Reason for withdrawing')).toHaveProp(
+        'accessibilityHint',
+        'Error: Give the reason for withdrawing.',
+      );
       expect(app.requestsTo('POST', '/disputes/{id}/withdraw')).toHaveLength(0);
       fireEvent.changeText(
         within(item).getByLabelText(/^Reason for withdrawing/),
@@ -285,6 +291,9 @@ describe('SCR-C-29 DisputeScreen', () => {
       fireEvent.press(await screen.findByRole('button', { name: 'Withdraw this dispute' }));
       fireEvent.changeText(screen.getByLabelText('Reason for withdrawing'), 'Settled.');
       fireEvent.press(screen.getByRole('button', { name: 'Withdraw the dispute' }));
+      // The answer arrives after the press: wait for it before opening its support fold.
+      await screen.findByRole('button', { name: 'Check again' });
+      await openSupportDetails(screen);
       expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
       expect(screen.queryByText(/You withdrew this dispute/)).toBeNull();
       // The reason is kept for the retry.
@@ -327,6 +336,7 @@ describe('SCR-C-29 DisputeScreen', () => {
       fireEvent.changeText(screen.getByLabelText('Reason for withdrawing'), 'Settled.');
       fireEvent.press(screen.getByRole('button', { name: 'Withdraw the dispute' }));
       expect(await screen.findByLabelText('This changed since you opened it')).toBeOnTheScreen();
+      await openSupportDetails(screen);
       expect(screen.getByText(/Error code: INVALID_TRANSITION/)).toBeOnTheScreen();
       const reads = app.requestsTo('GET', '/fixtures/{id}/disputes').length;
       fireEvent.press(screen.getByRole('button', { name: 'Reload' }));

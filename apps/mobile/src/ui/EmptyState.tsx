@@ -6,8 +6,14 @@
  *
  * `source` is passed by the screen (from the artwork manifest); without one the state is words
  * only. For loading, failures and the other states, use `StateView`.
+ *
+ * `announce`: the state answers something the person did or waited for (a list that came back
+ * empty), so it is a live region: TalkBack reads it as it appears, and VoiceOver hears the title,
+ * the message and the action's label (`ui/announce`), the same words `StateView`'s empty state
+ * announces (SPK-UX-008, SPK-UX-009).
  */
 import { Text, View, type StyleProp, type ViewStyle } from 'react-native';
+import { LiveRegion, sentences } from './announce';
 import { Artwork, type ArtworkSource } from './Artwork';
 import { Button } from './Button';
 import { layout, makeStyles, spacing, type } from './theme';
@@ -17,14 +23,47 @@ export interface EmptyStateProps {
   title: string;
   message: string;
   action?: { label: string; onPress: () => void; accessibilityHint?: string };
+  /** A live region announced when it appears (an answer, not a placeholder). */
+  announce?: boolean;
   style?: StyleProp<ViewStyle>;
   testID?: string;
 }
 
-export function EmptyState({ source, title, message, action, style, testID }: EmptyStateProps) {
+export function EmptyState({
+  source,
+  title,
+  message,
+  action,
+  announce = false,
+  style,
+  testID,
+}: EmptyStateProps) {
+  const body = <EmptyBody source={source} title={title} message={message} action={action} />;
+  const styles = useStyles();
+  return announce ? (
+    <LiveRegion
+      style={[styles.root, style]}
+      announcement={sentences(title, message, action?.label)}
+      testID={testID}
+    >
+      {body}
+    </LiveRegion>
+  ) : (
+    <View style={[styles.root, style]} testID={testID}>
+      {body}
+    </View>
+  );
+}
+
+function EmptyBody({
+  source,
+  title,
+  message,
+  action,
+}: Pick<EmptyStateProps, 'source' | 'title' | 'message' | 'action'>) {
   const styles = useStyles();
   return (
-    <View style={[styles.root, style]} testID={testID}>
+    <>
       {source ? (
         <Artwork source={source} aspectRatio={1} contentFit="contain" style={styles.art} />
       ) : null}
@@ -39,7 +78,7 @@ export function EmptyState({ source, title, message, action, style, testID }: Em
           accessibilityHint={action.accessibilityHint}
         />
       ) : null}
-    </View>
+    </>
   );
 }
 

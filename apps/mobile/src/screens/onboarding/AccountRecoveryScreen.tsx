@@ -19,6 +19,7 @@
  */
 import { useRouter } from 'expo-router';
 import { StyleSheet, View } from 'react-native';
+import { pendingMessage } from '../../copy/pending';
 import { useApp } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { ListRow } from '../../ui/ListRow';
@@ -26,10 +27,10 @@ import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { spacing } from '../../ui/theme';
+import { layout, spacing } from '../../ui/theme';
 import { personDisplayName, useMe } from '../account/components/account-data';
-import { Paragraph, SectionHeader } from '../account/components/forms';
 import { PersonAccessLine } from '../account/components/PersonAccess';
+import { Text } from '../../ui/Text';
 
 const PRINCIPLE =
   'Recovering an account restores only the access that was verified before. It never adds family access.';
@@ -38,7 +39,12 @@ export function AccountRecoveryScreen() {
   const { session } = useApp();
   return (
     <Screen>
-      <SectionHeader title="Recover your account" detail={PRINCIPLE} />
+      <View style={styles.header}>
+        <Text variant="title3" heading>
+          Recover your account
+        </Text>
+        <Text>{PRINCIPLE}</Text>
+      </View>
       {session.status === 'loading' ? (
         <StateView variant="loading" label="your account" />
       ) : session.status === 'signed_out' ? (
@@ -59,11 +65,12 @@ function RecoverSignedOut() {
         subject="Recovering your account from the app"
         decisions={['DEC-018']}
         owner="Technical lead/account owners"
+        message={pendingMessage('DEC-018')}
       />
-      <Paragraph>
-        Until then, facility support staff can link your existing account to a new sign-in. Your
-        access stays exactly as it was; nothing new is added.
-      </Paragraph>
+      <Text inset>
+        The front desk can link your existing account to a new sign-in. Your access stays exactly as
+        it was; nothing new is added.
+      </Text>
       <View style={styles.actions}>
         <Button label="Sign in" onPress={() => router.push('/sign-in')} />
       </View>
@@ -84,10 +91,14 @@ function RestoredAccess() {
           <View style={styles.status}>
             <StatusBadge tone="success" label="Signed in" />
           </View>
-          <SectionHeader
-            title="Access on this account"
-            detail="Only access recorded before is listed. Account recovery never adds permissions."
-          />
+          <View style={styles.header}>
+            <Text variant="title3" heading>
+              Access on this account
+            </Text>
+            <Text>
+              Only access recorded before is listed. Account recovery never adds permissions.
+            </Text>
+          </View>
           <ListRow
             title={data.person ? personDisplayName(data.person) : 'Your participant record'}
             detail={data.person ? 'Your own record' : 'Not linked to this account yet'}
@@ -110,10 +121,10 @@ function RestoredAccess() {
               ))}
             </View>
           )}
-          <Paragraph muted>
+          <Text tone="muted" inset>
             If something you expect is missing, ask the front desk. Access is never restored from
-            household membership alone.
-          </Paragraph>
+            being in a family alone.
+          </Text>
         </View>
       )}
     </QueryBoundary>
@@ -121,6 +132,7 @@ function RestoredAccess() {
 }
 
 const styles = StyleSheet.create({
+  header: { paddingHorizontal: layout.gutter, paddingTop: spacing.xl, gap: spacing.xs },
   actions: { paddingHorizontal: spacing.lg, paddingTop: spacing.md },
   status: { paddingHorizontal: spacing.lg, paddingTop: spacing.md },
 });

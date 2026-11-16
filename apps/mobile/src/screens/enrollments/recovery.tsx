@@ -18,7 +18,7 @@ import { presentationForError, type ApiError, type Schema } from '@sportspark/ap
 import type { ApiPagesResult } from '../../api/useApiPages';
 import type { Enrollment } from '../../features/money/status';
 import { recoveryCheckoutsKnown } from '../../features/registration/in-progress';
-import { SectionQueryState } from '../../features/today/Section';
+import { SectionQueryState } from '../../features/today/read-state';
 import { QueryErrorView } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 

@@ -4,7 +4,7 @@
  * from the account's own authority (never from a parameter the app sends), newest first, in
  * cursor pages with "Load more":
  *
- * - `GET /v1/me/payments`: every payment attempt by state. `unknown` reads "Payment outcome being
+ * - `GET /v1/me/payments`: every payment by state. `unknown` reads "Payment outcome being
  *   confirmed. Do not pay again." and `processing` "Payment processing", never success or failure.
  * - `GET /v1/me/receipts`: money received, with what was applied and any overpayment kept visible.
  * - `GET /v1/me/orders`: orders with their lines, credits applied, payment and fulfillment state.
@@ -16,16 +16,21 @@
  *   interrupted payment or a registration the facility is completing is found again from the
  *   server, not from the device, and none is cut off.
  *
- * States (each list on its own): loading; empty (with what would appear); ready; error with code
+ * States (each list on its own): loading; empty (the payments illustration, with what would
+ * appear); ready; error with code
  * and "Try again"; permission restriction ("not available", nothing of another payer); stale or
  * offline (cached with its age; "Load more" needs a connection).
  *
- * Payment attempts, receipts and orders carry no facility, so times are in the device's zone with
+ * Visual system v2 (ADR-008) and customer words (PA-11): each list is a `Section` card of
+ * `ListRow`s; an empty list is the boundary's illustrated empty state.
+ *
+ * Payments, receipts and orders carry no facility, so times are in the device's zone with
  * the zone named (reported; stage 3 left "facility zone on money records" open).
  */
 import { presentationForError } from '@sportspark/api-client';
 import { useRouter } from 'expo-router';
 import { View } from 'react-native';
+import { illustrations } from '../../artwork/manifest';
 import { useApiPages } from '../../api/useApiPages';
 import { formatInstant, formatMoney } from '../../features/money/format';
 import { useOrderPayments } from '../../features/money/live-payments';
@@ -42,11 +47,14 @@ import {
 import { useNameOf } from '../../features/money/people';
 import { moneyRoutes } from '../../features/money/routes';
 import { paymentStatus } from '../../features/money/status';
-import { Caption, Section } from '../../features/money/ui';
+
 import { registrationRoutes } from '../../features/registration/routes';
 import { ListRow } from '../../ui/ListRow';
 import { LoadMore } from '../../ui/LoadMore';
 import { QueryBoundary, QueryErrorView } from '../../ui/QueryBoundary';
+import { Section } from '../../ui/Section';
+import { Text } from '../../ui/Text';
+import { useKnownFacilityZone } from '../../features/today/known-zone';
 
 const PAGE = 20;
 
@@ -69,6 +77,7 @@ export function MyPaymentsList() {
           title: 'No payments yet',
           description:
             'Payments you make, or make for the people you pay for, appear here with their state.',
+          source: illustrations['empty-payments'],
         }}
         unavailableOffline={['loading more payments']}
       >
@@ -95,6 +104,7 @@ export function MyPaymentsList() {
 
 export function MyReceiptsList() {
   const router = useRouter();
+  const zone = useKnownFacilityZone().zone;
   const receipts = useApiPages({ path: '/me/receipts', request: { query: { limit: PAGE } } });
   return (
     <Section title="Receipts" testID="my-receipts">
@@ -106,6 +116,7 @@ export function MyReceiptsList() {
           title: 'No receipts yet',
           description:
             'Each payment the facility receives from you, online or at the front desk, appears here.',
+          source: illustrations['empty-payments'],
         }}
         unavailableOffline={['loading more receipts']}
       >
@@ -117,7 +128,7 @@ export function MyReceiptsList() {
                 <ListRow
                   key={receipt.id}
                   title={`Received ${formatMoney(receipt.amountMinor, receipt.currency)}`}
-                  detail={`${RECEIPT_SOURCE_LABELS[receipt.sourceKind]}, ${formatInstant(receipt.receivedAt)}. ${receiptAmounts(receipt)}`}
+                  detail={`${RECEIPT_SOURCE_LABELS[receipt.sourceKind]}, ${formatInstant(receipt.receivedAt, zone)}. ${receiptAmounts(receipt)}`}
                   onPress={
                     paymentId ? () => router.push(moneyRoutes.payment(paymentId)) : undefined
                   }
@@ -152,6 +163,7 @@ export function MyOrdersList() {
         empty={{
           title: 'No orders yet',
           description: 'Registrations you pay for appear here as orders, with what each line cost.',
+          source: illustrations['empty-payments'],
         }}
         unavailableOffline={['loading more orders']}
       >
@@ -233,10 +245,10 @@ export function NeedsAttention() {
       <LoadMore pages={unknown} label="payments being confirmed" />
       <LoadMore pages={recovery} label="registrations being completed" />
       {unknownItems.length > 0 ? (
-        <Caption>
+        <Text variant="footnote" tone="muted">
           Do not pay again for a payment being confirmed: the facility confirms the outcome with the
           payment provider, and it is never charged twice.
-        </Caption>
+        </Text>
       ) : null}
       {failed?.error ? (
         <QueryErrorView error={failed.error} onRetry={() => void failed.refetch()} />

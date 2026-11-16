@@ -25,9 +25,8 @@ import { View } from 'react-native';
 import { usePermissions } from '../../api/permissions';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
-import { Body, ButtonRow, Caption, Section, TextField } from '../../features/money/ui';
 import type { Booking } from '../../features/package-g/booking-model';
-import { CommandError } from '../../features/registration/CommandError';
+import { CommandError } from '../../ui/CommandError';
 import { useMe, useParticipantNames } from '../../features/registration/participants';
 import { WAIVER_STATUS } from '../../features/waivers/waivers';
 import { useConnectivity } from '../../providers/AppProviders';
@@ -35,6 +34,9 @@ import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StatusBadge, type StatusTone } from '../../ui/StatusBadge';
 import { makeStyles, spacing } from '../../ui/theme';
+import { Section } from '../../ui/Section';
+import { Text } from '../../ui/Text';
+import { TextField } from '../../ui/Field';
 
 type Roster = Schema<'BookingRoster'>;
 type Member = Schema<'BookingRosterMember'>;
@@ -106,7 +108,7 @@ function MemberRow({
         accessible
         accessibilityLabel={`${name}, ${status.label}${judged ? `, ${waiver.label}` : ''}`}
       >
-        <Body>{name}</Body>
+        <Text variant="body">{name}</Text>
       </View>
       <View style={styles.badges}>
         <StatusBadge tone={status.tone} label={status.label} />
@@ -120,7 +122,12 @@ function MemberRow({
           busy={remove.isProcessing}
         />
       ) : null}
-      <CommandError error={failure} onRetry={() => void submit()} onReload={onChanged} />
+      <CommandError
+        wording="registration"
+        error={failure}
+        onRetry={() => void submit()}
+        onReload={onChanged}
+      />
     </View>
   );
 }
@@ -162,7 +169,7 @@ function AddPeople({
   if (addable.length === 0) return null;
   return (
     <>
-      <ButtonRow>
+      <View style={buttonRow}>
         {addable.map((personId) => (
           <Button
             key={personId}
@@ -172,8 +179,8 @@ function AddPeople({
             busy={add.isProcessing}
           />
         ))}
-      </ButtonRow>
-      <CommandError error={failure} onReload={onChanged} />
+      </View>
+      <CommandError wording="registration" error={failure} onReload={onChanged} />
     </>
   );
 }
@@ -211,26 +218,34 @@ function Invite({ bookingId, onChanged }: { bookingId: string; onChanged: () => 
         onChangeText={setEmail}
         error={attempted ? emailError : null}
         testID="roster-invite-email"
+        errorGlyph="▲"
+        errorAnnouncement="message"
+        autoCorrect
       />
-      <ButtonRow>
+      <View style={buttonRow}>
         <Button
           label="Create invitation"
           variant="secondary"
           onPress={() => void submit()}
           busy={invite.isProcessing}
         />
-      </ButtonRow>
+      </View>
       {issued ? (
         <View testID="roster-invitation-issued">
           <StatusBadge tone="success" label="Invitation created" />
-          <Body>{`Invitation code: ${issued.id}.${issued.token}`}</Body>
-          <Caption>
+          <Text variant="body">{`Invitation code: ${issued.id}.${issued.token}`}</Text>
+          <Text variant="caption" tone="muted">
             This code is shown only now. Nothing is sent for you: pass the code on, and they enter
             it in the app under Rentals and parties, Roster invitations, to join.
-          </Caption>
+          </Text>
         </View>
       ) : null}
-      <CommandError error={failure} onRetry={() => void submit()} onReload={onChanged} />
+      <CommandError
+        wording="registration"
+        error={failure}
+        onRetry={() => void submit()}
+        onReload={onChanged}
+      />
     </View>
   );
 }
@@ -252,14 +267,18 @@ function RosterBody({
   const showWaiver = roster.waiver.state === 'evaluated';
   return (
     <>
-      <Body>
+      <Text variant="body">
         {`${roster.counts.joined} coming, ${roster.counts.invited} invited${
           showWaiver ? `, ${roster.counts.waiverOutstanding} without an accepted waiver` : ''
         }.`}
-      </Body>
-      <Caption>{WAIVER_NOTE[roster.waiver.state]}</Caption>
+      </Text>
+      <Text variant="caption" tone="muted">
+        {WAIVER_NOTE[roster.waiver.state]}
+      </Text>
       {live.length === 0 ? (
-        <Caption>Nobody is on the roster yet.</Caption>
+        <Text variant="caption" tone="muted">
+          Nobody is on the roster yet.
+        </Text>
       ) : (
         <View accessibilityRole="list" accessibilityLabel="People on the roster">
           {live.map((member) => (
@@ -280,11 +299,15 @@ function RosterBody({
           <Invite bookingId={booking.id} onChanged={reload} />
         </>
       ) : null}
-      {offline ? <Caption>Changing the roster needs a connection.</Caption> : null}
-      <Caption>
+      {offline ? (
+        <Text variant="caption" tone="muted">
+          Changing the roster needs a connection.
+        </Text>
+      ) : null}
+      <Text variant="caption" tone="muted">
         Being on the roster is only a name on your list: it is not a registration and reserves
         nothing.
-      </Caption>
+      </Text>
     </>
   );
 }
@@ -325,3 +348,5 @@ const useStyles = makeStyles(({ colors }) => ({
   },
   badges: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
 }));
+
+const buttonRow = { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm } as const;

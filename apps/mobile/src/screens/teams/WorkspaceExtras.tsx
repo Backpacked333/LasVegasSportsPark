@@ -11,7 +11,8 @@
  *   reads are not answered, never a guess.
  * - `MiniStandings`: the official table (`GET /v1/seasons/{id}/standings`) around the team, with
  *   the playoff line (`playoffLine.cutPosition`, SPK-RESULT-003) written out as a row, and the
- *   team's own row named "your team" (not colour alone, SPK-UX-009).
+ *   team's own row named "your team" and highlighted (not colour alone, SPK-UX-009), every figure
+ *   in tabular digits (ADR-008).
  * - `RsvpProgress`: for the management view, how many of the roster said they are available for
  *   the next game, from the counts the workspace already gives (`availability`, SPK-CAP-003: an
  *   answer is neither attendance nor eligibility). A minimum-players warning is not shown: the
@@ -24,13 +25,16 @@
  */
 import type { Schema } from '@sportspark/api-client';
 import { useMemo, useRef } from 'react';
-import { Text, View } from 'react-native';
+import { View } from 'react-native';
 import { useApiQuery } from '../../api/useApiQuery';
 import { useApiRecords } from '../../features/registration/queries';
 import { ordinal, plural } from '../../features/teams/format';
 import type { Viewer, Workspace } from '../../features/teams/queries';
 import { isCurrentPlayer } from '../../features/teams/status';
-import { Body, CommandFailure, Detail, OfflineNotice } from '../../features/teams/ui';
+import { CommandError } from '../../ui/CommandError';
+import { FieldValue } from '../../ui/Field';
+import { OfflineNotice } from '../../ui/OfflineNotice';
+import { Text } from '../../ui/Text';
 import { useKeyedCommands } from '../../features/teams/useKeyedCommands';
 import { useConnectivity, useNow } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
@@ -40,6 +44,7 @@ import {
   makeStyles,
   radius,
   spacing,
+  tabular,
   type,
   useTheme,
   type ThemeColors,
@@ -291,7 +296,8 @@ export function MatchCheckIn({
     <View testID="match-check-in">
       {attendance.data === undefined ? (
         attendance.error ? (
-          <CommandFailure
+          <CommandError
+            wording="team"
             read
             error={attendance.error}
             onRetry={() => void attendance.refetch()}
@@ -299,11 +305,14 @@ export function MatchCheckIn({
             testID="check-in-error"
           />
         ) : (
-          <Body muted>Loading check-in…</Body>
+          <Text variant="caption" tone="muted">
+            Loading check-in…
+          </Text>
         )
       ) : (
         <>
-          <Detail
+          <FieldValue
+            layout="inline"
             label="Checked in"
             value={`${side?.present ?? 0} present, ${side?.absent ?? 0} absent, of ${plural(players.length, 'player')}`}
             testID="check-in-count"
@@ -347,7 +356,8 @@ export function MatchCheckIn({
                     ) : null}
                   </View>
                   {state?.status === 'failed' ? (
-                    <CommandFailure
+                    <CommandError
+                      wording="team"
                       error={state.error}
                       onRetry={() =>
                         send(p.personId, lastSent.current.get(p.personId) ?? 'present')
@@ -361,9 +371,9 @@ export function MatchCheckIn({
             })}
           </View>
           {offline ? <OfflineNotice what="Checking players in" /> : null}
-          <Body muted>
+          <Text variant="caption" tone="muted">
             Mark your own team only. The referee or league staff confirm the match sheet.
-          </Body>
+          </Text>
         </>
       )}
     </View>
@@ -389,11 +399,17 @@ const useStyles = makeStyles(({ colors }) => ({
     borderTopWidth: 1,
     borderTopColor: colors.divider,
   },
-  ownRow: { backgroundColor: colors.surface },
-  ownText: { ...fonts.bold },
-  cellPos: { ...type.body, width: 28, color: colors.text },
+  // The own row: a tonal fill and an accent bar (and "You" in words, never colour alone).
+  ownRow: {
+    backgroundColor: colors.tonal,
+    borderLeftWidth: 4,
+    borderLeftColor: colors.primary,
+    paddingLeft: spacing.xs,
+  },
+  ownText: { ...fonts.bold, color: colors.onTonal },
+  cellPos: { ...tabular(type.body), width: 28, color: colors.text },
   cellTeam: { ...type.body, flex: 1, color: colors.text },
-  cellNum: { ...type.body, width: 44, textAlign: 'right', color: colors.text },
+  cellNum: { ...tabular(type.body), width: 44, textAlign: 'right', color: colors.text },
   playoffLine: {
     borderTopWidth: 2,
     borderTopColor: colors.primary,

@@ -21,9 +21,18 @@ export interface AvatarPerson {
   id?: string;
 }
 
-/** Up to two initials: the first letters of the first and last words of the name. */
+/**
+ * Up to two initials: the first letters of the first and last words of the name. Brackets and
+ * punctuation are not letters: "Mary-Jane O'Neil" is "MO". A name in brackets is the person's
+ * own name beside a role word, so it wins: "You (Dev)" is "D", not "Y(".
+ */
 export function initialsFor(name: string): string {
-  const words = name.trim().split(/\s+/).filter(Boolean);
+  const inner = /\(([^)]*)\)/u.exec(name)?.[1];
+  const source = inner && /[\p{L}\p{N}]/u.test(inner) ? inner : name;
+  const words = source
+    .split(/\s+/u)
+    .map((word) => word.replace(/[^\p{L}\p{N}]/gu, ''))
+    .filter(Boolean);
   if (words.length === 0) return '?';
   const first = Array.from(words[0] ?? '')[0] ?? '';
   const last = words.length > 1 ? (Array.from(words[words.length - 1] ?? '')[0] ?? '') : '';
@@ -65,6 +74,15 @@ export function Avatar({ name, id, size = 'md', decorative = false, style, testI
       </Text>
     </View>
   );
+}
+
+/**
+ * How far each avatar in a stack slides over the one before it: a sixth of its width, so the next
+ * circle (with its ring) stops short of the initials of the one before (two bold initials reach
+ * about 78% of the way across the circle). It was a third, which cut the second letter.
+ */
+export function stackOverlap(side: number): number {
+  return Math.round(side / 6);
 }
 
 /** The words of a stack: every name, in order ("Ava Lee, Ben Ortiz and Cara Diaz"). */
@@ -110,7 +128,7 @@ export function AvatarStack({
           id={person.id}
           size={size}
           decorative
-          style={[styles.ring, index > 0 && { marginLeft: -side / 3 }]}
+          style={[styles.ring, index > 0 && { marginLeft: -stackOverlap(side) }]}
         />
       ))}
       {more > 0 ? (
@@ -119,7 +137,7 @@ export function AvatarStack({
             styles.avatar,
             styles.ring,
             styles.more,
-            { width: side, height: side, marginLeft: -side / 3 },
+            { width: side, height: side, marginLeft: -stackOverlap(side) },
           ]}
         >
           <Text style={[styles.moreText, { fontSize: side * 0.36 }]} maxFontSizeMultiplier={1}>

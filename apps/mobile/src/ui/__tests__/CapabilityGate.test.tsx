@@ -11,7 +11,7 @@ import {
   fakePermissions,
   fakeResponse,
 } from '@sportspark/api-client/testing';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
 import { Text } from 'react-native';
 import { useApiCommand } from '../../api/useApiCommand';
 import { createTestApp, mePermissions } from '../../testing/test-app';
@@ -60,6 +60,34 @@ describe('CapabilityGate (K-12, DEC-016)', () => {
     expect(screen.queryByText('Your memberships')).toBeNull();
   });
 
+  it('SPK-UX-008: while the switch is read it says "Checking …", in words that suit a plural name', async () => {
+    let answer: (response: ReturnType<typeof fakeResponse>) => void = () => undefined;
+    const app = createTestApp({
+      routes: {
+        'GET /me/permissions': () =>
+          new Promise<ReturnType<typeof fakeResponse>>((resolve) => {
+            answer = resolve;
+          }),
+      },
+    });
+    render(
+      <CapabilityGate capability="memberships">
+        <Content />
+      </CapabilityGate>,
+      { wrapper: app.wrapper },
+    );
+    expect(await screen.findByRole('progressbar', { name: 'Checking memberships' })).toBeBusy();
+    expect(screen.getByText('Checking memberships…')).toBeOnTheScreen();
+    expect(screen.queryByText('Your memberships')).toBeNull();
+    await waitFor(() =>
+      expect(app.fake.requests.some((r) => r.path.endsWith('/me/permissions'))).toBe(true),
+    );
+    await act(async () => {
+      answer(fakeResponse(200, fakePermissions({ principalKind: 'customer' })));
+    });
+    expect(await screen.findByTestId('state-turned-off')).toBeOnTheScreen();
+  });
+
   it('whenOff="notice" keeps what the customer already has under the notice', async () => {
     const app = createTestApp();
     render(
@@ -72,7 +100,7 @@ describe('CapabilityGate (K-12, DEC-016)', () => {
       </CapabilityGate>,
       { wrapper: app.wrapper },
     );
-    expect(await screen.findByLabelText('Point of sale turned off')).toBeOnTheScreen();
+    expect(await screen.findByLabelText('In-person purchases turned off')).toBeOnTheScreen();
     expect(
       screen.getByText('Receipts of earlier purchases stay available here.'),
     ).toBeOnTheScreen();

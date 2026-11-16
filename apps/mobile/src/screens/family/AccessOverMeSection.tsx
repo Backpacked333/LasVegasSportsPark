@@ -4,18 +4,24 @@
  * each permission separately, with its state ("Allowed", "Under review", "Starts <date>",
  * "Withdrawn", "Ended"), its dates and where it came from. Only current grants are listed here.
  * Ending someone else's access from the app is not offered: ending relationships and per-person
- * restrictions are DEC-089 and DEC-004 (Operator/privacy owner), shown as pending.
+ * restrictions are DEC-089 and DEC-004 (Operator/privacy owner), shown as pending with the plain
+ * message "Ask the front desk to change this for you." (codes in "Details for support"). Each
+ * adult is a person card with their avatar (PA-11, ADR-008).
  */
-import { Text, View } from 'react-native';
+import { View } from 'react-native';
 import { useApiPages } from '../../api/useApiPages';
+import { pendingMessageFor } from '../../copy/pending';
+import { Card } from '../../ui/Card';
 import { ListRow } from '../../ui/ListRow';
 import { LoadMore } from '../../ui/LoadMore';
 import { QueryBoundary } from '../../ui/QueryBoundary';
+import { Section } from '../../ui/Section';
 import { StateView } from '../../ui/StateView';
-import { makeStyles, radius, spacing, type } from '../../ui/theme';
+import { spacing } from '../../ui/theme';
 import { formatDateTime, permissionLabel } from '../account/components/account-data';
-import { SectionHeader } from '../account/components/forms';
+import { PersonHeading } from '../account/components/PersonHeading';
 import { grantKey, grantStatusLabel, isCurrentGrant, sourceText, type GrantView } from './grants';
+import { useKnownFacilityZone } from '../../features/today/known-zone';
 
 /** Current grants grouped by the adult who holds them, in the order the API listed them. */
 export function groupByActor(
@@ -38,11 +44,11 @@ export function AccessOverMeSection() {
     keyOf: grantKey,
   });
   return (
-    <View>
-      <SectionHeader
-        title="Who can act for you"
-        detail="Other adults who hold permissions over you, each permission listed separately."
-      />
+    <Section
+      title="Who can act for you"
+      subtitle="Other adults who hold permissions over you, each permission listed separately."
+      variant="plain"
+    >
       <QueryBoundary
         query={overMe}
         label="who can act for you"
@@ -53,7 +59,7 @@ export function AccessOverMeSection() {
         }}
       >
         {(items) => (
-          <View>
+          <View style={styles.cards}>
             {groupByActor(items).map((group) => (
               <ActorCard key={group.actorId} grants={group.grants} />
             ))}
@@ -66,44 +72,33 @@ export function AccessOverMeSection() {
         subject="Ending another adult's permissions over you or the people you manage"
         decisions={['DEC-089', 'DEC-004']}
         owner="Operator/privacy owner"
+        message={pendingMessageFor(['DEC-089', 'DEC-004'])}
       />
-    </View>
+    </Section>
   );
 }
 
+/** One adult's card: their avatar and name, then each permission they hold over you. */
 function ActorCard({ grants }: { grants: GrantView[] }) {
-  const styles = useStyles();
+  const zone = useKnownFacilityZone().zone;
   const name = grants[0]?.actorDisplayName || 'Name not available to you';
   return (
-    <View style={styles.card}>
-      <Text style={styles.title} accessibilityRole="header">
-        {name}
-      </Text>
+    <Card>
+      <PersonHeading name={name} personId={grants[0]?.actorPersonId} />
       <View accessibilityRole="list" accessibilityLabel={`What ${name} may do for you`}>
         {grants.map((grant) => (
           <ListRow
             key={grant.grantId}
             title={permissionLabel(grant.permission)}
-            detail={`Since ${formatDateTime(grant.effectiveFrom)}${
-              grant.effectiveTo ? `, until ${formatDateTime(grant.effectiveTo)}` : ''
+            detail={`Since ${formatDateTime(grant.effectiveFrom, zone)}${
+              grant.effectiveTo ? `, until ${formatDateTime(grant.effectiveTo, zone)}` : ''
             }, ${sourceText(grant.source)}`}
-            status={grantStatusLabel(grant)}
+            status={grantStatusLabel(grant, zone)}
           />
         ))}
       </View>
-    </View>
+    </Card>
   );
 }
 
-const useStyles = makeStyles(({ colors }) => ({
-  card: {
-    marginHorizontal: spacing.lg,
-    marginTop: spacing.md,
-    paddingVertical: spacing.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
-    backgroundColor: colors.background,
-  },
-  title: { ...type.heading, color: colors.text, paddingHorizontal: spacing.lg },
-}));
+const styles = { cards: { gap: spacing.md } } as const;

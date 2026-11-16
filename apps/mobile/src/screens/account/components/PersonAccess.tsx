@@ -4,11 +4,15 @@
  * review", "Starts <date>"), so one permission never reads as implying another and status is never
  * colour alone (SPK-UX-009). Whether a permission is in effect comes from `GET /v1/me` `authorities`
  * only; the grants from `GET /v1/me/access-grants`, when given, add their dates, source and a
- * disputed-access review. The client infers nothing from household membership.
+ * disputed-access review. The client infers nothing from family-group membership.
+ *
+ * `PersonAccessCard` is a person card (PA-11, ADR-008 visual system v2): a `Card` headed by the
+ * person's avatar and name (`PersonHeading`), the permissions, then the card's actions.
  */
 import type { ReactNode } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import { fonts, makeStyles, radius, spacing, type, useTheme } from '../../../ui/theme';
+import { Card } from '../../../ui/Card';
+import { fonts, makeStyles, spacing, type, useTheme } from '../../../ui/theme';
 import { permissionState, type GrantView } from '../../family/grants';
 import {
   GRANT_PERMISSIONS,
@@ -17,6 +21,8 @@ import {
   usePersonName,
   type Authority,
 } from './account-data';
+import { PersonHeading } from './PersonHeading';
+import { useKnownFacilityZone } from '../../../features/today/known-zone';
 
 export function PersonAccessCard({
   authority,
@@ -35,19 +41,19 @@ export function PersonAccessCard({
 }) {
   const { colors } = useTheme();
   const styles = useStyles();
+  const zone = useKnownFacilityZone().zone;
   const read = personNameText(usePersonName(givenName ? '' : authority.subjectPersonId));
   const name = givenName ?? read;
   return (
-    <View style={styles.card} testID={`person-access-${index}`}>
-      <Text style={styles.title} accessibilityRole="header">
-        {name}
-      </Text>
+    <Card style={styles.card} testID={`person-access-${index}`}>
+      <PersonHeading name={name} personId={authority.subjectPersonId} />
       <View accessibilityRole="list" accessibilityLabel={`What you may do for ${name}`}>
         {GRANT_PERMISSIONS.map((g) => {
           const state = permissionState(
             g.permission,
             authority.permissions.includes(g.permission),
             grants,
+            zone,
           );
           const detail = state.note ? `${g.detail}. ${state.note}` : g.detail;
           return (
@@ -75,7 +81,7 @@ export function PersonAccessCard({
         })}
       </View>
       {children}
-    </View>
+    </Card>
   );
 }
 
@@ -93,17 +99,7 @@ export function PersonAccessLine({ authority }: { authority: Authority }) {
 }
 
 const useStyles = makeStyles(({ colors }) => ({
-  card: {
-    marginHorizontal: spacing.lg,
-    marginTop: spacing.md,
-    padding: spacing.lg,
-    gap: spacing.sm,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
-    backgroundColor: colors.background,
-  },
-  title: { ...type.heading, color: colors.text },
+  card: { gap: spacing.sm },
   row: { flexDirection: 'row', gap: spacing.sm, alignItems: 'flex-start', minHeight: 32 },
   glyph: { ...type.body, ...fonts.bold, width: 20, textAlign: 'center' },
   text: { flex: 1 },

@@ -5,6 +5,7 @@
 import { fireEvent, screen } from '@testing-library/react-native';
 import { StyleSheet, Text } from 'react-native';
 import { renderSurface } from '../../testing/ui-surfaces';
+import { Card } from '../Card';
 import { ListRow, ListRowLayout, useRowLayout } from '../ListRow';
 import { MotionProvider } from '../motion';
 import { classicTheme, legendsTheme } from '../theme';
@@ -115,5 +116,23 @@ describe('ListRow v2 (ADR-008)', () => {
       screen.getByRole('button', { name: 'Support' }).props.style,
     ) as { transform?: unknown };
     expect(style.transform).toBeUndefined();
+  });
+});
+
+describe('flat rows in a card (ADR-008)', () => {
+  it('draws no divider above the first row of a group, and one above each row after it', async () => {
+    await renderSurface(
+      <Card>
+        <ListRow title="First" testID="first" />
+        <ListRow title="Second" testID="second" />
+      </Card>,
+    );
+    const layoutAt = (y: number) => ({
+      nativeEvent: { layout: { x: 0, y, width: 300, height: 56 } },
+    });
+    fireEvent(screen.getByTestId('first'), 'layout', layoutAt(0));
+    fireEvent(screen.getByTestId('second'), 'layout', layoutAt(57));
+    expect(StyleSheet.flatten(screen.getByTestId('first').props.style).borderTopWidth).toBe(0);
+    expect(StyleSheet.flatten(screen.getByTestId('second').props.style).borderTopWidth).toBe(1);
   });
 });

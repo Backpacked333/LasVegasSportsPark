@@ -3,21 +3,24 @@
  * fact the public view carries, times in the facility's zone, the read-only eligibility of each
  * person the account may register (registration options, ENR-05), the registration entry point
  * only while registration is open, and the SPK-UX-008 states (not available, error with code,
- * offline with registration disabled, signed out).
+ * offline with registration disabled, signed out). The activity page v2 (ADR-008, PA-11): key
+ * facts as tags, the description with "Read more", the facts in folds, and the bar's one action.
  */
 import { apiErrorBody, fakeResponse, type FakeRequest } from '@sportspark/api-client/testing';
-import { act, fireEvent, render, screen } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, within } from '@testing-library/react-native';
 import {
   IDS,
+  basket,
   familyRoutes,
   ineligible,
   offering,
   optionsHandler,
+  page,
   policyVersion,
   registrationOptions,
 } from '../../../features/registration/testing/fixtures';
 import { createRegistrationTestApp } from '../../../features/registration/testing/registration-test-app';
-import { OfferingDetailScreen } from '../OfferingDetailScreen';
+import { OfferingDetailScreen, detailActionFor, sessionPattern } from '../OfferingDetailScreen';
 import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), navigate: jest.fn() };
@@ -41,6 +44,11 @@ const SESSION = {
   revision: 1,
   createdAt: '2026-10-01T00:00:00.000Z',
 };
+
+/** Opens the folds of the activity page named, as a person taps their headings. */
+async function openFolds(...names: string[]) {
+  for (const name of names) fireEvent.press(await screen.findByRole('button', { name }));
+}
 
 function routes(overrides = {}) {
   return {
@@ -68,6 +76,13 @@ describe('SCR-C-08 OfferingDetailScreen', () => {
 
     expect(await screen.findByRole('header', { name: 'Autumn Youth Program' })).toBeOnTheScreen();
     expect(screen.getByLabelText('Registration open')).toBeOnTheScreen();
+    await openFolds(
+      'Schedule',
+      'Options and add-ons',
+      "What you'll need",
+      'Cancellation and eligibility',
+      'Location',
+    );
     expect(screen.getByLabelText('Format: 7v7')).toBeOnTheScreen();
     expect(screen.getByLabelText('Location: Field 2')).toBeOnTheScreen();
     expect(screen.getByLabelText('Dates: Nov 2, 2026 to Dec 14, 2026')).toBeOnTheScreen();
@@ -101,6 +116,7 @@ describe('SCR-C-08 OfferingDetailScreen', () => {
       }),
     });
     render(<OfferingDetailScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
+    await openFolds('Options and add-ons');
     expect(await screen.findByLabelText('Price per class: $24.00')).toBeOnTheScreen();
     expect(screen.getByText('$24.00 per class × 7 classes = $168.00')).toBeOnTheScreen();
     expect(
@@ -132,6 +148,7 @@ describe('SCR-C-08 OfferingDetailScreen', () => {
       }),
     });
     render(<OfferingDetailScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
+    await openFolds('Options and add-ons');
     expect(await screen.findByLabelText('Price per class: $24.00')).toBeOnTheScreen();
     expect(screen.getByText('No class of this activity is still to come.')).toBeOnTheScreen();
     expect(screen.queryByText(/classes =/)).not.toBeOnTheScreen();
@@ -158,6 +175,7 @@ describe('SCR-C-08 OfferingDetailScreen', () => {
       }),
     });
     render(<OfferingDetailScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
+    await openFolds('Options and add-ons');
     expect(await screen.findByLabelText('Base price: $300.00')).toBeOnTheScreen();
     expect(screen.getByLabelText('Member price (Annual membership): $250.00')).toBeOnTheScreen();
     expect(
@@ -171,6 +189,7 @@ describe('SCR-C-08 OfferingDetailScreen', () => {
   it('SPK-SCHED-008: session and registration times are in the facility time zone, with the facility named', async () => {
     const app = createRegistrationTestApp({ routes: routes() });
     render(<OfferingDetailScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
+    await openFolds('Location', 'Schedule');
     expect(await screen.findByLabelText('Facility: Test complex')).toBeOnTheScreen();
     // 23:00 UTC on Nov 2 is 3:00 PM in Los Angeles (PST).
     expect(await screen.findByLabelText('Week 1: Mon, Nov 2, 3:00 PM PST')).toBeOnTheScreen();
@@ -198,9 +217,7 @@ describe('SCR-C-08 OfferingDetailScreen', () => {
               },
               {
                 personId: IDS.childB,
-                intents: [
-                  { intent: 'youth', eligibility: ineligible('Ben is older than this age band.') },
-                ],
+                intents: [{ intent: 'youth', eligibility: ineligible() }],
               },
             ],
           }),
@@ -208,10 +225,11 @@ describe('SCR-C-08 OfferingDetailScreen', () => {
       }),
     });
     render(<OfferingDetailScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
-    expect(await screen.findByLabelText('Ada, Youth enrollment: Eligible')).toBeOnTheScreen();
+    await openFolds('Cancellation and eligibility');
+    expect(await screen.findByLabelText('Ada, Register a child: Eligible')).toBeOnTheScreen();
     expect(
       screen.getByLabelText(
-        'Ben, Youth enrollment: Not eligible. Ben is older than this age band.. Choose an activity for this age.',
+        'Ben, Register a child: Not eligible. Ages 9 to 12. Ben is 13.. Look for another activity that fits.',
       ),
     ).toBeOnTheScreen();
     expect(
@@ -229,6 +247,7 @@ describe('SCR-C-08 OfferingDetailScreen', () => {
       }),
     });
     render(<OfferingDetailScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
+    await openFolds('Cancellation and eligibility');
     await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: INTERNAL_ERROR/)).toBeOnTheScreen();
     expect(screen.getByRole('header', { name: 'Autumn Youth Program' })).toBeOnTheScreen();
@@ -260,9 +279,7 @@ describe('SCR-C-08 OfferingDetailScreen', () => {
     });
     render(<OfferingDetailScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
     expect(await screen.findByText(message)).toBeOnTheScreen();
-    expect(
-      screen.getByText('This activity is not open for online registration. Ask the front desk.'),
-    ).toBeOnTheScreen();
+    expect(screen.getByText('Not open for online registration')).toBeOnTheScreen();
     // No amount the customer cannot get, and nothing to press.
     expect(screen.queryByLabelText(/^Price per class/)).not.toBeOnTheScreen();
     expect(screen.queryByText(/\$24\.00/)).not.toBeOnTheScreen();
@@ -300,6 +317,7 @@ describe('SCR-C-08 OfferingDetailScreen', () => {
     expect(app.fake.requests.some((r) => r.route === '/offerings/{id}/registration-options')).toBe(
       false,
     );
+    await openFolds('Cancellation and eligibility');
     expect(
       screen.getByText('This activity has a cancellation policy. Sign in to read it.'),
     ).toBeOnTheScreen();
@@ -332,6 +350,173 @@ describe('SCR-C-08 OfferingDetailScreen', () => {
     act(() => app.sources.setReachable(false));
     expect(screen.getByRole('button', { name: 'Register' })).toBeDisabled();
     expect(screen.getByText('Registration needs a connection.')).toBeOnTheScreen();
-    expect(screen.getByText('Showing information from just now.')).toBeOnTheScreen();
+    // ADR-008: under the app's offline banner the section says its own age and needs on one quiet line.
+    expect(
+      screen.getByText('Showing information from just now. Needs a connection: Registration.'),
+    ).toBeOnTheScreen();
+  });
+
+  it('Activity page: the key facts are tags under the name, with the picture above', async () => {
+    const app = createRegistrationTestApp({ routes: routes() });
+    render(<OfferingDetailScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
+    const facts = await screen.findByTestId('offering-facts');
+    await screen.findByLabelText('Mon · 3:00 PM');
+    expect(
+      within(facts)
+        .getAllByRole('text')
+        .map((tag) => tag.props.accessibilityLabel as string | undefined)
+        // The tags' decorative icons are text too, without a name.
+        .filter((name) => name !== undefined),
+    ).toEqual([
+      'Ages 8 to 10',
+      'Nov 2 to Dec 14, 2026',
+      'Mon · 3:00 PM',
+      'Field 2',
+      '20 places',
+      'From $120.00',
+    ]);
+    // Facts move into folds: closed until the person opens one.
+    expect(screen.queryByLabelText('Format: 7v7')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Schedule' })).toBeCollapsed();
+    expect(
+      sessionPattern(
+        [
+          { scheduledStart: '2026-11-03T01:00:00.000Z', status: 'scheduled' },
+          { scheduledStart: '2026-11-06T01:00:00.000Z', status: 'scheduled' },
+          { scheduledStart: '2026-11-04T01:00:00.000Z', status: 'canceled' },
+        ],
+        'America/Los_Angeles',
+      ),
+    ).toBe('Mon & Thu · 5:00 PM');
+  });
+
+  it('Activity page: a long description is clamped, and "Read more" shows all of it', async () => {
+    const description = `${'Small-sided games, footwork and team play every week. '.repeat(5)}Bring water.`;
+    const app = createRegistrationTestApp({
+      routes: routes({ 'GET /offerings/{id}': { status: 200, body: offering({ description }) } }),
+    });
+    render(<OfferingDetailScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
+    const text = await screen.findByTestId('offering-description');
+    expect(text.props.numberOfLines).toBe(4);
+    const more = screen.getByRole('button', { name: 'Read more' });
+    expect(more).toBeCollapsed();
+    fireEvent.press(more);
+    expect(screen.getByTestId('offering-description').props.numberOfLines).toBeUndefined();
+    expect(screen.getByRole('button', { name: 'Show less' })).toBeExpanded();
+    await app.settle();
+  });
+
+  it('Activity page: a short description shows whole, with no "Read more"', async () => {
+    const app = createRegistrationTestApp({ routes: routes() });
+    render(<OfferingDetailScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
+    expect(await screen.findByText('Skills sessions for young players.')).toBeOnTheScreen();
+    expect(screen.queryByRole('button', { name: 'Read more' })).toBeNull();
+    await app.settle();
+  });
+
+  it('Activity page: the bar shows the price and Register for an open activity', async () => {
+    const app = createRegistrationTestApp({ routes: routes() });
+    render(<OfferingDetailScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
+    const bar = await screen.findByTestId('offering-action');
+    expect(within(bar).getByLabelText('From, $120.00')).toBeOnTheScreen();
+    expect(await within(bar).findByRole('button', { name: 'Register' })).toBeEnabled();
+    await app.settle();
+  });
+
+  it('Activity page SPK-SCHED-008: before registration opens, the bar says when, in the facility zone, and cannot be pressed', async () => {
+    const app = createRegistrationTestApp({
+      routes: routes({
+        'GET /offerings/{id}': {
+          status: 200,
+          body: offering({
+            publicationState: 'published',
+            // 07:30 UTC on Nov 4 is still Nov 3 in Los Angeles.
+            registrationOpensAt: '2026-11-04T07:30:00.000Z',
+          }),
+        },
+      }),
+    });
+    render(<OfferingDetailScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
+    expect(await screen.findByRole('button', { name: 'Opens Nov 3' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Register' })).toBeNull();
+    await app.settle();
+  });
+
+  it('Activity page: with this activity already in an open cart, the bar says so and checks out', async () => {
+    const app = createRegistrationTestApp({
+      routes: routes({ 'GET /me/baskets': page([basket()]) }),
+    });
+    render(<OfferingDetailScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
+    const bar = await screen.findByTestId('offering-action');
+    fireEvent.press(await within(bar).findByRole('button', { name: 'Check out' }));
+    expect(within(bar).getByLabelText('In your cart, $120.00')).toBeOnTheScreen();
+    expect(mockRouter.push).toHaveBeenCalledWith(`/registration/basket/${IDS.basket}`);
+    expect(app.fake.requests.find((r) => r.route === '/me/baskets')?.query).toEqual({
+      limit: '20',
+    });
+  });
+
+  it('Activity page SPK-REG-008: when the API offers everyone only the waitlist, the bar offers "Join waitlist"', async () => {
+    const full = {
+      ...ineligible('This activity is full.', 'offering_full'),
+      alternatives: [
+        { kind: 'join_waitlist' as const, message: 'Join the waitlist.', offeringId: null },
+      ],
+    };
+    const app = createRegistrationTestApp({
+      routes: routes({
+        'GET /offerings/{id}/registration-options': optionsHandler({
+          availableIntents: ['youth'],
+          participants: [IDS.parent, IDS.childA, IDS.childB].map((personId) => ({
+            personId,
+            intents: [{ intent: 'youth' as const, eligibility: full }],
+          })),
+        }),
+      }),
+    });
+    render(<OfferingDetailScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
+    fireEvent.press(await screen.findByRole('button', { name: 'Join waitlist' }));
+    expect(mockRouter.push).toHaveBeenCalledWith(`/registration/start/${IDS.offering}`);
+    expect(screen.queryByRole('button', { name: 'Register' })).toBeNull();
+  });
+
+  it('Activity page: a trial is booked, from the same chooser', async () => {
+    const app = createRegistrationTestApp({
+      routes: routes({
+        'GET /offerings/{id}': { status: 200, body: offering({ kind: 'trial' }) },
+      }),
+    });
+    render(<OfferingDetailScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
+    fireEvent.press(await screen.findByRole('button', { name: 'Book' }));
+    expect(mockRouter.push).toHaveBeenCalledWith(`/registration/start/${IDS.offering}`);
+  });
+
+  it('Activity page: the bar picks one action for each state', () => {
+    const base = offering();
+    const now = new Date('2026-10-24T12:00:00.000Z');
+    const pick = (over: Partial<Parameters<typeof detailActionFor>[0]> = {}) =>
+      detailActionFor({
+        offering: base,
+        signedIn: true,
+        now,
+        cartBasketId: null,
+        waitlistOnly: false,
+        ...over,
+      });
+    expect(pick()).toEqual({ kind: 'register' });
+    expect(pick({ signedIn: false })).toEqual({ kind: 'sign_in' });
+    expect(pick({ cartBasketId: IDS.basket })).toEqual({ kind: 'checkout', basketId: IDS.basket });
+    expect(pick({ waitlistOnly: true })).toEqual({ kind: 'waitlist' });
+    expect(pick({ offering: offering({ kind: 'pickup' }) })).toEqual({ kind: 'book' });
+    expect(
+      pick({
+        offering: offering({
+          publicationState: 'published',
+          registrationOpensAt: '2027-03-03T17:00:00.000Z',
+        }),
+      }),
+    ).toEqual({ kind: 'opens', label: 'Opens Mar 3' });
+    expect(pick({ offering: offering({ publicationState: 'registration_paused' }) })).toBeNull();
+    expect(pick({ offering: offering({ publicationState: 'closed' }) })).toBeNull();
   });
 });

@@ -4,7 +4,7 @@
  * colour alone; SPK-UX-009) and what happens to the person's entries. Nothing is queued: the
  * screen keeps what was typed. Read by screen readers as one element, "{what} needs a connection".
  *
- * Moved here from `features/teams/ui.tsx`; the teams kit re-exports it.
+ * Moved here from the teams feature folder (ADR-008).
  */
 import { View } from 'react-native';
 import { StatusBadge } from './StatusBadge';

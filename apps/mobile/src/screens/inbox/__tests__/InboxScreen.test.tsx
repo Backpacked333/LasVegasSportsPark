@@ -4,7 +4,7 @@
  * offline with age, signed out) and the request it sends (§4.8 bearer token, §4.13 client header).
  */
 import { apiErrorBody, fakeResponse } from '@sportspark/api-client/testing';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
 import {
   CHILD,
   GUARDIAN_OF_CHILD,
@@ -17,6 +17,7 @@ import {
 } from '../../../features/today/__tests__/fixtures';
 import { createTestApp, dropAnswers, waitForAbsent } from '../../../testing/test-app';
 import { InboxScreen, inboxStatus } from '../InboxScreen';
+import { openSheet } from '../../../testing/ui';
 import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 jest.mock('../../../features/today/device-time-zone', () => ({
@@ -109,9 +110,13 @@ describe('SCR-C-06 InboxScreen', () => {
 
     now = new Date('2026-10-24T12:20:00.000Z');
     act(() => app.sources.setReachable(false));
-    // The screen notice and the SCR-C-40 banner both state the age of what is shown.
-    expect(screen.getAllByLabelText('You are offline')).toHaveLength(2);
-    expect(screen.getByText('Showing information from 20 minutes ago.')).toBeOnTheScreen();
+    // ADR-008: one offline notice, the SCR-C-40 banner; the list says its own age on one quiet line.
+    expect(screen.getAllByLabelText('You are offline')).toHaveLength(1);
+    expect(
+      screen.getByText(
+        'Showing information from 20 minutes ago. Needs a connection: marking notices as read, acknowledging notices.',
+      ),
+    ).toBeOnTheScreen();
     expect(screen.getByText('Kickoff moved')).toBeOnTheScreen();
   });
 
@@ -191,9 +196,9 @@ describe('SCR-C-06 InboxScreen: reading, acknowledging, revocation and replaced 
     render(<InboxScreen />, { wrapper: app.wrapper });
     fireEvent.press(await screen.findByRole('button', { name: 'Bring water, Read' }));
     fireEvent.press(await screen.findByRole('button', { name: 'Acknowledge' }));
-    expect(
-      await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE\. Reference: corr-ack/),
-    ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(await screen.findByText('Error code: INTEGRATION_UNAVAILABLE')).toBeOnTheScreen();
+    expect(await screen.findByText('Reference: corr-ack')).toBeOnTheScreen();
     expect(
       screen.getByLabelText('No answer yet: this may already have been recorded'),
     ).toBeOnTheScreen();
@@ -258,6 +263,8 @@ describe('SCR-C-06 InboxScreen: reading, acknowledging, revocation and replaced 
     fireEvent.press(await screen.findByRole('button', { name: 'Acknowledge' }));
     expect(await screen.findByText('No notifications')).toBeOnTheScreen();
     expect(screen.queryByText('Practice note for Sam')).toBeNull();
+    // The open notice's sheet says it is gone, without implying anything about it (§4.10).
+    expect(within(openSheet(screen)).getByLabelText('No longer available')).toBeOnTheScreen();
     expect(screen.queryByText(/NOT_FOUND/)).toBeNull();
   });
 

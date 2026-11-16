@@ -11,7 +11,7 @@ import {
   fakeResponse,
   type FakeHandler,
 } from '@sportspark/api-client/testing';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import {
   IDS,
   eligible,
@@ -116,7 +116,10 @@ describe('SCR-C-09 trial and pickup intents', () => {
       }),
     });
     renderChooser(app);
-    await waitFor(() => expect(screen.getByRole('radio', { name: /^Trial/ })).toBeChecked());
+    // ADR-008: one registration type is said, not offered as a choice.
+    expect(
+      await screen.findByLabelText('Registration type: Trial. Try one session before registering.'),
+    ).toBeOnTheScreen();
     fireEvent.press(await screen.findByRole('radio', { name: 'Ada. Eligible' }));
     // Only upcoming sessions, in the facility's zone (SPK-SCHED-008).
     fireEvent.press(await screen.findByRole('radio', { name: SESSION_LABEL }));
@@ -220,8 +223,11 @@ describe('SCR-C-09 trial and pickup intents', () => {
       }),
     });
     renderChooser(app);
-    const pickup = await screen.findByRole('radio', { name: /^Pickup session/ });
-    await waitFor(() => expect(pickup).toBeChecked());
+    expect(
+      await screen.findByLabelText(
+        'Registration type: Pickup session. Book a place in one pickup session.',
+      ),
+    ).toBeOnTheScreen();
     fireEvent.press(await screen.findByRole('radio', { name: 'Ada. Eligible' }));
     fireEvent.press(await screen.findByRole('radio', { name: SESSION_LABEL }));
     // The only way to pay is "No charge": it is used without asking.
@@ -327,10 +333,15 @@ describe('SCR-C-09 trial and pickup intents', () => {
     const first = render(<RegistrationIntentScreen offeringId={IDS.offering} />, {
       wrapper: off.wrapper,
     });
-    const pickup = await screen.findByRole('radio', {
-      name: 'Pickup session. Book a place in one pickup session. Pickup sessions turned off (DEC-016, DEC-082).',
-    });
-    expect(pickup).toBeDisabled();
+    // PA-11: the plain message is shown; the decisions are in the support fold only.
+    expect(
+      await screen.findByLabelText(
+        'Registration type: Pickup session. Book a place in one pickup session. Pickup sessions turned off. Ask the front desk about drop-in pickup games.',
+      ),
+    ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(screen.getByText('Decisions: DEC-016, DEC-082')).toBeOnTheScreen();
+    expect(screen.queryByRole('radio', { name: 'Ada. Eligible' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Book the session' })).toBeNull();
     first.unmount();
 

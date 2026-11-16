@@ -19,6 +19,12 @@
  * from a signed paper reads "Recorded from paper", never "Signed" (SPK-REG-009), in the waiver
  * list and in the list of forms alike. With the switch off nothing of this is shown or asked for.
  *
+ * Layout (PA-11, ADR-008 visual system v2): "To sign" first (each person's waivers not accepted
+ * yet or due again, under their name and avatar; "Nothing to sign right now." once every list has
+ * answered with none), then "Signed" (one card per person: the waivers in force, then every form
+ * signed). The customer words are "form" and "waiver"; the API's "acknowledgment" stays in code.
+ * Pull to refresh reads everything again.
+ *
  * States: loading; empty (no forms signed for a person); ready; validation failure (a reason is
  * required); permission restriction (a person whose forms the API does not show is "not
  * available", no hint of what exists; withdraw is not offered unless listed); stale version
@@ -30,8 +36,8 @@
 import type { Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
-import { useRef, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { View } from 'react-native';
 import { usePermissions } from '../../api/permissions';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
@@ -41,11 +47,15 @@ import { formatCalendarDate, type PersonWaiver } from '../../features/waivers/wa
 import { useConnectivity } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
 import { Button } from '../../ui/Button';
+import { Card } from '../../ui/Card';
+import { TextField } from '../../ui/Field';
 import { ListRow } from '../../ui/ListRow';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
+import { Section } from '../../ui/Section';
 import { StateView } from '../../ui/StateView';
-import { spacing } from '../../ui/theme';
+import { Text } from '../../ui/Text';
+import { layout, spacing } from '../../ui/theme';
 import {
   formatDateTime,
   personDisplayName,
@@ -54,8 +64,8 @@ import {
   usePersonName,
   type MeData,
 } from './components/account-data';
-import { CommandError } from './components/CommandError';
-import { Paragraph, SectionHeader, TextField } from './components/forms';
+import { CommandError } from '../../ui/CommandError';
+import { PersonHeading } from './components/PersonHeading';
 
 type Acknowledgment = Schema<'Acknowledgment'>;
 
@@ -73,12 +83,18 @@ export function formSubjects(me: MeData): string[] {
 }
 
 export function FormsScreen() {
+  const queryClient = useQueryClient();
+  const [refreshing, setRefreshing] = useState(false);
+  // Pull to refresh: every read on the screen again.
+  const refresh = () => {
+    setRefreshing(true);
+    void queryClient.refetchQueries({ type: 'active' }).finally(() => setRefreshing(false));
+  };
   return (
-    <Screen>
-      <SectionHeader
-        title="Forms and acknowledgments"
-        detail="Forms signed for you and the people you manage. Forms still to sign are shown when you register."
-      />
+    <Screen onRefresh={refresh} refreshing={refreshing}>
+      <Text variant="body" tone="muted" style={styles.intro}>
+        Forms and waivers for you and the people you manage.
+      </Text>
       <RequireSession what="your forms">
         <FormsContent />
       </RequireSession>
@@ -113,6 +129,14 @@ function FormsContent() {
   );
 }
 
+interface Subject {
+  personId: string;
+  isSelf: boolean;
+  /** Whether this person's waivers are listed (the switch is on and the account may read them). */
+  waivers: boolean;
+  mayAcceptWaivers: boolean;
+}
+
 function FormsBody({ me }: { me: MeData }) {
   const permissions = usePermissions();
   // Offered only when the API lists the action for this account; it re-checks every request.
@@ -120,74 +144,138 @@ function FormsBody({ me }: { me: MeData }) {
   // SPK-REG-011 (proposed): nothing about waivers is shown or asked for while the switch is off.
   const waiversOn = permissions.isCapabilityEnabled('liability_waivers') === true;
   const selfId = me.person?.id ?? '';
+  const selfName = me.person ? personDisplayName(me.person) : '';
   const mayAcceptFor = (personId: string): boolean =>
     personId === selfId
       ? me.person?.kind === 'adult'
       : me.authorities.some(
           (a) => a.subjectPersonId === personId && a.permissions.includes('complete_forms'),
         );
+  const subjects: Subject[] = formSubjects(me).map((personId) => ({
+    personId,
+    isSelf: personId === selfId,
+    waivers: waiversOn && (personId === selfId || mayAcceptFor(personId)),
+    mayAcceptWaivers: mayAcceptFor(personId),
+  }));
+  const withWaivers = subjects.filter((s) => s.waivers);
+  // How many waivers wait for each person, once their list has answered.
+  const [toSign, setToSign] = useState<Record<string, number>>({});
+  const report = useCallback(
+    (personId: string, count: number) =>
+      setToSign((prev) => (prev[personId] === count ? prev : { ...prev, [personId]: count })),
+    [],
+  );
+  const nothingToSign = withWaivers.every((s) => toSign[s.personId] === 0);
   return (
     <View>
-      {formSubjects(me).map((personId) => (
-        <PersonForms
-          key={personId}
-          personId={personId}
-          selfId={selfId}
-          selfName={me.person ? personDisplayName(me.person) : ''}
-          mayWithdraw={mayWithdraw}
-          waivers={waiversOn && (personId === selfId || mayAcceptFor(personId))}
-          mayAcceptWaivers={mayAcceptFor(personId)}
-        />
-      ))}
+      <Section
+        title="To sign"
+        subtitle="Forms for a registration are signed when you register."
+        variant="plain"
+        testID="forms-to-sign"
+      >
+        {withWaivers.map((subject) => (
+          <PersonToSign
+            key={subject.personId}
+            subject={subject}
+            selfId={selfId}
+            selfName={selfName}
+            onCount={report}
+          />
+        ))}
+        {nothingToSign ? (
+          <Text variant="body" tone="muted">
+            Nothing to sign right now.
+          </Text>
+        ) : null}
+      </Section>
+      <Section title="Signed" variant="plain" testID="forms-signed">
+        {subjects.map((subject) => (
+          <PersonSigned
+            key={subject.personId}
+            subject={subject}
+            selfId={selfId}
+            selfName={selfName}
+            mayWithdraw={mayWithdraw}
+          />
+        ))}
+      </Section>
     </View>
   );
 }
 
-/** The waivers of one person, each judged by the API now (SPK-REG-011, proposed). */
-function PersonWaivers({
-  personId,
-  heading,
-  shortName,
-  selfId,
-  canAccept,
-}: {
-  personId: string;
-  heading: string;
-  /** "You", or the person's name, as the accept button names them. */
-  shortName: string;
-  selfId: string;
-  canAccept: boolean;
-}) {
-  const { reachable } = useConnectivity();
-  const waivers = useApiQuery({
+/** "You, Alex Morgan" for the account's own person; the name for anyone else. */
+function useHeading(subject: Subject, selfName: string): { heading: string; shortName: string } {
+  const name = usePersonName(subject.personId);
+  return subject.isSelf
+    ? { heading: `You, ${selfName}`, shortName: 'You' }
+    : { heading: personNameText(name), shortName: personNameText(name) };
+}
+
+function usePersonWaivers(personId: string, enabled: boolean) {
+  return useApiQuery({
     path: '/people/{id}/waivers',
     request: { path: { id: personId } },
+    enabled,
   });
+}
+
+/**
+ * The waivers still to accept for one person (not accepted yet, or due again), each judged by the
+ * API now (SPK-REG-011, proposed). Nothing is drawn for a person with nothing to sign.
+ */
+function PersonToSign({
+  subject,
+  selfId,
+  selfName,
+  onCount,
+}: {
+  subject: Subject;
+  selfId: string;
+  selfName: string;
+  onCount: (personId: string, count: number) => void;
+}) {
+  const { reachable } = useConnectivity();
+  const { heading, shortName } = useHeading(subject, selfName);
+  const waivers = usePersonWaivers(subject.personId, true);
+  const pending =
+    waivers.data && waivers.data.evaluated
+      ? waivers.data.waivers.filter((w) => w.status !== 'current')
+      : waivers.data
+        ? []
+        : null;
+  const count = pending?.length ?? null;
+  useEffect(() => {
+    if (count !== null) onCount(subject.personId, count);
+  }, [count, onCount, subject.personId]);
+  if (pending && pending.length === 0) return null;
   return (
-    <QueryBoundary
-      query={waivers}
-      label={`waivers for ${heading}`}
-      isEmpty={(data) => !data.evaluated || data.waivers.length === 0}
-      empty={{ title: 'No waiver to accept', description: 'No waiver is in force right now.' }}
-      unavailableOffline={['accepting a waiver']}
-    >
-      {(data) => (
-        <View accessibilityRole="list" accessibilityLabel={`Waivers for ${heading}`}>
-          {data.waivers.map((waiver) => (
-            <SignedWaiverCard
-              key={waiver.policyKey}
-              personId={personId}
-              personName={shortName}
-              waiver={waiver}
-              selfId={selfId}
-              canAccept={canAccept}
-              offline={reachable === false}
-              onAccepted={() => void waivers.refetch()}
-            />
-          ))}
-        </View>
-      )}
-    </QueryBoundary>
+    <Card testID={`forms-to-sign-${subject.isSelf ? 'self' : 'managed'}`}>
+      <PersonHeading name={heading} personId={subject.personId} />
+      <QueryBoundary
+        query={waivers}
+        label={`waivers for ${heading}`}
+        empty={{ title: 'Nothing to sign', description: '' }}
+        unavailableOffline={['accepting a waiver']}
+      >
+        {() => (
+          <View accessibilityRole="list" accessibilityLabel={`To sign for ${heading}`}>
+            {(pending ?? []).map((waiver) => (
+              <SignedWaiverCard
+                key={waiver.policyKey}
+                personId={subject.personId}
+                personName={shortName}
+                waiver={waiver}
+                selfId={selfId}
+                canAccept={subject.mayAcceptWaivers}
+                offline={reachable === false}
+                onAccepted={() => void waivers.refetch()}
+              />
+            ))}
+          </View>
+        )}
+      </QueryBoundary>
+    </Card>
   );
 }
 
@@ -216,40 +304,48 @@ function SignedWaiverCard({
   );
 }
 
-function PersonForms({
-  personId,
+/** One person's signed forms: the waivers accepted and in force, then every form signed. */
+function PersonSigned({
+  subject,
   selfId,
   selfName,
   mayWithdraw,
-  waivers,
-  mayAcceptWaivers,
 }: {
-  personId: string;
+  subject: Subject;
   selfId: string;
   selfName: string;
   mayWithdraw: boolean;
-  /** Whether this person's waivers are listed (the switch is on and the account may read them). */
-  waivers: boolean;
-  mayAcceptWaivers: boolean;
 }) {
-  const isSelf = personId === selfId;
-  const name = usePersonName(personId);
-  const heading = isSelf ? `You, ${selfName}` : personNameText(name);
+  const { reachable } = useConnectivity();
+  const { heading, shortName } = useHeading(subject, selfName);
+  // The same read as "To sign" (one request): only its answer is used here.
+  const waivers = usePersonWaivers(subject.personId, subject.waivers);
+  const accepted =
+    subject.waivers && waivers.data?.evaluated
+      ? waivers.data.waivers.filter((w) => w.status === 'current')
+      : [];
   const forms = useApiQuery({
     path: '/acknowledgments',
-    request: { query: { subjectPersonId: personId } },
+    request: { query: { subjectPersonId: subject.personId } },
   });
   return (
-    <View testID={`forms-person-${isSelf ? 'self' : 'managed'}`}>
-      <SectionHeader title={heading} />
-      {waivers ? (
-        <PersonWaivers
-          personId={personId}
-          heading={heading}
-          shortName={isSelf ? 'You' : personNameText(name)}
-          selfId={selfId}
-          canAccept={mayAcceptWaivers}
-        />
+    <Card testID={`forms-person-${subject.isSelf ? 'self' : 'managed'}`}>
+      <PersonHeading name={heading} personId={subject.personId} />
+      {accepted.length > 0 ? (
+        <View accessibilityRole="list" accessibilityLabel={`Waivers for ${heading}`}>
+          {accepted.map((waiver) => (
+            <SignedWaiverCard
+              key={waiver.policyKey}
+              personId={subject.personId}
+              personName={shortName}
+              waiver={waiver}
+              selfId={selfId}
+              canAccept={subject.mayAcceptWaivers}
+              offline={reachable === false}
+              onAccepted={() => void waivers.refetch()}
+            />
+          ))}
+        </View>
       ) : null}
       <QueryBoundary
         query={forms}
@@ -274,7 +370,7 @@ function PersonForms({
           </View>
         )}
       </QueryBoundary>
-    </View>
+    </Card>
   );
 }
 
@@ -315,7 +411,7 @@ function FormRow({
   const title = policy.data
     ? `${policy.data.title}, version ${policy.data.version}`
     : policy.error
-      ? `Form (wording not available, ${policy.error.code})`
+      ? 'Form (wording not available)'
       : 'Loading form…';
   const wording = policy.data ? formWording(policy.data.content) : [];
   return (
@@ -329,7 +425,7 @@ function FormRow({
             : { tone: 'success', label: 'Signed' }
         }
       />
-      <View style={styles.inset}>
+      <View style={styles.actions}>
         {wording.length > 0 ? (
           <Button
             label={showWording ? 'Hide wording' : 'Show wording'}
@@ -350,7 +446,9 @@ function FormRow({
       {showWording ? (
         <View testID={`form-wording-${acknowledgment.id}`}>
           {wording.map((text, index) => (
-            <Paragraph key={index}>{text}</Paragraph>
+            <Text key={index} variant="body">
+              {text}
+            </Text>
           ))}
         </View>
       ) : null}
@@ -404,10 +502,10 @@ function WithdrawForm({
 
   return (
     <View style={styles.form} testID={`form-withdraw-${acknowledgment.id}`}>
-      <Paragraph>
+      <Text variant="body">
         Withdrawing records that this form is no longer signed by you. It cannot be undone; signing
-        it again records a new acknowledgment.
-      </Paragraph>
+        it again records a new signature.
+      </Text>
       <TextField
         label="Reason for withdrawing"
         value={reason}
@@ -420,7 +518,7 @@ function WithdrawForm({
         editable={!withdraw.isProcessing}
         testID={`form-withdraw-reason-${acknowledgment.id}`}
       />
-      <View style={styles.inset}>
+      <View style={styles.actions}>
         <Button
           label="Withdraw form"
           onPress={submit}
@@ -441,9 +539,9 @@ function WithdrawForm({
         />
       </View>
       {withdraw.error?.isStale ? (
-        <Paragraph>
+        <Text variant="body">
           This form changed since it was shown: it may already have been withdrawn.
-        </Paragraph>
+        </Text>
       ) : null}
       {withdraw.error ? (
         <CommandError
@@ -463,7 +561,8 @@ function WithdrawForm({
   );
 }
 
-const styles = StyleSheet.create({
-  inset: { paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, gap: spacing.sm },
+const styles = {
+  intro: { paddingHorizontal: layout.gutter, paddingTop: spacing.sm },
+  actions: { paddingVertical: spacing.sm, gap: spacing.sm },
   form: { gap: spacing.sm, paddingTop: spacing.sm },
-});
+} as const;

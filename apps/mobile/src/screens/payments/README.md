@@ -1,4 +1,4 @@
-# Payments, receipts, orders, credits and packages (SCR-C-34, SCR-C-35; SCR-C-25 player list)
+# Payments, receipts, orders, credits and class packs (SCR-C-34, SCR-C-35; SCR-C-25 player list)
 
 Customer screens for what a family owes, has paid and holds (spec §2.2, §3.15, §3.16, §4.5,
 §4.9 to §4.11, §4.14, §4.15; journeys B3, B5 and C4 in `docs/package-a/journeys.md`). Screen ids
@@ -12,6 +12,37 @@ API that follows the published OpenAPI contract. **Proposed** = engineering prop
 operator approval. **Pending decision** = waits on an operator answer
 (`docs/package-a/decision-register.md`). Nothing here has passed native acceptance on signed
 builds or devices (§6.2), including VoiceOver, TalkBack and large text.
+
+## Layout and customer words (PA-11, ADR-008)
+
+**Verified** (jest; the look itself is not native acceptance, §6.2). These screens use `src/ui`
+directly (`Section`, `ListRow`, `StatTile`, `Card`, `InfoCard`, `SupportDetails`, `EmptyState`,
+`ChipRow`, `ChoiceCard`, `FieldValue`, `Text`, `Screen` with pull to refresh); the shared money
+pieces are in `src/features/money/surfaces.tsx` (`PAY_AT_DESK_MESSAGE`, `usePullToRefresh`,
+`Actions`, `Choices`); an empty list is `QueryBoundary`'s illustrated empty state (`empty.source`).
+The feature kits are gone: every screen uses `src/ui`.
+
+- **Payments** opens with the person's "Amount due" stat tile (and "Credits"), then "What's due",
+  then "History"; the views are "Show" chips: What's due, Payments, Receipts, Orders, Your share.
+- **Paying** in a release build says "Paying in the app isn't available yet. Pay at the front desk
+  for now." with DEC-019 and its owner in the closed "Details for support" fold; the provider's
+  own step (`action_required`) says "Pay at the front desk for now." too. The development payment
+  method stays development-only (`features/money/dev`, `__DEV__`, release-bundle check).
+- **Credits and makeups** opens with "Credit balance" (the API's `creditsAvailable`) and
+  "Makeup sessions available" tiles; a credit without an expiry says "Ask the front desk when your
+  credit expires." with DEC-058 in the fold.
+- **Class packs** (session packages in the API) and **In-person receipts** (point of sale) use the
+  customer words everywhere, including their turned-off notices ("Class packs turned off",
+  "In-person receipts turned off"). On Credits the class packs section shows only while the switch
+  is on or a pack is held.
+- **Empty lists** (no payments, receipts, orders, credits, memberships, class packs, in-person
+  receipts) show the `empty-payments` illustration with what would appear, announced as the
+  StateView empty state is.
+
+Words: "Amount due" (not obligation), "Payment" (not payment attempt), "cart" (not basket),
+"registration" (not enrollment), "class pack" (not session package), "Your share" (not
+contribution request), "Explore" (not Discover). The journeys.md section 3 phrases stay word for
+word ("Payment outcome being confirmed. Do not pay again.", "Payment processing", "Check again").
 
 ## Screens and routes
 
@@ -35,8 +66,8 @@ sends no request. Route files under `app/` only re-export the screen's `*Route` 
 
 ## Behaviour asserted by the tests (Verified)
 
-- **Payments views** (SCR-C-34): "Show" is a radio group (Balances due, Payments, Receipts, Orders,
-  Team contributions); only the chosen view is read. The account lists (`/me/...`) are the API's
+- **Payments views** (SCR-C-34): "Show" is a row of chips (What's due, Payments, Receipts, Orders,
+  Your share), each exposing its selected state; only the chosen view is read. The account lists (`/me/...`) are the API's
   own scope, computed from the account's authority: the app sends no person id, and a refused read
   is "Not available" with nothing of another payer.
 - **Unknown outcomes stay explicit** (SPK-PAY-007, SPK-UX-004): an `unknown` attempt reads
@@ -77,16 +108,16 @@ sends no request. Route files under `app/` only re-export the screen's `*Route` 
 - **Contributions** (SPK-PAY-004, SPK-CAP-002): a player sees only their own lines (and those of
   the people they pay for, named), with the team's description and totals only.
 - **Session packages** (ENR-11, SPK-COND-002): sessions left, used and bought; expiry as the API
-  states it ("No expiry set for this package" when the definition chose none, POL-039; no rule is
+  states it ("No expiry set for this class pack" when the definition chose none, POL-039; no rule is
   invented); purchase date; redemption history newest first, with reversals and their reason. A
   package is a separate list from credits and makeups, never added to them (SPK-PAY-009).
 - **Booking with a package** (ENR-11, SPK-COND-002, §3.16 "reservation, redemption"): an active
-  package with sessions left and before its expiry offers "Book a session with this package" while
+  package with sessions left and before its expiry offers "Book a session with this class pack" while
   the switch is on; the eligible activities (named offerings and the published offerings of named
   programs) and their upcoming sessions, in the facility's zone; `POST /session-bookings` with
   `packageEntitlementId` and one idempotency key per intent ("Check again" after no answer reuses
-  it). The last session taken at the same time reads "Not available: no sessions left on this
-  package"; an uncovered session shows the API's reasons; CAPABILITY_DISABLED shows the turned-off
+  it). The last session taken at the same time reads "Not available: no sessions left in this
+  class pack"; an uncovered session shows the API's reasons; CAPABILITY_DISABLED shows the turned-off
   state; ACCESS_DENIED "Not available"; offline disables booking.
 - **Turned off** (DEC-016, DEC-074): while `session_packages` is off the turned-off state names the
   decisions and the owner, packages already held stay listed under it and no booking is offered;
@@ -106,8 +137,8 @@ sends no request. Route files under `app/` only re-export the screen's `*Route` 
 ## Values that are not the app's
 
 - Paying in the app: the payment provider is not selected (DEC-019, Technical lead/account
-  owners). Release builds show the pending decision; development builds use the API's fake
-  provider.
+  owners). Release builds say "Pay at the front desk for now." with the decision in the support
+  fold; development builds use the API's fake provider.
 - Retrying a failed installment or changing the payment method from the app: not built by the API
   (DEC-019 and a retry policy); the screen says the facility collects it.
 - Credit expiry and permitted uses (DEC-058, POL-010, POL-035), overpayment handling (DEC-008,
@@ -129,5 +160,5 @@ sends no request. Route files under `app/` only re-export the screen's `*Route` 
 
 ## Not built here
 
-- Point-of-sale receipts (`/pos-receipts`, `GET /me/pos-receipts`): the Package G customer screen
-  group (`src/features/package-g/`).
+- In-person (point-of-sale) receipts (`/pos-receipts`, `GET /me/pos-receipts`): the Package G
+  customer screen group (`src/features/package-g/`); the screen is `../pos-receipts/`.

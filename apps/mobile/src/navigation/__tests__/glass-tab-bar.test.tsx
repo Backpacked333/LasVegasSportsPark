@@ -5,12 +5,14 @@
  */
 import { render, waitFor } from '@testing-library/react-native';
 import { renderRouter, screen } from 'expo-router/testing-library';
-import { ScrollView, Text } from 'react-native';
+import { ScrollView, StyleSheet, Text, type TextStyle } from 'react-native';
 import { createTestApp } from '../../testing/test-app';
 import { GlassProvider, type GlassMode } from '../../ui/GlassSurface';
 import { BottomBarInsetContext, Screen } from '../../ui/Screen';
 import { DESTINATIONS } from '../destinations';
-import { RootNavigator } from '../RootNavigator';
+import { RootNavigator, stackHeader } from '../RootNavigator';
+import { classicTheme } from '../../ui/theme';
+import { TAB_ROW_HEIGHT } from '../TabsNavigator';
 
 const EMPTY_INBOX = { status: 200, body: { items: [], nextCursor: null } };
 
@@ -53,6 +55,15 @@ describe('tab bar on glass (ADR-001)', () => {
     expect(await screen.findByTestId('tab-index')).toBeOnTheScreen();
     expect(screen.queryByTestId('tab-bar-glass')).toBeNull();
   });
+
+  it('SPK-UX-009: the labels have a line of their own, so "Explore" is never cut at the bottom', async () => {
+    renderApp();
+    const label = await screen.findByText('Explore');
+    const style = StyleSheet.flatten(label.props.style) as TextStyle;
+    expect(style.lineHeight).toBeGreaterThanOrEqual(15);
+    // The row holds the item's padding, the 30 pt icon pill, the gap and the label line.
+    expect(TAB_ROW_HEIGHT).toBeGreaterThanOrEqual(5 + 30 + 2 + (style.lineHeight ?? 0) + 5);
+  });
 });
 
 describe('Screen under a floating bar (SPK-UX-009)', () => {
@@ -86,5 +97,12 @@ describe('Screen under a floating bar (SPK-UX-009)', () => {
     expect(bottomPadding(scrollProps().contentContainerStyle)).toBe(withoutBar + 83);
     expect(scrollProps().scrollIndicatorInsets).toEqual({ bottom: 83 });
     expect(screen.getByText('Last row')).toBeOnTheScreen();
+  });
+});
+
+describe('screen transitions follow reduced motion (ADR-008)', () => {
+  it('a pushed screen appears at once with reduced motion, and with the platform transition otherwise', () => {
+    expect(stackHeader(classicTheme, true).animation).toBe('none');
+    expect(stackHeader(classicTheme, false).animation).toBe('default');
   });
 });

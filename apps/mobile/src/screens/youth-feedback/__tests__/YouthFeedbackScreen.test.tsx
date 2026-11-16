@@ -20,7 +20,7 @@ import {
 } from '../../../features/today/__tests__/fixtures';
 import { createTestApp, mePermissions } from '../../../testing/test-app';
 import { formatDateOnly, scaleText, YouthFeedbackScreen } from '../YouthFeedbackScreen';
-import { openSupportDetails } from '../../../testing/ui-surfaces';
+import { openSupportDetails, illustrationsOnScreen } from '../../../testing/ui-surfaces';
 
 jest.mock('../../../features/today/device-time-zone', () => ({
   deviceTimeZone: () => 'America/Los_Angeles',
@@ -111,6 +111,8 @@ describe('SCR-C-37 YouthFeedbackScreen', () => {
   it('shows the empty state when nothing has been shared yet', async () => {
     renderScreen({ 'GET /me/youth-feedback': ok({ assessments: [], recommendations: [] }) });
     expect(await screen.findByRole('header', { name: 'No feedback yet' })).toBeOnTheScreen();
+    // ADR-008: an illustrated empty state.
+    expect(illustrationsOnScreen(screen)).toEqual(['empty-inbox']);
   });
 
   it('shows the API error code with "Try again", and NOT_FOUND as not available', async () => {
@@ -187,7 +189,14 @@ describe('SCR-C-37 YouthFeedbackScreen', () => {
       }),
     });
     expect(await screen.findByRole('header', { name: 'You' })).toBeOnTheScreen();
-    expect(screen.getByText(/\(DEC-054, DEC-055, Program manager\)/)).toBeOnTheScreen();
+    // PA-11: what to do now in plain words; the decisions and their owner only in the fold
+    expect(
+      screen.getByText("Ask the coach or the front desk about your child's progress."),
+    ).toBeOnTheScreen();
+    expect(screen.queryByText(/DEC-054/)).toBeNull();
+    await openSupportDetails(screen);
+    expect(screen.getByText('Decisions: DEC-054, DEC-055')).toBeOnTheScreen();
+    expect(screen.getByText('Owner: Program manager')).toBeOnTheScreen();
   });
 
   it('asks a signed-out user to sign in and sends no request', async () => {

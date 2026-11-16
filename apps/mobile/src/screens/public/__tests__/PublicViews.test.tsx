@@ -1,11 +1,13 @@
 /**
  * Public views in the customer app (SPK-SCHED-010, proposed amendment PA-06): today's schedule and
  * public standings without sign-in, and the links to them from the signed-out Discover screen.
+ * v2 (ADR-008): a choice among facilities as chips, and pull to refresh.
  */
 import { apiErrorBody, fakeResponse } from '@sportspark/api-client/testing';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import { formatInstant } from '../../../features/teams/format';
 import { createTestApp } from '../../../testing/test-app';
+import { pullToRefresh } from '../../../testing/ui-surfaces';
 import {
   PublicLinks,
   PublicScheduleScreen,
@@ -247,5 +249,35 @@ describe('SPK-SCHED-010 public views (customer app)', () => {
     expect(standingsRowText(row(1, 'Comets', 3))).toBe(
       'Played 1, won 1, drawn 0, lost 0, goals 5 to 3, 3 points',
     );
+  });
+
+  it('SPK-SCHED-010: with two public facilities, a chip chooses whose schedule is read, and pulling refreshes it', async () => {
+    const OTHER = 'f1b2c3d4e5f6a7b8c9d0e1f2';
+    const app = signedOut({
+      'GET /public/{organization}/directory': {
+        status: 200,
+        body: directory({
+          schedules: [
+            { facilityName: 'Main complex', code: CODE },
+            { facilityName: 'North dome', code: OTHER },
+          ],
+        }),
+      },
+    });
+    render(<PublicScheduleScreen />, { wrapper: app.wrapper });
+    expect(await screen.findByRole('header', { name: 'Main complex today' })).toBeOnTheScreen();
+    expect(screen.getByRole('button', { name: 'Main complex' })).toBeSelected();
+    fireEvent.press(screen.getByRole('button', { name: 'North dome' }));
+    const reads = () =>
+      app.fake.requests.filter((r) => r.route === '/public/{organization}/schedule/{code}');
+    await waitFor(() => expect(reads().at(-1)?.params).toEqual({ organization: ORG, code: OTHER }));
+    expect(screen.getByRole('button', { name: 'North dome' })).toBeSelected();
+    await settle(app);
+
+    const before = reads().length;
+    await pullToRefresh(screen);
+    await waitFor(() => expect(reads().length).toBeGreaterThan(before));
+    expect(reads().at(-1)?.params).toEqual({ organization: ORG, code: OTHER });
+    await settle(app);
   });
 });

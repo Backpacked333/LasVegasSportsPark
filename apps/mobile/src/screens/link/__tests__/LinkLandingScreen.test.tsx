@@ -7,6 +7,8 @@
  */
 import { apiErrorBody, fakeResponse } from '@sportspark/api-client/testing';
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
+import { Image } from 'expo-image';
+import { illustrations } from '../../../artwork/manifest';
 import { renderRouter, screen as routerScreen } from 'expo-router/testing-library';
 import { clearLinkSecrets, readLinkSecret } from '../../../links/link-secrets';
 import { resolveLinkParams } from '../../../links/link-targets';
@@ -147,9 +149,11 @@ describe('SCR-C-39 LinkLanding', () => {
       { wrapper: app.wrapper },
     );
     expect(await screen.findByText('The last place was taken.')).toBeOnTheScreen();
-    expect(
-      screen.getByText('Error code: CAPACITY_UNAVAILABLE. Reference: corr-1'),
-    ).toBeOnTheScreen();
+    // The code and reference are in the "Details for support" fold (PA-11).
+    expect(screen.queryByText(/CAPACITY_UNAVAILABLE/)).toBeNull();
+    await openSupportDetails(screen);
+    expect(screen.getByText('Error code: CAPACITY_UNAVAILABLE')).toBeOnTheScreen();
+    expect(screen.getByText('Reference: corr-1')).toBeOnTheScreen();
     fireEvent.press(screen.getByRole('button', { name: 'Contact support' }));
     expect(navigate).toHaveBeenCalledWith('/support');
   });
@@ -201,6 +205,10 @@ describe('SCR-C-39 LinkLanding', () => {
     expect((await screen.findAllByLabelText('You are offline')).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/Nothing has been loaded yet/).length).toBeGreaterThan(0);
     expect(screen.getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
+    // ADR-008: the offline illustration, hidden from screen readers.
+    const art = screen.getByTestId('link-offline-art', { includeHiddenElements: true });
+    expect(art).toHaveProp('importantForAccessibility', 'no-hide-descendants');
+    expect(art.findByType(Image).props.source).toBe(illustrations.offline);
   });
 });
 

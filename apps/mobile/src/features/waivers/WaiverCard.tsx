@@ -17,9 +17,8 @@ import { useApp } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { makeStyles, spacing } from '../../ui/theme';
-import { CommandError } from '../registration/CommandError';
+import { CommandError } from '../../ui/CommandError';
 import { formWording } from '../registration/forms';
-import { Body, ChoiceRow } from '../registration/ui';
 import {
   PERSON_WAIVERS_KEY,
   WAIVER_STATUS,
@@ -28,6 +27,8 @@ import {
   waiverReason,
   type PersonWaiver,
 } from './waivers';
+import { ChoiceCard } from '../../ui/ChoiceList';
+import { Text } from '../../ui/Text';
 
 export interface WaiverCardProps {
   personId: string;
@@ -94,14 +95,23 @@ export function WaiverCard({
 
   return (
     <View style={styles.card} testID={`waiver-${testKey}`}>
-      <Body>{version ? `${waiver.title} (version ${version.version})` : waiver.title}</Body>
+      <Text>{version ? `${waiver.title} (version ${version.version})` : waiver.title}</Text>
       <StatusBadge tone={status.tone} label={status.label} testID={`waiver-status-${testKey}`} />
-      {reason ? <Body muted>{reason}</Body> : null}
+      {reason ? (
+        <Text variant="caption" tone="muted">
+          {reason}
+        </Text>
+      ) : null}
       {waiver.acceptance ? (
-        <Body muted>{acceptanceDetail(waiver.acceptance, signerName)}</Body>
+        <Text variant="caption" tone="muted">
+          {acceptanceDetail(waiver.acceptance, signerName)}
+        </Text>
       ) : null}
       {waiver.validUntil ? (
-        <Body muted>{`Counts until ${formatCalendarDate(waiver.validUntil)}.`}</Body>
+        <Text
+          variant="caption"
+          tone="muted"
+        >{`Counts until ${formatCalendarDate(waiver.validUntil)}.`}</Text>
       ) : null}
       {version && !(needsAccepting && canAccept) ? (
         <Button
@@ -115,21 +125,30 @@ export function WaiverCard({
         policy.data ? (
           <View testID={`waiver-wording-${testKey}`}>
             {wording.map((paragraph, index) => (
-              <Body key={index}>{paragraph}</Body>
+              <Text key={index}>{paragraph}</Text>
             ))}
           </View>
         ) : policy.error ? (
-          <Body muted>{`The wording could not be loaded (${policy.error.code}).`}</Body>
+          <Text
+            variant="caption"
+            tone="muted"
+          >{`The wording could not be loaded (${policy.error.code}).`}</Text>
         ) : (
-          <Body muted>Loading the wording…</Body>
+          <Text variant="caption" tone="muted">
+            Loading the wording…
+          </Text>
         )
       ) : null}
       {needsAccepting && canAccept && policy.data ? (
         <>
-          <ChoiceRow
-            label={`I have read "${waiver.title}" and accept it${forWhom}`}
+          <ChoiceCard
+            option={{
+              value: `I have read "${waiver.title}" and accept it${forWhom}`,
+              label: `I have read "${waiver.title}" and accept it${forWhom}`,
+            }}
+            mode="multiple"
             checked={agreed}
-            onToggle={() => setAgreed((v) => !v)}
+            onPress={() => setAgreed((v) => !v)}
             testID={`waiver-agree-${testKey}`}
           />
           <Button
@@ -138,15 +157,24 @@ export function WaiverCard({
             disabled={!agreed || offline}
             busy={accept.isProcessing}
           />
-          {offline ? <Body muted>Accepting needs a connection. Your answer is kept.</Body> : null}
+          {offline ? (
+            <Text variant="caption" tone="muted">
+              Accepting needs a connection. Your answer is kept.
+            </Text>
+          ) : null}
         </>
       ) : null}
       {needsAccepting && !canAccept ? (
-        <Body muted>
+        <Text variant="caption" tone="muted">
           {`Your account cannot accept this${forWhom}. A guardian with permission to complete forms must accept it, or bring a signed paper to the front desk.`}
-        </Body>
+        </Text>
       ) : null}
-      <CommandError error={failure} onRetry={() => void submit()} onReload={onAccepted} />
+      <CommandError
+        wording="registration"
+        error={failure}
+        onRetry={() => void submit()}
+        onReload={onAccepted}
+      />
     </View>
   );
 }

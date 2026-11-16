@@ -34,6 +34,7 @@ import {
   createRegistrationTestApp,
 } from '../../../features/registration/testing/registration-test-app';
 import { RegistrationIntentScreen } from '../RegistrationIntentScreen';
+import { chooseInSheet, openSheet } from '../../../testing/ui';
 import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), navigate: jest.fn() };
@@ -43,6 +44,21 @@ jest.mock('expo-router', () => ({
 }));
 
 const EMPTY_BASKET = basket({ lines: [], revision: 1, subtotalMinor: 0 });
+
+/** PA-11: the youth intent reads "Register a child" (was "Youth enrollment"). */
+const YOUTH = 'Register a child. Register a child in this program.';
+
+/** Chooses a registration type in its sheet, once the types have loaded. */
+async function chooseType(name: string) {
+  await screen.findByRole('button', { name: 'Registration type' });
+  await chooseInSheet(screen, 'Registration type', name);
+}
+
+/** Opens the registration type sheet and returns it (the types are radios inside). */
+async function openTypeSheet() {
+  fireEvent.press(await screen.findByRole('button', { name: 'Registration type' }));
+  return within(await waitFor(() => openSheet(screen)));
+}
 
 /** Answers each line with the basket grown by that line and the revision bumped. */
 function addLineHandler(fail?: (req: FakeRequest, call: number) => Response | null) {
@@ -79,13 +95,21 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
   it('SPK-REG-001, ENR-05: offers exactly the intents the API answers, for the people it names', async () => {
     const app = createRegistrationTestApp({ routes: routes() });
     render(<RegistrationIntentScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
-    expect(await screen.findByRole('radio', { name: /^Youth enrollment/ })).toBeOnTheScreen();
+    // ADR-008: with more than one type, the types are a sheet behind "Registration type".
+    expect(await screen.findByRole('button', { name: 'Registration type' })).toHaveProp(
+      'accessibilityValue',
+      { text: 'Register a child' },
+    );
+    const sheet = await openTypeSheet();
+    expect(sheet.getByRole('radio', { name: YOUTH })).toBeChecked();
     // Not in the API's answer, so not offered (no client table of intents per kind).
-    expect(screen.queryByRole('radio', { name: /^Individual league entry/ })).toBeNull();
+    expect(sheet.queryByRole('radio', { name: /^Join as a player/ })).toBeNull();
     // A makeup is booked from the makeup sessions the participant has (SCR-C-35).
-    const makeup = screen.getByRole('radio', { name: /^Makeup session/ });
+    const makeup = sheet.getByRole('radio', {
+      name: 'Makeup session. Use a makeup for a missed session. A makeup is booked from the makeup sessions you have (You, credits and makeups).',
+    });
     expect(makeup).toBeDisabled();
-    expect(makeup.props.accessibilityLabel).toMatch(/makeup sessions you have/);
+    fireEvent.press(sheet.getByRole('button', { name: 'Close' }));
     fireEvent.press(screen.getByRole('button', { name: 'Open your makeup sessions' }));
     expect(mockRouter.push).toHaveBeenCalledWith('/credits');
     const read = app.fake.requests.find((r) => r.route === '/offerings/{id}/registration-options');
@@ -147,9 +171,7 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
               },
               {
                 personId: IDS.childB,
-                intents: [
-                  { intent: 'youth', eligibility: ineligible('Ben is older than this age band.') },
-                ],
+                intents: [{ intent: 'youth', eligibility: ineligible() }],
               },
             ],
           }),
@@ -160,7 +182,7 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
     const ada = await screen.findByRole('checkbox', { name: 'Ada. Eligible' });
     expect(ada).not.toBeDisabled();
     const ben = screen.getByRole('checkbox', {
-      name: 'Ben. Not eligible. Ben is older than this age band.. Choose an activity for this age.',
+      name: 'Ben. Not eligible. Ages 9 to 12. Ben is 13.. Look for another activity that fits.',
     });
     expect(ben).toBeDisabled();
   });
@@ -178,9 +200,14 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
       }),
     });
     render(<RegistrationIntentScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
-    const choice = await screen.findByRole('radio', { name: /^Rental request/ });
-    await waitFor(() => expect(choice).toBeChecked());
-    fireEvent.press(screen.getByRole('button', { name: 'Continue to booking' }));
+    // ADR-008: one type is said, not offered as a choice.
+    expect(
+      await screen.findByLabelText(
+        'Registration type: Rental request. Request this rental. Choose a time and what you need on the next screen.',
+      ),
+    ).toBeOnTheScreen();
+    expect(screen.queryByRole('button', { name: 'Registration type' })).toBeNull();
+    fireEvent.press(await screen.findByRole('button', { name: 'Continue to booking' }));
     expect(mockRouter.push).toHaveBeenCalledWith(`/bookings/new/${IDS.offering}`);
     // No basket line is ever sent for a booking intent (SPK-COND-003).
     expect(app.fake.requests.some((r) => r.route === '/baskets/{id}/lines')).toBe(false);
@@ -200,11 +227,15 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
       }),
     });
     render(<RegistrationIntentScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
-    const membership = await screen.findByRole('radio', {
-      name: /^Membership\. Join this membership\. Memberships turned off \(DEC-016, DEC-072\)\.$/,
-    });
-    expect(membership).toBeDisabled();
-    expect(screen.queryByRole('button', { name: 'Add to your basket' })).toBeNull();
+    // PA-11: the plain message is shown; the decisions are in the support fold only.
+    expect(
+      await screen.findByLabelText(
+        'Registration type: Membership. Join this membership. Memberships turned off. Ask the front desk about memberships.',
+      ),
+    ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(screen.getByText('Decisions: DEC-016, DEC-072')).toBeOnTheScreen();
+    expect(screen.queryByRole('button', { name: 'Add to cart' })).toBeNull();
   });
 
   it('CAPABILITIES-07: an intent the API reports unavailable reads turned off, even before the permission view catches up', async () => {
@@ -234,12 +265,16 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
       }),
     });
     render(<RegistrationIntentScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
-    const membership = await screen.findByRole('radio', {
-      name: /^Membership\. Join this membership\. Memberships turned off \(DEC-016, DEC-072\)\.$/,
-    });
-    expect(membership).toBeDisabled();
+    // PA-11: the plain message is shown; the decisions are in the support fold only.
+    expect(
+      await screen.findByLabelText(
+        'Registration type: Membership. Join this membership. Memberships turned off. Ask the front desk about memberships.',
+      ),
+    ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(screen.getByText('Decisions: DEC-016, DEC-072')).toBeOnTheScreen();
     expect(screen.queryByText('This activity cannot be registered for in the app.')).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Add to your basket' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Add to cart' })).toBeNull();
     expect(app.fake.requests.some((r) => r.route === '/baskets/{id}/lines')).toBe(false);
   });
 
@@ -273,9 +308,9 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
     fireEvent.press(await screen.findByRole('checkbox', { name: 'Ada. Eligible' }));
     await basketButtonReady();
     await act(async () => {
-      fireEvent.press(screen.getByRole('button', { name: 'Add to your basket' }));
+      fireEvent.press(screen.getByRole('button', { name: 'Add to cart' }));
     });
-    expect(await screen.findByLabelText('Session packages turned off')).toBeOnTheScreen();
+    expect(await screen.findByLabelText('Class packs turned off')).toBeOnTheScreen();
     await openSupportDetails(screen);
     expect(screen.getByText(/CAPABILITY_DISABLED/)).toBeOnTheScreen();
   });
@@ -283,14 +318,14 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
   it('SPK-AT-001: adds two children as two basket lines with the expected revision and one key per line', async () => {
     const app = createRegistrationTestApp({ routes: routes() });
     render(<RegistrationIntentScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
-    fireEvent.press(await screen.findByRole('radio', { name: /^Youth enrollment/ }));
+    await chooseType(YOUTH);
     fireEvent.press(await screen.findByRole('checkbox', { name: 'Ada. Eligible' }));
     fireEvent.press(screen.getByRole('checkbox', { name: 'Ben. Eligible' }));
     expect(screen.getByRole('checkbox', { name: 'Ada. Eligible' })).toBeChecked();
 
-    await basketButtonReady('Add 2 people to your basket');
+    await basketButtonReady('Add 2 people to cart');
     await act(async () => {
-      fireEvent.press(screen.getByRole('button', { name: 'Add 2 people to your basket' }));
+      fireEvent.press(screen.getByRole('button', { name: 'Add 2 people to cart' }));
     });
     // The hand-over follows both lines and their invalidations (timer-batched): wait for it.
     await waitFor(() =>
@@ -323,9 +358,7 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
     expect(mockRouter.push).toHaveBeenCalledWith(`/registration/basket/${IDS.basket}`);
     // The new basket is listed by the API from now on (no id kept on the device).
     expect(app.progressStore.snapshot()).toEqual({ pendingCheckoutQuoteId: null });
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'Add to your basket' })).not.toBeBusy(),
-    );
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Add to cart' })).not.toBeBusy());
   });
 
   it('§4.9: retrying after a failure reuses the key and never adds a participant twice', async () => {
@@ -342,15 +375,16 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
       }),
     });
     render(<RegistrationIntentScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
-    fireEvent.press(await screen.findByRole('radio', { name: /^Youth enrollment/ }));
+    await chooseType(YOUTH);
     fireEvent.press(await screen.findByRole('checkbox', { name: 'Ada. Eligible' }));
     fireEvent.press(screen.getByRole('checkbox', { name: 'Ben. Eligible' }));
-    await basketButtonReady('Add 2 people to your basket');
+    await basketButtonReady('Add 2 people to cart');
     await act(async () => {
-      fireEvent.press(screen.getByRole('button', { name: 'Add 2 people to your basket' }));
+      fireEvent.press(screen.getByRole('button', { name: 'Add 2 people to cart' }));
     });
+    await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
-    expect(screen.getByRole('checkbox', { name: 'Ada. Added to your basket' })).toBeDisabled();
+    expect(screen.getByRole('checkbox', { name: 'Ada. Added to your cart' })).toBeDisabled();
     // A 503 is no definite answer: the line may have been added (SPK-UX-008, §4.9).
     expect(
       screen.getByLabelText('No answer yet: this may already have been recorded'),
@@ -394,12 +428,12 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
       }),
     });
     render(<RegistrationIntentScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
-    fireEvent.press(await screen.findByRole('radio', { name: /^Youth enrollment/ }));
+    await chooseType(YOUTH);
     fireEvent.press(await screen.findByRole('checkbox', { name: 'Ada. Eligible' }));
     fireEvent.press(screen.getByRole('checkbox', { name: 'Ben. Eligible' }));
-    await basketButtonReady('Add 2 people to your basket');
+    await basketButtonReady('Add 2 people to cart');
     await act(async () => {
-      fireEvent.press(screen.getByRole('button', { name: 'Add 2 people to your basket' }));
+      fireEvent.press(screen.getByRole('button', { name: 'Add 2 people to cart' }));
     });
     await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: STALE_REVISION/)).toBeOnTheScreen();
@@ -409,7 +443,7 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
     await waitFor(() => expect(screen.queryByText(/Error code: STALE_REVISION/)).toBeNull());
     await basketButtonReady();
     await act(async () => {
-      fireEvent.press(screen.getByRole('button', { name: 'Add to your basket' }));
+      fireEvent.press(screen.getByRole('button', { name: 'Add to cart' }));
     });
     const lines = app.fake.requests.filter((r) => r.route === '/baskets/{id}/lines');
     expect(lines).toHaveLength(3);
@@ -425,13 +459,13 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
       }),
     });
     render(<RegistrationIntentScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
-    fireEvent.press(await screen.findByRole('radio', { name: /^Youth enrollment/ }));
+    await chooseType(YOUTH);
     fireEvent.press(await screen.findByRole('checkbox', { name: 'Ada. Eligible' }));
     await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
     await basketButtonReady();
     await act(async () => {
-      fireEvent.press(screen.getByRole('button', { name: 'Add to your basket' }));
+      fireEvent.press(screen.getByRole('button', { name: 'Add to cart' }));
     });
     expect(app.fake.requests.filter((r) => r.route === '/baskets')).toHaveLength(0);
   });
@@ -450,11 +484,11 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
       }),
     });
     render(<RegistrationIntentScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
-    fireEvent.press(await screen.findByRole('radio', { name: /^Youth enrollment/ }));
+    await chooseType(YOUTH);
     fireEvent.press(await screen.findByRole('checkbox', { name: 'Ada. Eligible' }));
     await basketButtonReady();
     await act(async () => {
-      fireEvent.press(screen.getByRole('button', { name: 'Add to your basket' }));
+      fireEvent.press(screen.getByRole('button', { name: 'Add to cart' }));
     });
     expect(
       await screen.findByText('An application for this participant and offering already exists.'),
@@ -481,14 +515,14 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
       }),
     });
     render(<RegistrationIntentScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
-    fireEvent.press(await screen.findByRole('radio', { name: /^Youth enrollment/ }));
+    await chooseType(YOUTH);
     const viewOnly = await screen.findByRole('checkbox', { name: /^Cy\. Not available/ });
     expect(viewOnly).toBeDisabled();
 
     fireEvent.press(screen.getByRole('checkbox', { name: 'Ada. Eligible' }));
     await basketButtonReady();
     await act(async () => {
-      fireEvent.press(screen.getByRole('button', { name: 'Add to your basket' }));
+      fireEvent.press(screen.getByRole('button', { name: 'Add to cart' }));
     });
     const refusal = await screen.findByTestId('command-error');
     expect(within(refusal).getByLabelText('Not available')).toBeOnTheScreen();
@@ -505,11 +539,11 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
       }),
     });
     render(<RegistrationIntentScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
-    fireEvent.press(await screen.findByRole('radio', { name: /^Youth enrollment/ }));
+    await chooseType(YOUTH);
     fireEvent.press(await screen.findByRole('checkbox', { name: 'Ada. Eligible' }));
     await basketButtonReady();
     await act(async () => {
-      fireEvent.press(screen.getByRole('button', { name: 'Add to your basket' }));
+      fireEvent.press(screen.getByRole('button', { name: 'Add to cart' }));
     });
     expect(app.fake.requests.filter((r) => r.route === '/baskets')).toHaveLength(0);
     const added = app.fake.requests.find((r) => r.route === '/baskets/{id}/lines');
@@ -518,8 +552,14 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
   });
 
   it('SPK-REG-002: choosing another intent starts from nobody, so a person blocked there is never sent', async () => {
-    const adultOnly = ineligible('Youth enrollment is for children.');
-    const childOnly = ineligible('Individual league entry is for adults.');
+    const adultOnly = ineligible(
+      'Youth enrollment is for child participants.',
+      'youth_requires_child',
+    );
+    const childOnly = ineligible(
+      'This offering accepts adult participants only.',
+      'participant_kind_not_permitted',
+    );
     const app = createRegistrationTestApp({
       routes: routes({
         'GET /offerings/{id}': { status: 200, body: offering({ kind: 'season' }) },
@@ -545,24 +585,28 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
       }),
     });
     render(<RegistrationIntentScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
-    const league = await screen.findByRole('radio', { name: /^Individual league entry/ });
-    await waitFor(() => expect(league).toBeChecked());
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Registration type' })).toHaveProp(
+        'accessibilityValue',
+        { text: 'Join as a player' },
+      ),
+    );
     fireEvent.press(await screen.findByRole('checkbox', { name: 'You (Robin). Eligible' }));
     expect(screen.getByRole('checkbox', { name: 'You (Robin). Eligible' })).toBeChecked();
 
-    fireEvent.press(screen.getByRole('radio', { name: /^Youth enrollment/ }));
+    await chooseType(YOUTH);
     const self = await screen.findByRole('checkbox', {
-      name: 'You (Robin). Not eligible. Youth enrollment is for children.. Choose an activity for this age.',
+      name: 'You (Robin). Not eligible. This registration type is for children.. Look for another activity that fits.',
     });
     // Blocked under youth: not ticked, cannot be ticked, and nothing to add yet.
     expect(self).toBeDisabled();
     expect(self).not.toBeChecked();
-    expect(screen.getByRole('button', { name: 'Add to your basket' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Add to cart' })).toBeDisabled();
 
     fireEvent.press(screen.getByRole('checkbox', { name: 'Ada. Eligible' }));
     await basketButtonReady();
     await act(async () => {
-      fireEvent.press(screen.getByRole('button', { name: 'Add to your basket' }));
+      fireEvent.press(screen.getByRole('button', { name: 'Add to cart' }));
     });
     await waitFor(() =>
       expect(mockRouter.push).toHaveBeenCalledWith(`/registration/basket/${IDS.basket}`),
@@ -597,21 +641,24 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
       }),
     });
     render(<RegistrationIntentScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
-    const membership = await screen.findByRole('radio', {
-      name: 'Membership. Join this membership. Checking whether memberships is turned on.',
-    });
-    expect(membership).toBeDisabled();
-    expect(membership).not.toBeChecked();
+    // One type, its switch not known yet: said, and nobody can be added under it.
+    expect(
+      await screen.findByLabelText(
+        'Registration type: Membership. Join this membership. Checking memberships.',
+      ),
+    ).toBeOnTheScreen();
+    expect(screen.queryByRole('checkbox', { name: 'Ada. Eligible' })).toBeNull();
     await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
-    expect(screen.queryByRole('button', { name: 'Add to your basket' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Add to cart' })).toBeNull();
 
     failing = false;
     await act(async () => {
       fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
     });
-    const ready = await screen.findByRole('radio', { name: 'Membership. Join this membership.' });
-    await waitFor(() => expect(ready).toBeChecked());
+    expect(
+      await screen.findByLabelText('Registration type: Membership. Join this membership.'),
+    ).toBeOnTheScreen();
     expect(await screen.findByRole('checkbox', { name: 'Ada. Eligible' })).not.toBeDisabled();
     expect(app.fake.requests.some((r) => r.route === '/baskets/{id}/lines')).toBe(false);
   });
@@ -668,7 +715,7 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
     });
     render(<RegistrationIntentScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
     expect(await screen.findByRole('header', { name: 'No one to register yet' })).toBeOnTheScreen();
-    fireEvent.press(screen.getByRole('button', { name: 'Open Account' }));
+    fireEvent.press(screen.getByRole('button', { name: 'Go to You' }));
     expect(mockRouter.push).toHaveBeenCalledWith('/account');
   });
 
@@ -686,12 +733,12 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
   it('offline: cannot start, and the choice is kept', async () => {
     const app = createRegistrationTestApp({ routes: routes() });
     render(<RegistrationIntentScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
-    fireEvent.press(await screen.findByRole('radio', { name: /^Youth enrollment/ }));
+    await chooseType(YOUTH);
     fireEvent.press(await screen.findByRole('checkbox', { name: 'Ada. Eligible' }));
     act(() => app.sources.setReachable(false));
-    expect(screen.getByRole('button', { name: 'Add to your basket' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Add to cart' })).toBeDisabled();
     expect(
-      screen.getByText('Adding to your basket needs a connection. Your choices are kept.'),
+      screen.getByText('Adding to your cart needs a connection. Your choices are kept.'),
     ).toBeOnTheScreen();
     expect(screen.getByRole('checkbox', { name: 'Ada. Eligible' })).toBeChecked();
   });
@@ -707,7 +754,8 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
     await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
-    expect(screen.queryByRole('radio')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Registration type' })).toBeNull();
+    expect(screen.queryByRole('checkbox')).toBeNull();
   });
 
   it('§4.10: options the API answers NOT_FOUND for read as not available, without the code', async () => {
@@ -720,6 +768,98 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
     render(<RegistrationIntentScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
     expect(await screen.findByLabelText('Registration not available')).toBeOnTheScreen();
     expect(screen.queryByText(/NOT_FOUND/)).toBeNull();
+  });
+
+  it("PA-11 ADR-008: the Who step shows the progress steps and a card per person with the API's eligibility inside it", async () => {
+    const app = createRegistrationTestApp({
+      routes: routes({
+        'GET /offerings/{id}/registration-options': optionsHandler({
+          availableIntents: ['youth'],
+          participants: [
+            { personId: IDS.childA, intents: [{ intent: 'youth', eligibility: eligible() }] },
+            {
+              personId: IDS.childB,
+              intents: [{ intent: 'youth', eligibility: ineligible() }],
+            },
+          ],
+        }),
+      }),
+    });
+    render(<RegistrationIntentScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
+    expect(await screen.findByRole('header', { name: "Who's going?" })).toBeOnTheScreen();
+    expect(screen.getByLabelText('Step 1 of 5, Who')).toBeOnTheScreen();
+    const ben = screen.getByTestId(`participant-${IDS.childB}`);
+    // The reasons and the alternative are written inside Ben's card, under his name.
+    // PA-11: in customer words, by the reason's code; the staff-only override is not offered.
+    for (const text of [
+      'Ben',
+      'Not eligible',
+      'Ages 9 to 12. Ben is 13.',
+      'Look for another activity that fits.',
+    ]) {
+      expect(within(ben).getByText(text)).toBeOnTheScreen();
+    }
+    expect(screen.queryByText(/override eligibility/)).toBeNull();
+    expect(screen.queryByText(/The participant is 13/)).toBeNull();
+    // The API's own words stay available in "Details for support".
+    await openSupportDetails(screen);
+    expect(
+      screen.getByText(
+        'Ben, above_maximum_age: The participant is 13 on 2026-09-01; this offering requires at least 9 and at most 12.',
+      ),
+    ).toBeOnTheScreen();
+    expect(
+      screen.getByText(
+        'Ben, option 2 (contact_staff): Staff with program authority may override eligibility with a recorded reason.',
+      ),
+    ).toBeOnTheScreen();
+    // Initials only, and hidden from screen readers: the card's name says who it is.
+    expect(within(ben).getByText('B', { includeHiddenElements: true })).toBeOnTheScreen();
+    expect(within(ben).queryByText('B')).toBeNull();
+    expect(ben).toBeDisabled();
+    await app.settle();
+  });
+
+  it('PA-11 ADR-008: the registration type is a sheet only when there is more than one choice', async () => {
+    const two = createRegistrationTestApp({
+      routes: routes({
+        'GET /offerings/{id}': { status: 200, body: offering({ kind: 'season' }) },
+        'GET /offerings/{id}/registration-options': optionsHandler({
+          availableIntents: ['individual_league', 'youth'],
+        }),
+      }),
+    });
+    const first = render(<RegistrationIntentScreen offeringId={IDS.offering} />, {
+      wrapper: two.wrapper,
+    });
+    const sheet = await openTypeSheet();
+    expect(sheet.getByRole('header', { name: 'Registration type' })).toBeOnTheScreen();
+    expect(sheet.getAllByRole('radio').map((r) => r.props.accessibilityLabel)).toEqual([
+      'Join as a player. Register one adult player; staff place individual players on a team.',
+      YOUTH,
+    ]);
+    await act(async () => {
+      fireEvent.press(sheet.getByRole('radio', { name: YOUTH }));
+    });
+    // Choosing closes the sheet; the button shows the choice.
+    expect(screen.queryByTestId('sheet')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Registration type' })).toHaveProp(
+      'accessibilityValue',
+      { text: 'Register a child' },
+    );
+    await two.settle();
+    first.unmount();
+
+    const one = createRegistrationTestApp({
+      routes: routes({
+        'GET /offerings/{id}/registration-options': optionsHandler({ availableIntents: ['youth'] }),
+      }),
+    });
+    render(<RegistrationIntentScreen offeringId={IDS.offering} />, { wrapper: one.wrapper });
+    expect(await screen.findByLabelText(`Registration type: ${YOUTH}`)).toBeOnTheScreen();
+    expect(screen.queryByRole('button', { name: 'Registration type' })).toBeNull();
+    expect(screen.queryByRole('radio')).toBeNull();
+    await one.settle();
   });
 
   it('asks a signed-out user to sign in and sends nothing', async () => {

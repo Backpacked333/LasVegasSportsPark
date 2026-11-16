@@ -6,7 +6,7 @@ import { screen } from '@testing-library/react-native';
 import { Image } from 'expo-image';
 import { Text } from 'react-native';
 import { renderSurface } from '../../testing/ui-surfaces';
-import { Artwork } from '../Artwork';
+import { Artwork, artworkKey } from '../Artwork';
 import { MotionProvider } from '../motion';
 import { classicTheme, legendsTheme } from '../theme';
 
@@ -55,6 +55,11 @@ describe('Artwork (ADR-008)', () => {
     const image = screen.UNSAFE_getByType(Image);
     expect(image.props.source).toBe(7);
     expect(image.props.contentFit).toBe('contain');
+    // ADR-008 performance: kept in memory, decoded at its drawn size, keyed for list recycling.
+    expect(image.props.cachePolicy).toBe('memory');
+    expect(image.props.allowDownscaling).toBe(true);
+    expect(image.props.recyclingKey).toBe('asset:7');
+    expect(artworkKey({ uri: 'asset:/artwork/a.webp' })).toBe('asset:/artwork/a.webp');
   });
 
   it('SPK-UX-009 reduced motion: appears at once without a provider, and fades in only with motion', async () => {

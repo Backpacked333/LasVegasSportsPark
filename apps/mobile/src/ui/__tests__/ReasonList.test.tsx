@@ -1,11 +1,9 @@
 /**
  * ReasonList (ADR-008, moved from the teams kit): eligibility and readiness reasons with who
  * resolves them (SPK-READY-003, SPK-CAP-004), each with a status in words and a glyph (SPK-UX-009),
- * a league-approval rule shown as pending, never as a denial (SCR-C-26). The teams kit re-exports
- * the same component.
+ * a league-approval rule shown as pending, never as a denial (SCR-C-26).
  */
 import { screen, within } from '@testing-library/react-native';
-import * as teamsKit from '../../features/teams/ui';
 import { renderUi } from '../../testing/ui-actions';
 import { ReasonList, reasonStatus } from '../ReasonList';
 
@@ -54,9 +52,5 @@ describe('ReasonList (ADR-008)', () => {
     await renderUi(<ReasonList reasons={[REASONS[1]!]} />);
     expect(screen.getByLabelText('League approval required')).toBeOnTheScreen();
     expect(screen.queryByLabelText('Blocking')).toBeNull();
-  });
-
-  it('the teams kit re-exports it', () => {
-    expect(teamsKit.ReasonList).toBe(ReasonList);
   });
 });

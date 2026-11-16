@@ -34,6 +34,7 @@ import {
 import { formatInstantIn } from '../../../features/money/time-zone';
 import { mePermissions } from '../../../testing/test-app';
 import { MySessionPackagesScreen } from '../MySessionPackagesScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 jest.mock('../../../features/today/device-time-zone', () => ({ deviceTimeZone: () => 'UTC' }));
 
@@ -78,14 +79,16 @@ const bookings = (app: ReturnType<typeof createTestApp>) =>
 
 async function chooseSession() {
   const card = await screen.findByTestId(`package-${LIST_IDS.package}`);
-  fireEvent.press(within(card).getByRole('button', { name: 'Book a session with this package' }));
+  fireEvent.press(
+    within(card).getByRole('button', { name: 'Book a session with this class pack' }),
+  );
   fireEvent.press(await screen.findByRole('radio', { name: /^Open skate/ }));
   fireEvent.press(await screen.findByRole('radio', { name: /^Week 4/ }));
 }
 
 async function book() {
   await act(async () => {
-    fireEvent.press(screen.getByRole('button', { name: 'Book with this package' }));
+    fireEvent.press(screen.getByRole('button', { name: 'Book with this class pack' }));
   });
 }
 
@@ -135,7 +138,7 @@ describe('Book a session with a package (SCR-C-35, ENR-11)', () => {
     const card = await screen.findByTestId(`package-${LIST_IDS.package}`);
     await screen.findByTestId('state-turned-off');
     expect(
-      within(card).queryByRole('button', { name: 'Book a session with this package' }),
+      within(card).queryByRole('button', { name: 'Book a session with this class pack' }),
     ).toBeNull();
   });
 
@@ -148,7 +151,9 @@ describe('Book a session with a package (SCR-C-35, ENR-11)', () => {
     });
     await screen.findByTestId(`package-${LIST_IDS.package}`);
     await screen.findByTestId(`package-${LIST_IDS.packageB}`);
-    expect(screen.queryByRole('button', { name: 'Book a session with this package' })).toBeNull();
+    expect(
+      screen.queryByRole('button', { name: 'Book a session with this class pack' }),
+    ).toBeNull();
   });
 
   it('SPK-COND-002: the last session taken at the same time reads "Not available: no sessions left"', async () => {
@@ -166,9 +171,9 @@ describe('Book a session with a package (SCR-C-35, ENR-11)', () => {
     await book();
     expect(await screen.findByTestId('package-booking-refused')).toHaveProp(
       'accessibilityLabel',
-      'Not available: no sessions left on this package',
+      'Not available: no sessions left in this class pack',
     );
-    expect(screen.getByRole('button', { name: 'Book with this package' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Book with this class pack' })).toBeDisabled();
   });
 
   it('ELIGIBILITY_FAILED: a session the package does not cover shows the API reasons and code', async () => {
@@ -196,6 +201,7 @@ describe('Book a session with a package (SCR-C-35, ENR-11)', () => {
     expect(
       within(refused).getByText('The package applies only to the offerings and programs it names.'),
     ).toBeOnTheScreen();
+    await openSupportDetails(within(refused));
     expect(within(refused).getByText('Error code: ELIGIBILITY_FAILED')).toBeOnTheScreen();
   });
 
@@ -206,7 +212,8 @@ describe('Book a session with a package (SCR-C-35, ENR-11)', () => {
     });
     await chooseSession();
     await book();
-    expect(await screen.findByLabelText('Session packages turned off')).toBeOnTheScreen();
+    // The refused command's own label comes from the API client's capability list (unchanged).
+    expect(await screen.findByLabelText('Class packs turned off')).toBeOnTheScreen();
     expect(screen.queryByLabelText('Not available')).toBeNull();
   });
 
@@ -247,7 +254,7 @@ describe('Book a session with a package (SCR-C-35, ENR-11)', () => {
     const app = renderPackages();
     await chooseSession();
     act(() => app.sources.setReachable(false));
-    expect(screen.getByRole('button', { name: 'Book with this package' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Book with this class pack' })).toBeDisabled();
     expect(screen.getByText('Needs a connection.')).toBeOnTheScreen();
     expect(bookings(app)).toHaveLength(0);
   });
@@ -257,7 +264,7 @@ describe('Book a session with a package (SCR-C-35, ENR-11)', () => {
     await chooseSession();
     fireEvent.press(screen.getByRole('button', { name: 'Not now' }));
     expect(
-      await screen.findByRole('button', { name: 'Book a session with this package' }),
+      await screen.findByRole('button', { name: 'Book a session with this class pack' }),
     ).toBeOnTheScreen();
     expect(bookings(app)).toHaveLength(0);
   });

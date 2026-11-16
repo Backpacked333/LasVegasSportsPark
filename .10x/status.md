@@ -1,5 +1,31 @@
 # Status
 
+## Feature: `customer-redesign` (customer app visual system v2)
+
+Branch: `claude/jolly-johnson-gd61vv`. Part 1 merged as pull request 26; part 2 (journeys, copy
+guard, finish) is on the branch. Decision records: ADR-008 and PA-11 (DEC-107), both **Proposed**.
+
+| Phase                        | State    | Notes                                                                |
+| ---------------------------- | -------- | -------------------------------------------------------------------- |
+| Part 1: tokens, library, art | Complete | Merged (PR 26)                                                       |
+| 6a Copy guard                | Complete | `src/copy`; the exceptions list is empty                             |
+| 5A/5B Journeys J1 to J7      | Complete | Every customer screen on `src/ui`; no kit left                       |
+| 3.3 + 6b Clean-up            | Complete | One `CommandError`, plain pending words, old button variants removed |
+| 7a Finish                    | Complete | Screenshot review fixes, motion, images, focus, 200% text, docs      |
+| 7b Screenshots to the owner  | Next     | Full run, both themes and sizes, before/after sheet                  |
+
+Finish pass (7a), 2026-11-16: the fifteen problems of the screenshot review fixed (see
+`decisions/sde/customer-redesign.md`); 177 suites, 2,150 tests; both exports pass the release
+bundle check. Design doc: `docs/package-a/customer-visual-system.md`.
+
+Blockers: none in the code. Owner decisions and device checks: DEC-107 (labels and wording),
+DEC-019 (paying in the app), DEC-023 (pass symbol); every customer screen on phones (VoiceOver,
+TalkBack, large text, glass, haptics, sheets, pickers). Nothing was run on a device.
+
+---
+
+## Feature: `glass-demo-amendments`
+
 Feature: `glass-demo-amendments` · Branch: `claude/jolly-johnson-gd61vv` · Pull request: 21
 
 | Phase            | State    | Notes                                                       |

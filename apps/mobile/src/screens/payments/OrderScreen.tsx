@@ -30,7 +30,6 @@ import { useApiRecords } from '../../features/money/records';
 import { moneyRoutes, param } from '../../features/money/routes';
 import { SecondaryRead } from '../../features/money/SecondaryRead';
 import { obligationStatus, paymentStatus, type PaymentAttempt } from '../../features/money/status';
-import { Body, ButtonRow, Section } from '../../features/money/ui';
 import { useNow } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
 import { Button } from '../../ui/Button';
@@ -41,14 +40,19 @@ import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { NotFoundScreen } from '../not-found/NotFoundScreen';
 import { InstallmentsSection, OrderSection } from './OrderSections';
+import { Text } from '../../ui/Text';
+import { Section } from '../../ui/Section';
+import { Actions, usePullToRefresh } from '../../features/money/surfaces';
+import { useKnownFacilityZone } from '../../features/today/known-zone';
 
 function OrderBalances({ order }: { order: Order }) {
   const router = useRouter();
   const now = useNow();
+  const zone = useKnownFacilityZone().zone;
   const records = useApiRecords('/obligations/{id}', order.obligationIds);
   if (order.obligationIds.length === 0) return null;
   return (
-    <Section title="Balances of this order" testID="order-balances">
+    <Section title="Amounts due on this order" testID="order-balances">
       <View accessibilityRole="list">
         {order.obligationIds.map((id) => {
           const record = records[id];
@@ -67,9 +71,9 @@ function OrderBalances({ order }: { order: Order }) {
               key={id}
               title={obligation.description}
               detail={obligationAmounts(obligation)}
-              status={live ? liveAttemptStatus(live) : obligationStatus(obligation, now)}
+              status={live ? liveAttemptStatus(live) : obligationStatus(obligation, now, zone)}
               onPress={() => router.push(moneyRoutes.obligation(id))}
-              accessibilityHint="Opens the balance and its payment"
+              accessibilityHint="Opens the amount due and its payment"
               testID={`order-balance-${id}`}
             />
           );
@@ -88,17 +92,17 @@ function OrderLivePayment({ payment }: { payment: PaymentAttempt }) {
   return (
     <Section title="A payment is on its way" testID="order-live-payment">
       <StatusBadge {...paymentStatus(payment.status)} />
-      <Body>
+      <Text variant="body">
         {`A payment of ${formatMoney(payment.amountMinor, payment.currency)} started ${formatInstant(payment.createdAt)} has no final outcome yet. Do not pay again.`}
-      </Body>
-      <ButtonRow>
+      </Text>
+      <Actions>
         <Button
           label="Open the payment"
           variant="secondary"
           onPress={() => router.push(moneyRoutes.payment(payment.id))}
           accessibilityHint="Shows the payment's state; it never pays again"
         />
-      </ButtonRow>
+      </Actions>
     </Section>
   );
 }
@@ -132,8 +136,9 @@ function OrderDetail({ order }: { order: Order }) {
 
 export function OrderScreen({ orderId }: { orderId: string }) {
   const order = useApiQuery({ path: '/orders/{id}', request: { path: { id: orderId } } });
+  const { refreshing, onRefresh } = usePullToRefresh();
   return (
-    <Screen>
+    <Screen onRefresh={onRefresh} refreshing={refreshing}>
       <RequireSession what="this order">
         <QueryBoundary
           query={order}

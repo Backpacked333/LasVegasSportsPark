@@ -27,8 +27,8 @@ included day, status by term, when booking with a membership is offered, refusal
 `included-offerings.ts` (the activities a membership names), `receipt-model.ts` (receipt status,
 tenders, returns), `time.ts`
 (facility zones of offerings and facilities), `people.ts` ("You" or the given name),
-`routes.ts` (`packageGRoutes`, `routeId`). `PackageGPlaceholder.tsx` and `testing.tsx` remain for
-any screen still a placeholder.
+`routes.ts` (`packageGRoutes`, `routeId`). Every Package G screen is built, so the placeholder
+screen and its shared test cases are gone.
 
 ## Behaviour
 

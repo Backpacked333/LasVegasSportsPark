@@ -43,7 +43,7 @@ makeups. Those screens, their states and what stays open are in
 - A command without a definite answer (`mayHaveTakenEffect`, the shared api-client predicate: a
   lost connection or a timeout after sending, IDEMPOTENCY_IN_PROGRESS, INTERNAL_ERROR or another
   5xx, a success status whose answer could not be read) reads "No answer yet" with "Check again"
-  under the same key, never "Something went wrong" (`CommandFailure.tsx`; bookings,
+  under the same key, never "Something went wrong" (`ui/CommandError`, money wording; bookings,
   cancellations, renewals, transfers, session bookings, makeup redemptions). One that committed with
   its answer lost (IDEMPOTENCY_OUTCOME_UNAVAILABLE) reads "This may already have been done" with
   "Reload", and the key is kept, so booking the same time again is not a second booking. A failed

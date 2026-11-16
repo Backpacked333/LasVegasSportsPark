@@ -34,18 +34,13 @@ import {
   obligationStatus,
 } from '../../features/teams/status';
 import { TeamFrame } from '../../features/teams/TeamFrame';
-import {
-  Body,
-  CommandFailure,
-  Detail,
-  FieldError,
-  OfflineNotice,
-  RadioGroup,
-  RadioRow,
-  Section,
-  TextField,
-  Title,
-} from '../../features/teams/ui';
+import { ChoiceList } from '../../ui/ChoiceList';
+import { CommandError } from '../../ui/CommandError';
+import { AppHeader } from '../../ui/AppHeader';
+import { FieldValue, TextField } from '../../ui/Field';
+import { OfflineNotice } from '../../ui/OfflineNotice';
+import { Section } from '../../ui/Section';
+import { Text } from '../../ui/Text';
 import { useConnectivity, useNow } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { ListRow } from '../../ui/ListRow';
@@ -104,30 +99,26 @@ function RequestContribution({
   const name = (id: string) => players.find((p) => p.personId === id)?.displayName ?? 'the player';
   return (
     <View style={styles.form} testID={`request-contribution-${obligation.id}`}>
-      <Body>
-        A contribution request asks one player to pay part of this team obligation. It does not add
-        to the team debt and gives you no access to the player&apos;s account: each player pays
-        their own contribution.
-      </Body>
-      <RadioGroup label="Player" error={playerError}>
-        {players.map((p) => (
-          <RadioRow
-            key={p.personId}
-            label={p.displayName}
-            checked={personId === p.personId}
-            onSelect={() => setPersonId(p.personId)}
-          />
-        ))}
-      </RadioGroup>
-      {/* Announced when it appears, like every field error (SPK-UX-009). */}
-      <FieldError error={playerError} testID="contribution-player-error" />
+      <Text variant="body">
+        Ask one player to pay a share of this team fee. It does not add to what the team owes and
+        gives you no access to the player&apos;s account: each player pays their own share.
+      </Text>
+      <ChoiceList
+        mode="single"
+        label="Player"
+        error={playerError}
+        options={players.map((p) => ({ value: p.personId, label: p.displayName }))}
+        value={personId}
+        onChange={setPersonId}
+        testID="contribution-player"
+      />
       <TextField
         label={`Amount (${currency})`}
         value={amount}
         onChangeText={setAmount}
         keyboardType="decimal-pad"
         error={amountError}
-        hint={`Remaining on the team obligation: ${formatMoney(obligation.totals.remainingMinor, currency)}`}
+        hint={`Team amount still due: ${formatMoney(obligation.totals.remainingMinor, currency)}`}
       />
       <TextField label="Message (optional)" value={message} onChangeText={setMessage} multiline />
       {offline ? <OfflineNotice what="Requesting a contribution" /> : null}
@@ -144,7 +135,8 @@ function RequestContribution({
         />
       ) : null}
       {request.error ? (
-        <CommandFailure
+        <CommandError
+          wording="team"
           error={request.error}
           onRetry={send}
           unavailableText="Requesting contributions is not available to you for this team."
@@ -167,14 +159,16 @@ function ObligationSection({
   return (
     <Section title={obligation.description} testID={`obligation-${obligation.id}`}>
       <StatusBadge {...obligationStatus(obligation.status)} />
-      <Detail label="Billing" value={OBLIGATION_MODE_LABELS[obligation.mode]} />
-      <Detail label="Due" value={formatDay(obligation.dueAt)} />
+      <FieldValue layout="inline" label="Billing" value={OBLIGATION_MODE_LABELS[obligation.mode]} />
+      <FieldValue layout="inline" label="Due" value={formatDay(obligation.dueAt)} />
       <ObligationTotals totals={obligation.totals} />
       {obligation.contributions ? (
         <View accessibilityRole="list" testID={`contributions-${obligation.id}`}>
-          <Body muted>Requested contributions (amounts and status only)</Body>
+          <Text variant="caption" tone="muted">
+            Requested contributions (amounts and status only)
+          </Text>
           {obligation.contributions.length === 0 ? (
-            <Body>No contributions requested yet.</Body>
+            <Text variant="body">No contributions requested yet.</Text>
           ) : (
             obligation.contributions.map((c) => (
               <ListRow
@@ -207,20 +201,20 @@ function ContributionsContent({ workspace, viewer }: { workspace: Workspace; vie
     presentationForError(obligations.error) === 'unavailable';
   return (
     <View>
-      <Title>{`${workspace.team.name}: contributions`}</Title>
+      <AppHeader title={`${workspace.team.name}: contributions`} />
       {restricted ? (
         <StateView
           variant="unavailable"
           title="Team totals not available"
-          description="The team's totals are shown to the captain and the responsible payer. A contribution requested from you is shown from its request, with your own payment only."
+          description="The team's totals are shown to the captain and the responsible payer. A share asked of you is shown on its own page, with your own payment only."
         />
       ) : (
         <QueryBoundary
           query={obligations}
-          label="the team's obligations"
+          label="the team's fees"
           isEmpty={(page) => page.items.length === 0}
           empty={{
-            title: 'No team obligation',
+            title: 'No team fee',
             description:
               'Players are billed individually for this team, or the league has not recorded the team fee yet.',
           }}

@@ -45,18 +45,7 @@ import { useState } from 'react';
 import { Text, View } from 'react-native';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
-import { CommandFailure } from '../../features/money/CommandFailure';
-import {
-  Body,
-  ButtonRow,
-  Caption,
-  ChoiceGroup,
-  ChoiceRow,
-  Field,
-  FieldError,
-  Section,
-  TextField,
-} from '../../features/money/ui';
+import { CommandError } from '../../ui/CommandError';
 import {
   bookableTimes,
   bookingKindOf,
@@ -87,6 +76,7 @@ import {
   type DisplayZone,
 } from '../../features/today/time';
 import { useApp, useConnectivity, useNow } from '../../providers/AppProviders';
+import { pendingMessage, pendingMessageFor } from '../../copy/pending';
 import { RequireSession } from '../../session/RequireSession';
 import { Button } from '../../ui/Button';
 import { CapabilityGate } from '../../ui/CapabilityGate';
@@ -99,6 +89,11 @@ import { StatusBadge } from '../../ui/StatusBadge';
 import { makeStyles, spacing, type } from '../../ui/theme';
 import { NotFoundScreen } from '../not-found/NotFoundScreen';
 import { BookingForms } from './BookingForms';
+import { Section } from '../../ui/Section';
+import { FieldValue as Field } from '../../ui/Field';
+import { Text as UiText } from '../../ui/Text';
+import { ChoiceCard, ChoiceGroup } from '../../ui/ChoiceList';
+import { FieldErrorText, TextField } from '../../ui/Field';
 
 type Offering = Schema<'Offering'>;
 
@@ -159,6 +154,7 @@ function TermsBlock({ terms }: { terms: BookingTerms }) {
           subject="Reserving the time or taking a deposit before approval"
           decisions={['DEC-029', 'DEC-030']}
           owner="Product and operations; Finance for refund rules"
+          message={pendingMessageFor(['DEC-029', 'DEC-030'])}
         />
       ) : null}
     </Section>
@@ -180,20 +176,22 @@ function Outcome({ booking, zone }: { booking: Booking; zone: DisplayZone }) {
         <Field label="Weeks" value={String(booking.occurrences.length)} />
       ) : null}
       {booking.status === 'requested' ? (
-        <Body>
+        <UiText variant="body">
           Nothing is reserved or charged until staff approve your request. The decision appears
           under Rentals and parties.
-        </Body>
+        </UiText>
       ) : null}
       {outstandingText(booking.outstanding).map((text) => (
-        <Caption key={text}>{text}</Caption>
+        <UiText variant="caption" tone="muted" key={text}>
+          {text}
+        </UiText>
       ))}
-      <ButtonRow>
+      <View style={buttonRow}>
         {booking.status === 'held' && basketId ? (
           <Button
-            label="Go to basket"
+            label="Go to cart"
             onPress={() => router.push(registrationRoutes.basket(basketId))}
-            accessibilityHint="Opens the basket where this booking is paid"
+            accessibilityHint="Opens the cart where this booking is paid"
           />
         ) : null}
         <Button
@@ -201,7 +199,7 @@ function Outcome({ booking, zone }: { booking: Booking; zone: DisplayZone }) {
           variant={booking.status === 'held' ? 'secondary' : 'primary'}
           onPress={() => router.push(packageGRoutes.booking(booking.id))}
         />
-      </ButtonRow>
+      </View>
     </Section>
   );
 }
@@ -371,6 +369,9 @@ function BookingForm({
             }}
             error={errors.duration}
             testID="booking-duration"
+            errorGlyph="▲"
+            errorAnnouncement="message"
+            autoCorrect
           />
         ) : availability.data ? (
           <Field label="Length" value={`${availability.data.durationMinutes} minutes`} />
@@ -388,10 +389,15 @@ function BookingForm({
           <Button label="Later day" variant="secondary" onPress={() => changeDay(1)} />
         </View>
         {zone.facility ? (
-          <Caption>{`Times are in the facility's time zone (${zoneAbbreviation(dayStart, zone.zone)}).`}</Caption>
+          <UiText
+            variant="caption"
+            tone="muted"
+          >{`Times are in the facility's time zone (${zoneAbbreviation(dayStart, zone.zone)}).`}</UiText>
         ) : null}
         {kind === 'rental' && duration === null ? (
-          <Caption>Enter how long to see the free times.</Caption>
+          <UiText variant="caption" tone="muted">
+            Enter how long to see the free times.
+          </UiText>
         ) : availability.data === undefined ? (
           availability.error ? (
             <QueryErrorView
@@ -426,16 +432,19 @@ function BookingForm({
           <>
             {timesNotice}
             {/* A required choice: its error is each time's hint too (SPK-UX-009). */}
-            <ChoiceGroup label="Start time" error={errors.time} layout="grid">
+            <ChoiceGroup label="Start time" error={errors.time} layout="tile">
               {times.map((t) => (
-                <ChoiceRow
+                <ChoiceCard
                   key={t.start}
-                  mode="radio"
-                  tile
-                  shortLabel={`${formatTime(t.start, zone.zone)} to ${formatTime(t.end, zone.zone)}`}
-                  label={formatRange(t.start, t.end, zone.zone)}
-                  detail={`${t.resources.length} free: ${t.resources.map((r) => resourceName(r.name)).join(', ')}`}
+                  option={{
+                    value: formatRange(t.start, t.end, zone.zone),
+                    label: formatRange(t.start, t.end, zone.zone),
+                    shortLabel: `${formatTime(t.start, zone.zone)} to ${formatTime(t.end, zone.zone)}`,
+                    description: `${t.resources.length} free: ${t.resources.map((r) => resourceName(r.name)).join(', ')}`,
+                  }}
+                  mode="single"
                   checked={start === t.start}
+                  layout="tile"
                   onPress={() => {
                     setStart(t.start);
                     setChosen([]);
@@ -446,30 +455,30 @@ function BookingForm({
             </ChoiceGroup>
           </>
         )}
-        <FieldError error={errors.time} testID="booking-time-error" />
+        <FieldErrorText error={errors.time} testID="booking-time-error" glyph="▲" />
       </Section>
 
       {time && resourceCount !== null ? (
         <Section title="What to reserve" testID="booking-resources">
-          <Caption>
+          <UiText variant="caption" tone="muted">
             {`This ${kind} reserves ${resourceCount} ${resourceCount === 1 ? 'space' : 'spaces'}. Choose from those free at ${formatWhen(time.start, zone.zone)}.`}
-          </Caption>
+          </UiText>
           <ChoiceGroup
             label="Spaces to reserve"
             role={resourceCount === 1 ? 'radiogroup' : 'list'}
             error={errors.resources}
           >
             {time.resources.map((r) => (
-              <ChoiceRow
+              <ChoiceCard
                 key={r.resourceId}
-                mode={resourceCount === 1 ? 'radio' : 'checkbox'}
-                label={resourceName(r.name)}
+                option={{ value: resourceName(r.name), label: resourceName(r.name) }}
+                mode={resourceCount === 1 ? 'single' : 'multiple'}
                 checked={chosen.includes(r.resourceId)}
                 onPress={() => toggleResource(r.resourceId)}
               />
             ))}
           </ChoiceGroup>
-          <FieldError error={errors.resources} testID="booking-resources-error" />
+          <FieldErrorText error={errors.resources} testID="booking-resources-error" glyph="▲" />
         </Section>
       ) : null}
 
@@ -485,14 +494,20 @@ function BookingForm({
             }}
             error={errors.guests}
             testID="booking-guests"
+            errorGlyph="▲"
+            errorAnnouncement="message"
+            autoCorrect
           />
         </Section>
       ) : (
         <Section title="Repeat">
-          <ChoiceRow
-            mode="checkbox"
-            label="Repeat every week"
-            detail="Same time and spaces each week"
+          <ChoiceCard
+            option={{
+              value: 'Repeat every week',
+              label: 'Repeat every week',
+              description: 'Same time and spaces each week',
+            }}
+            mode="multiple"
             checked={repeat}
             onPress={() => {
               setRepeat(!repeat);
@@ -511,32 +526,36 @@ function BookingForm({
                 }}
                 error={errors.weeks}
                 testID="booking-weeks"
+                errorGlyph="▲"
+                errorAnnouncement="message"
+                autoCorrect
               />
-              <Caption>
+              <UiText variant="caption" tone="muted">
                 Only the first week's time is shown free here; every week is checked when you book.
-              </Caption>
+              </UiText>
             </>
           ) : null}
         </Section>
       )}
 
       <Section title={terms.confirmationMode === 'request' ? 'Send the request' : 'Book'}>
-        <Body>
+        <UiText variant="body">
           {terms.confirmationMode === 'request'
             ? 'Staff review your request. Nothing is reserved or charged until they approve it.'
-            : 'The time is held for you when you book. You then pay in your basket, which shows the price, taxes and fees.'}
-        </Body>
+            : 'The time is saved for you when you book. You then pay in your cart, which shows the price, taxes and fees.'}
+        </UiText>
         {conflicts.length > 0 ? (
           <View accessibilityRole="list" accessibilityLabel="Times that are not free">
             {conflicts.map((c) => (
-              <Caption key={`${c.occurrenceStart}-${c.resourceId}`}>
+              <UiText variant="caption" tone="muted" key={`${c.occurrenceStart}-${c.resourceId}`}>
                 {`▲ Not free: ${formatWhen(c.occurrenceStart, zone.zone)}, ${resourceName(resourceNames.get(c.resourceId) ?? null)}`}
-              </Caption>
+              </UiText>
             ))}
           </View>
         ) : null}
         {failure ? (
-          <CommandFailure
+          <CommandError
+            wording="money"
             error={failure}
             what="the booking"
             onRetry={() => void submit()}
@@ -548,8 +567,12 @@ function BookingForm({
             }}
           />
         ) : null}
-        {offline ? <Caption>Booking needs a connection.</Caption> : null}
-        <ButtonRow>
+        {offline ? (
+          <UiText variant="caption" tone="muted">
+            Booking needs a connection.
+          </UiText>
+        ) : null}
+        <View style={buttonRow}>
           <Button
             label={terms.confirmationMode === 'request' ? 'Send request' : 'Book now'}
             onPress={() => void submit()}
@@ -558,10 +581,10 @@ function BookingForm({
             accessibilityHint={
               terms.confirmationMode === 'request'
                 ? 'Sends the request to staff; nothing is reserved or charged yet'
-                : 'Holds the time and opens the payment step in your basket'
+                : 'Saves the time and opens the payment step in your cart'
             }
           />
-        </ButtonRow>
+        </View>
       </Section>
     </View>
   );
@@ -642,9 +665,10 @@ function OfferingBooking({ offeringId }: { offeringId: string }) {
                   <TermsThenForm offering={o} kind={kind} termsId={o.bookingTermsPolicyVersionId} />
                 ) : (
                   <StateView
-                    variant="unavailable"
-                    title="Not bookable yet"
-                    description="This activity has no approved booking terms yet (POL-040), so it cannot be booked. The front desk can help."
+                    variant="pending-decision"
+                    subject="Booking this activity in the app"
+                    decisions={['POL-040']}
+                    message={pendingMessage('POL-040')}
                   />
                 )}
               </CapabilityGate>
@@ -680,3 +704,5 @@ const useStyles = makeStyles(({ colors }) => ({
   dayRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, flexWrap: 'wrap' },
   day: { ...type.title, fontSize: 22, lineHeight: 26, color: colors.text, flexShrink: 1 },
 }));
+
+const buttonRow = { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm } as const;

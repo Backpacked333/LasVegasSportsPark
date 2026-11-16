@@ -67,17 +67,13 @@ import {
   rosterMemberStatus,
 } from '../../features/teams/status';
 import { CaptainOnly, TeamFrame } from '../../features/teams/TeamFrame';
-import {
-  Body,
-  ButtonRow,
-  CommandFailure,
-  OfflineNotice,
-  RadioGroup,
-  RadioRow,
-  Section,
-  TextField,
-  Title,
-} from '../../features/teams/ui';
+import { TextField } from '../../ui/Field';
+import { ChoiceList } from '../../ui/ChoiceList';
+import { CommandError } from '../../ui/CommandError';
+import { AppHeader } from '../../ui/AppHeader';
+import { OfflineNotice } from '../../ui/OfflineNotice';
+import { Section } from '../../ui/Section';
+import { Text } from '../../ui/Text';
 import { useKeyedCommands } from '../../features/teams/useKeyedCommands';
 import { useConnectivity, useNow } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
@@ -86,6 +82,8 @@ import { QueryBoundary } from '../../ui/QueryBoundary';
 import { SecretWithheld } from '../../ui/SecretWithheld';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { spacing } from '../../ui/theme';
+import { pendingMessage } from '../../copy/pending';
+import { SupportDetails } from '../../ui/SupportDetails';
 
 type RosterMember = Schema<'RosterMember'>;
 type TeamInvitation = Schema<'TeamInvitation'>;
@@ -160,9 +158,10 @@ function InviteForm({ workspace }: { workspace: Workspace }) {
 
   return (
     <Section title="Invite players" testID="invite-form">
-      <Body muted>
-        {`An invitation asks one person to join the ${workspace.team.name} roster for ${workspace.season.name}. It records you as the inviter, grants nothing until it is accepted, and expires on the date the service sets under the league's invitation policy (POL-044, still being decided).`}
-      </Body>
+      <Text variant="caption" tone="muted">
+        {`An invitation asks one person to join the ${workspace.team.name} roster for ${workspace.season.name}. It records you as the inviter and grants nothing until it is accepted. ${pendingMessage('POL-044')}`}
+      </Text>
+      <SupportDetails decisions={['POL-044']} />
       {recipients.map((recipient, index) => {
         const state = invite.states[recipient.key];
         const label = `Recipient ${index + 1}`;
@@ -179,18 +178,16 @@ function InviteForm({ workspace }: { workspace: Workspace }) {
         const localError = attempted ? recipientError(recipient) : null;
         return (
           <View key={recipient.key} style={styles.recipient} testID={`recipient-${index + 1}`}>
-            <RadioGroup label={`${label}: contact by`}>
-              <RadioRow
-                label="Email"
-                checked={recipient.kind === 'email'}
-                onSelect={() => update(recipient.key, { kind: 'email' })}
-              />
-              <RadioRow
-                label="Phone"
-                checked={recipient.kind === 'phone'}
-                onSelect={() => update(recipient.key, { kind: 'phone' })}
-              />
-            </RadioGroup>
+            <ChoiceList
+              mode="single"
+              label={`${label}: contact by`}
+              options={[
+                { value: 'email' as const, label: 'Email' },
+                { value: 'phone' as const, label: 'Phone' },
+              ]}
+              value={recipient.kind}
+              onChange={(kind) => update(recipient.key, { kind })}
+            />
             <TextField
               label={`${label}: ${recipient.kind === 'email' ? 'email address' : 'phone number'}`}
               value={recipient.value}
@@ -199,7 +196,11 @@ function InviteForm({ workspace }: { workspace: Workspace }) {
               autoCapitalize="none"
               error={localError}
             />
-            {state?.status === 'processing' ? <Body muted>Sending…</Body> : null}
+            {state?.status === 'processing' ? (
+              <Text variant="caption" tone="muted">
+                Sending…
+              </Text>
+            ) : null}
             {state?.status === 'failed' && withheld(recipient.key) ? (
               <SecretWithheld
                 error={state.error}
@@ -214,7 +215,8 @@ function InviteForm({ workspace }: { workspace: Workspace }) {
                 testID={`recipient-${index + 1}-withheld`}
               />
             ) : state?.status === 'failed' ? (
-              <CommandFailure
+              <CommandError
+                wording="team"
                 error={state.error}
                 onRetry={() => void sendOne(recipient)}
                 unavailableText="Inviting players is not available to you for this team."
@@ -242,7 +244,7 @@ function InviteForm({ workspace }: { workspace: Workspace }) {
         hint="Sent with every invitation in this batch."
       />
       {offline ? <OfflineNotice what="Inviting players" /> : null}
-      <ButtonRow>
+      <View style={buttonRowStyles.row}>
         <Button
           label="Add another recipient"
           variant="secondary"
@@ -260,7 +262,7 @@ function InviteForm({ workspace }: { workspace: Workspace }) {
           disabled={offline || pendingCount === 0}
           busy={sending}
         />
-      </ButtonRow>
+      </View>
     </Section>
   );
 }
@@ -306,8 +308,8 @@ function PendingInvitation({
       />
       {!canRevoke ? null : confirming ? (
         <>
-          <Body>{`Revoke the invitation for ${recipient}? Its link stops working.`}</Body>
-          <ButtonRow>
+          <Text variant="body">{`Revoke the invitation for ${recipient}? Its link stops working.`}</Text>
+          <View style={buttonRowStyles.row}>
             <Button
               label="Revoke invitation"
               onPress={submit}
@@ -322,7 +324,7 @@ function PendingInvitation({
                 setConfirming(false);
               }}
             />
-          </ButtonRow>
+          </View>
         </>
       ) : (
         <Button
@@ -333,7 +335,8 @@ function PendingInvitation({
         />
       )}
       {revoke.error ? (
-        <CommandFailure
+        <CommandError
+          wording="team"
           error={revoke.error}
           onRetry={submit}
           onReload={() => {
@@ -396,7 +399,7 @@ function JoinRequestItem({
         status={{ tone: 'info', label: 'Requested to join' }}
       />
       {canDecide ? (
-        <ButtonRow>
+        <View style={buttonRowStyles.row}>
           <Button
             label={`Approve ${name}`}
             onPress={() => submit('approve')}
@@ -410,10 +413,11 @@ function JoinRequestItem({
             busy={decide.isProcessing && lastDecision === 'decline'}
             disabled={reachable === false || decide.isProcessing}
           />
-        </ButtonRow>
+        </View>
       ) : null}
       {decide.error ? (
-        <CommandFailure
+        <CommandError
+          wording="team"
           error={decide.error}
           onRetry={() => lastDecision && submit(lastDecision)}
           unavailableText="Deciding this request is not available to you."
@@ -439,7 +443,9 @@ export function RosterList({ members, now }: { members: RosterMember[]; now: Dat
   const group = (title: string, list: RosterMember[], testID: string) =>
     list.length === 0 ? null : (
       <View accessibilityRole="list" testID={testID}>
-        <Body muted>{title}</Body>
+        <Text variant="caption" tone="muted">
+          {title}
+        </Text>
         {list.map((m) => (
           <ListRow
             key={m.id}
@@ -451,7 +457,7 @@ export function RosterList({ members, now }: { members: RosterMember[]; now: Dat
       </View>
     );
   if (members.length === 0) {
-    return <Body>No roster members yet. Invite players above.</Body>;
+    return <Text variant="body">No roster members yet. Invite players above.</Text>;
   }
   return (
     <View style={styles.groups}>
@@ -482,17 +488,17 @@ function RosterContent({
   const r = workspace.readiness;
   return (
     <View>
-      <Title>{`${workspace.team.name}: roster`}</Title>
+      <AppHeader title={`${workspace.team.name}: roster`} />
       {viewer.can(TEAM_ACTIONS.invite) ? (
         <InviteForm workspace={workspace} />
       ) : (
         <Section title="Invite players">
-          <Body>{notAvailableNow('Inviting players')}</Body>
+          <Text variant="body">{notAvailableNow('Inviting players')}</Text>
         </Section>
       )}
       <Section title="Open invitations">
         {(workspace.pendingInvitations ?? []).length === 0 ? (
-          <Body>No open invitations.</Body>
+          <Text variant="body">No open invitations.</Text>
         ) : (
           (workspace.pendingInvitations ?? []).map((invitation) => (
             <PendingInvitation
@@ -507,7 +513,7 @@ function RosterContent({
       </Section>
       <Section title="Join requests">
         {(workspace.pendingJoinRequests ?? []).length === 0 ? (
-          <Body>No join requests waiting.</Body>
+          <Text variant="body">No join requests waiting.</Text>
         ) : (
           (workspace.pendingJoinRequests ?? []).map((request) => (
             <JoinRequestItem
@@ -583,4 +589,9 @@ const styles = StyleSheet.create({
   recipient: { gap: spacing.sm, paddingVertical: spacing.sm },
   item: { gap: spacing.xs, paddingVertical: spacing.xs },
   groups: { gap: spacing.md },
+});
+
+/** A row of buttons under a form or a choice. */
+const buttonRowStyles = StyleSheet.create({
+  row: { gap: spacing.sm, paddingTop: spacing.xs },
 });

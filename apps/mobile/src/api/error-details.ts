@@ -5,8 +5,7 @@
  * `details.code` (CMP-13). Each reader accepts whatever the API sent and keeps only what is well
  * formed, so a failure view never breaks on an unexpected body (SPK-UX-008).
  *
- * Moved here from `features/teams/ui.tsx` (ADR-008, Phase 3 of the customer app redesign); the
- * teams kit re-exports them.
+ * Moved here from the teams feature folder (ADR-008, Phase 3 of the customer app redesign).
  */
 import type { ApiError, Schema } from '@sportspark/api-client';
 

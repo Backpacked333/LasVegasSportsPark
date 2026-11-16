@@ -147,6 +147,7 @@ describe('SCR-C-23 RosterScreen', () => {
     expect(
       within(failure).getByText('▲ recipientContact.value: Not deliverable'),
     ).toBeOnTheScreen();
+    await openSupportDetails(within(failure));
     expect(within(failure).getByText(/Error code: VALIDATION_FAILED/)).toBeOnTheScreen();
 
     const bodies = app.bodiesOf('POST', '/team-entries/{id}/invitations');
@@ -248,9 +249,9 @@ describe('SCR-C-23 RosterScreen', () => {
     expect(
       within(withheld).getByLabelText('Created, but the link cannot be shown again'),
     ).toBeOnTheScreen();
-    expect(
-      within(withheld).getByText('Error code: IDEMPOTENCY_SECRET_WITHHELD. Reference: corr-w1'),
-    ).toBeOnTheScreen();
+    await openSupportDetails(within(withheld));
+    expect(within(withheld).getByText('Error code: IDEMPOTENCY_SECRET_WITHHELD')).toBeOnTheScreen();
+    expect(within(withheld).getByText('Reference: corr-w1')).toBeOnTheScreen();
     expect(screen.queryByLabelText('Not done')).toBeNull();
     // Nothing is sent again beside the created invitation, and the open invitations are re-read.
     expect(screen.getByRole('button', { name: 'Send invitation' })).toBeDisabled();
@@ -449,9 +450,9 @@ describe('SCR-C-23 RosterScreen', () => {
     });
     const lost = await screen.findByTestId('recipient-1-withheld');
     expect(within(lost).getByLabelText('This may already have been done')).toBeOnTheScreen();
-    expect(
-      within(lost).getByText('Error code: IDEMPOTENCY_OUTCOME_UNAVAILABLE. Reference: corr-l1'),
-    ).toBeOnTheScreen();
+    await openSupportDetails(within(lost));
+    expect(within(lost).getByText('Error code: IDEMPOTENCY_OUTCOME_UNAVAILABLE')).toBeOnTheScreen();
+    expect(within(lost).getByText('Reference: corr-l1')).toBeOnTheScreen();
     expect(screen.queryByLabelText('Not done')).toBeNull();
     expect(screen.getByRole('button', { name: 'Send invitation' })).toBeDisabled();
     await waitFor(() =>
@@ -488,11 +489,10 @@ describe('SCR-C-23 RosterScreen', () => {
       'not-an-email',
     );
     fireEvent.press(screen.getByRole('button', { name: 'Send invitation' }));
-    expect(
-      await screen.findByLabelText(
-        'Recipient 1: email address. Enter an email address like name@example.com.',
-      ),
-    ).toBeOnTheScreen();
+    expect(await screen.findByLabelText('Recipient 1: email address')).toHaveProp(
+      'accessibilityHint',
+      'Error: Enter an email address like name@example.com.',
+    );
     expect(app.requestsTo('POST', '/team-entries/{id}/invitations')).toHaveLength(0);
   });
 
@@ -724,10 +724,11 @@ describe('SCR-C-23 RosterScreen', () => {
       const app = renderRoster();
       const section = await screen.findByTestId('role-handover');
       fireEvent.press(within(section).getByRole('button', { name: 'Review the handover' }));
-      expect(within(section).getByText('▲ Choose the role to hand over.')).toBeOnTheScreen();
-      expect(
-        within(section).getByLabelText('Reason. Give the reason for the handover.'),
-      ).toBeOnTheScreen();
+      expect(within(section).getByText('✕ Choose the role to hand over.')).toBeOnTheScreen();
+      expect(within(section).getByLabelText('Reason')).toHaveProp(
+        'accessibilityHint',
+        'Recorded with the change, for example: stepping down for the rest of the season. Error: Give the reason for the handover.',
+      );
       expect(app.requestsTo('POST', '/team-entries/{id}/roles/handover')).toHaveLength(0);
     });
 
@@ -736,11 +737,11 @@ describe('SCR-C-23 RosterScreen', () => {
       const section = await screen.findByTestId('role-handover');
       fireEvent.changeText(within(section).getByLabelText('Reason'), 'Moving away for the season');
       fireEvent.press(within(section).getByRole('button', { name: 'Review the handover' }));
-      const roleError = within(section).getByTestId('handover-role-error');
-      expect(roleError).toHaveTextContent('▲ Choose the role to hand over.');
+      const roleError = within(section).getByText('✕ Choose the role to hand over.');
+      expect(roleError).toHaveProp('accessibilityRole', 'alert');
       expect(roleError).toHaveProp('accessibilityLiveRegion', 'polite');
       expect(AccessibilityInfo.announceForAccessibilityWithOptions).toHaveBeenCalledWith(
-        'Choose the role to hand over.',
+        'Error: Choose the role to hand over.',
         { queue: true },
       );
       expect(within(section).getByRole('radio', { name: 'Captain, held by you' })).toHaveProp(
@@ -750,17 +751,17 @@ describe('SCR-C-23 RosterScreen', () => {
       // The role is chosen; the new holder is still missing.
       fireEvent.press(within(section).getByRole('radio', { name: 'Captain, held by you' }));
       fireEvent.press(within(section).getByRole('button', { name: 'Review the handover' }));
-      const holderError = within(section).getByTestId('handover-holder-error');
-      expect(holderError).toHaveTextContent('▲ Choose who takes the role.');
+      const holderError = within(section).getByText('✕ Choose who takes the role.');
+      expect(holderError).toHaveProp('accessibilityRole', 'alert');
       expect(AccessibilityInfo.announceForAccessibilityWithOptions).toHaveBeenCalledWith(
-        'Choose who takes the role.',
+        'Error: Choose who takes the role.',
         { queue: true },
       );
       expect(within(section).getByRole('radio', { name: 'Pat Player' })).toHaveProp(
         'accessibilityHint',
         'Error: Choose who takes the role.',
       );
-      expect(within(section).queryByTestId('handover-role-error')).toBeNull();
+      expect(within(section).queryByText('✕ Choose the role to hand over.')).toBeNull();
     });
 
     it('SPK-AT-013: a new holder the rule set refuses shows the API reasons and code', async () => {
@@ -793,6 +794,7 @@ describe('SCR-C-23 RosterScreen', () => {
       expect(
         screen.getByText('League manager: Wait until the suspension is served.'),
       ).toBeOnTheScreen();
+      await openSupportDetails(screen);
       expect(screen.getByText(/Error code: ELIGIBILITY_FAILED/)).toBeOnTheScreen();
     });
 
@@ -841,11 +843,11 @@ describe('SCR-C-23 RosterScreen', () => {
       fireEvent.press(within(section).getByRole('button', { name: 'Review the handover' }));
       fireEvent.press(within(section).getByRole('button', { name: 'Hand over to Kim Junior' }));
       expect(await screen.findByText('A team captain must be an adult.')).toBeOnTheScreen();
+      await openSupportDetails(screen);
       expect(
-        screen.getByText(
-          'Error code: VALIDATION_FAILED (CAPTAIN_MUST_BE_ADULT). Reference: corr-23',
-        ),
+        screen.getByText('Error code: VALIDATION_FAILED (CAPTAIN_MUST_BE_ADULT)'),
       ).toBeOnTheScreen();
+      expect(screen.getByText('Reference: corr-23')).toBeOnTheScreen();
       expect(screen.getByLabelText('Not done')).toBeOnTheScreen();
       expect(screen.getByText('Review your entries')).toBeOnTheScreen();
       expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
@@ -869,6 +871,9 @@ describe('SCR-C-23 RosterScreen', () => {
         }),
       });
       await chooseCaptainToPat();
+      // The answer arrives after the press: wait for it before opening its support fold.
+      await screen.findByRole('button', { name: 'Check again' });
+      await openSupportDetails(screen);
       expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
       expect(screen.queryByTestId('handover-done')).toBeNull();
       // A 5xx may come after part of the command committed: never "Not done" (§4.9).
@@ -908,6 +913,7 @@ describe('SCR-C-23 RosterScreen', () => {
         expect(
           await screen.findByLabelText('No answer yet: this may already have been recorded'),
         ).toBeOnTheScreen();
+        await openSupportDetails(screen);
         expect(screen.getByText(/Error code: TIMEOUT/)).toBeOnTheScreen();
         expect(screen.queryByTestId('handover-done')).toBeNull();
         expect(screen.queryByLabelText(/is captain from/)).toBeNull();
@@ -931,6 +937,7 @@ describe('SCR-C-23 RosterScreen', () => {
       expect(
         await screen.findByLabelText('No answer yet: this may already have been recorded'),
       ).toBeOnTheScreen();
+      await openSupportDetails(screen);
       expect(screen.getByText(/Error code: NETWORK_UNAVAILABLE/)).toBeOnTheScreen();
       expect(screen.queryByLabelText('Not done')).toBeNull();
       expect(screen.queryByTestId('handover-done')).toBeNull();

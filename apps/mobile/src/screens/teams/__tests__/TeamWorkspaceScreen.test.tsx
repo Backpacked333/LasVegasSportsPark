@@ -1,9 +1,10 @@
 /**
- * SCR-C-22 Team workspace overview (SPK-CAP-001, SPK-CAP-002, SPK-COMP-004, SPK-SUPPORT-002): the
- * captain's readiness indicators and the tools the API lists for this viewer (CMP-02
- * `viewer.availableActions`), the reduced player view, upcoming games, the standing, contacting
- * the operating team (SUP-01), and the SPK-UX-008 states (loading, error with code, not
- * available, offline with age).
+ * SCR-C-22 Team workspace overview (SPK-CAP-001, SPK-CAP-002, SPK-COMP-004, SPK-SUPPORT-002;
+ * PA-11, ADR-008): the glass hero over the summary cards (Games, Table, Roster, Availability,
+ * Money), the captain's readiness indicators and the tools the API lists for this viewer (CMP-02
+ * `viewer.availableActions`), the reduced player view, upcoming games, the standing as a stat
+ * tile, no decision codes on screen, contacting the operating team (SUP-01), and the SPK-UX-008
+ * states (loading, error with code, not available, offline with age).
  */
 import { apiErrorBody, fakeResponse } from '@sportspark/api-client/testing';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
@@ -58,7 +59,7 @@ describe('SCR-C-22 TeamWorkspaceScreen', () => {
         name: /vs Canyon Hawks, Home, round 3\. Availability: Available 1, Unavailable 1, No response 1/,
       }),
     ).toBeOnTheScreen();
-    expect(await screen.findByLabelText('Standing: 2nd of 2, 9 points')).toBeOnTheScreen();
+    expect(await screen.findByLabelText('Standing, 2nd, of 2 teams, 9 points')).toBeOnTheScreen();
 
     for (const name of [
       'Roster and invitations',
@@ -86,8 +87,11 @@ describe('SCR-C-22 TeamWorkspaceScreen', () => {
     ).toBeOnTheScreen();
     expect(within(readiness).getByLabelText('Roster not complete')).toBeOnTheScreen();
     expect(within(readiness).getByLabelText('Eligible players: 1 of 3')).toBeOnTheScreen();
+    // Team payment is its own indicator, in the Money card.
     expect(
-      within(readiness).getByLabelText('Team payment: No obligation recorded yet'),
+      within(screen.getByTestId('workspace-money')).getByLabelText(
+        'Team payment: Nothing recorded yet',
+      ),
     ).toBeOnTheScreen();
     expect(within(readiness).getByLabelText('Blocking')).toBeOnTheScreen();
     expect(
@@ -127,9 +131,33 @@ describe('SCR-C-22 TeamWorkspaceScreen', () => {
       }),
     });
     render(<TeamWorkspaceScreen entryId={IDS.entry} />, { wrapper: app.wrapper });
-    fireEvent.press(await screen.findByRole('button', { name: 'Your contributions' }));
+    fireEvent.press(await screen.findByRole('button', { name: 'Your share' }));
     expect(mockRouter.push).toHaveBeenCalledWith('/team/contributions');
     expect(screen.queryByText(/cannot list the contributions/)).toBeNull();
+  });
+
+  it('ADR-008: a glass hero over the summary cards Games, Table, Roster, Availability and Money', async () => {
+    const app = createTestApp({ routes: routes() });
+    render(<TeamWorkspaceScreen entryId={IDS.entry} />, { wrapper: app.wrapper });
+    await screen.findByRole('header', { name: 'Desert Foxes' });
+    const headers = screen.getAllByRole('header').map((h) => h.props.children);
+    const cards = ['Games', 'Table', 'Roster', 'Availability', 'Money'];
+    expect(headers.filter((h) => cards.includes(h))).toEqual(cards);
+    // The hero comes first: the team's name is the first header after its league.
+    expect(headers.slice(0, 2)).toEqual(['Coed Division 2 · Fall 2026', 'Desert Foxes']);
+    fireEvent.press(screen.getByRole('button', { name: 'Standings and results' }));
+    expect(mockRouter.push).toHaveBeenCalledWith(`/team/${IDS.entry}/standings`);
+    fireEvent.press(screen.getByRole('button', { name: /^vs Canyon Hawks, Home, round 3/ }));
+    expect(mockRouter.push).toHaveBeenCalledWith(`/fixtures/${IDS.fixture}`);
+  });
+
+  it('PA-11: no decision-code rows: forms outstanding is not shown and no code is on screen', async () => {
+    const app = createTestApp({ routes: routes() });
+    render(<TeamWorkspaceScreen entryId={IDS.entry} />, { wrapper: app.wrapper });
+    await screen.findByTestId('captain-readiness');
+    expect(screen.queryByText(/Forms outstanding/)).toBeNull();
+    expect(screen.queryByLabelText(/^Forms outstanding/)).toBeNull();
+    expect(screen.queryByText(/DEC-\d|POL-\d/)).toBeNull();
   });
 
   it('SPK-SCHED-008: an upcoming game’s time is in the facility’s zone from its fixture read', async () => {
@@ -238,8 +266,14 @@ describe('SCR-C-22 TeamWorkspaceScreen', () => {
       const app = createTestApp({ routes: routes() });
       render(<TeamWorkspaceScreen entryId={IDS.entry} />, { wrapper: app.wrapper });
       fireEvent.press(await screen.findByRole('button', { name: 'Send to the operating team' }));
-      expect(await screen.findByLabelText('Title. Enter a short title.')).toBeOnTheScreen();
-      expect(screen.getByLabelText('What you need. Enter what you need.')).toBeOnTheScreen();
+      expect(await screen.findByLabelText('Title')).toHaveProp(
+        'accessibilityHint',
+        'A few words, for example: Field 2 lights out. Error: Enter a short title.',
+      );
+      expect(screen.getByLabelText('What you need')).toHaveProp(
+        'accessibilityHint',
+        'Error: Enter what you need.',
+      );
       expect(app.fake.requests.filter((r) => r.route === '/me/support-requests')).toHaveLength(0);
     });
 
@@ -284,6 +318,9 @@ describe('SCR-C-22 TeamWorkspaceScreen', () => {
       fireEvent.changeText(await screen.findByLabelText('Title'), 'Lights');
       fireEvent.changeText(screen.getByLabelText('What you need'), 'Field 2');
       fireEvent.press(screen.getByRole('button', { name: 'Send to the operating team' }));
+      // The answer arrives after the press: wait for it before opening its support fold.
+      await screen.findByRole('button', { name: 'Check again' });
+      await openSupportDetails(screen);
       expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
       fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
       expect(await screen.findByTestId('support-request-sent')).toBeOnTheScreen();
@@ -393,7 +430,12 @@ describe('SCR-C-22 TeamWorkspaceScreen', () => {
     expect(await screen.findByRole('header', { name: 'Desert Foxes' })).toBeOnTheScreen();
     now = new Date('2026-10-24T12:30:00.000Z');
     act(() => app.sources.setReachable(false));
-    expect(screen.getByText('Showing information from 30 minutes ago.')).toBeOnTheScreen();
+    // ADR-008: under the app's offline banner the section says its own age and needs on one quiet line.
+    expect(
+      screen.getByText(
+        'Showing information from 30 minutes ago. Needs a connection: availability answers, invitations, roster changes.',
+      ),
+    ).toBeOnTheScreen();
     expect(screen.getByRole('header', { name: 'Desert Foxes' })).toBeOnTheScreen();
   });
 });

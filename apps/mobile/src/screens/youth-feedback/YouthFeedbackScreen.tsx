@@ -17,18 +17,22 @@
  * - Capability `youth_progression` (DEC-016): while it is off, the screen says so and what was
  *   already shared stays readable (reads are never gated). Which feedback is parent-visible and
  *   what a recommendation may use stay DEC-054 and DEC-055 (Program manager): the screen invents
- *   neither and says so.
+ *   neither; it says to ask the coach or the front desk (`src/copy/pending.ts`), with the codes in
+ *   "Details for support" (PA-11). Assessments and recommendations are cards (ADR-008).
  * - States: loading; empty (nothing shared yet); error with the code and "Try again"; offline or
  *   stale with the age of what is shown; not available (NOT_FOUND, ACCESS_DENIED); turned off.
  *   Given names only (§4.14); nothing is logged and no id of a child is put in a route.
  */
-import { CAPABILITY_PRESENTATION, type Schema } from '@sportspark/api-client';
+import {
+  CAPABILITY_PRESENTATION,
+  capabilityCustomerLabel,
+  type Schema,
+} from '@sportspark/api-client';
 import { Stack, useRouter, type Href } from 'expo-router';
-import { Text, View } from 'react-native';
+import { View } from 'react-native';
 import { usePermissions } from '../../api/permissions';
 import { useApiQuery } from '../../api/useApiQuery';
 import { registrationRoutes } from '../../features/registration/routes';
-import { Caption, Section } from '../../features/today/Section';
 import {
   nameOf,
   useMe,
@@ -37,13 +41,20 @@ import {
   useSignedIn,
 } from '../../features/today/queries';
 import { displayZone, formatWhen } from '../../features/today/time';
+import { pendingMessage } from '../../copy/pending';
 import { RequireSession } from '../../session/RequireSession';
 import { Button } from '../../ui/Button';
+import { Card } from '../../ui/Card';
+import { InfoCard } from '../../ui/InfoCard';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
+import { Section } from '../../ui/Section';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { fonts, makeStyles, radius, spacing, type } from '../../ui/theme';
+import { SupportDetails } from '../../ui/SupportDetails';
+import { Text } from '../../ui/Text';
+import { spacing } from '../../ui/theme';
+import { illustrations } from '../../artwork/manifest';
 
 type YouthFeedback = Schema<'YouthFeedback'>;
 type Assessment = YouthFeedback['assessments'][number];
@@ -73,7 +84,6 @@ export function scaleText(
 }
 
 function AssessmentRow({ assessment }: { assessment: Assessment }) {
-  const styles = useStyles();
   const area = assessment.skillArea.label ?? assessment.skillArea.key;
   const zone = displayZone(null);
   const facts = [
@@ -83,28 +93,32 @@ function AssessmentRow({ assessment }: { assessment: Assessment }) {
     assessment.offeringName ? `In ${assessment.offeringName}` : null,
   ].filter(Boolean);
   return (
-    <View
-      style={styles.card}
-      accessible
-      accessibilityLabel={[
-        ...facts,
-        // One sentence per fact for screen readers: the comment's own final stop is dropped.
-        assessment.comments ? `Comments: ${assessment.comments.replace(/[.\s]+$/, '')}` : null,
-        `Shared ${formatWhen(assessment.publishedAt, zone.zone)}`,
-      ]
-        .filter(Boolean)
-        .join('. ')}
-      testID={`assessment-${assessment.id}`}
-    >
-      <Text style={styles.title}>{area}</Text>
-      <StatusBadge tone="info" label={scaleText(assessment)} />
-      <Text style={styles.caption}>
-        Observed {formatDateOnly(assessment.observedOn)}
-        {assessment.offeringName ? ` in ${assessment.offeringName}` : ''}
-      </Text>
-      {assessment.comments ? <Text style={styles.body}>{assessment.comments}</Text> : null}
-      <Text style={styles.caption}>Shared {formatWhen(assessment.publishedAt, zone.zone)}</Text>
-    </View>
+    <Card>
+      <View
+        style={styles.card}
+        accessible
+        accessibilityLabel={[
+          ...facts,
+          // One sentence per fact for screen readers: the comment's own final stop is dropped.
+          assessment.comments ? `Comments: ${assessment.comments.replace(/[.\s]+$/, '')}` : null,
+          `Shared ${formatWhen(assessment.publishedAt, zone.zone)}`,
+        ]
+          .filter(Boolean)
+          .join('. ')}
+        testID={`assessment-${assessment.id}`}
+      >
+        <Text variant="headline">{area}</Text>
+        <StatusBadge tone="info" label={scaleText(assessment)} />
+        <Text variant="caption" tone="muted">
+          Observed {formatDateOnly(assessment.observedOn)}
+          {assessment.offeringName ? ` in ${assessment.offeringName}` : ''}
+        </Text>
+        {assessment.comments ? <Text variant="body">{assessment.comments}</Text> : null}
+        <Text variant="caption" tone="muted">
+          Shared {formatWhen(assessment.publishedAt, zone.zone)}
+        </Text>
+      </View>
+    </Card>
   );
 }
 
@@ -117,20 +131,25 @@ function RecommendationRow({
   offeringName: string | null;
   fromName: string | null;
 }) {
-  const styles = useStyles();
   const router = useRouter();
   const zone = displayZone(null);
   const target = recommendation.recommendedOfferingId
     ? (offeringName ?? 'A recommended activity')
     : 'A recommended program';
   return (
-    <View style={styles.card} testID={`recommendation-${recommendation.id}`}>
+    <Card style={styles.card} testID={`recommendation-${recommendation.id}`}>
       <StatusBadge tone="pending" label="Recommendation: an offer to consider" />
-      <Text style={styles.title}>{target}</Text>
-      {fromName ? <Text style={styles.caption}>After {fromName}</Text> : null}
-      <Text style={styles.body}>{recommendation.suitability}</Text>
-      <Text style={styles.caption}>Shared {formatWhen(recommendation.sharedAt, zone.zone)}</Text>
-      <Text style={styles.caption}>
+      <Text variant="headline">{target}</Text>
+      {fromName ? (
+        <Text variant="caption" tone="muted">
+          After {fromName}
+        </Text>
+      ) : null}
+      <Text variant="body">{recommendation.suitability}</Text>
+      <Text variant="caption" tone="muted">
+        Shared {formatWhen(recommendation.sharedAt, zone.zone)}
+      </Text>
+      <Text variant="caption" tone="muted">
         It does not guarantee a place, and it never registers or charges anyone.
       </Text>
       {recommendation.recommendedOfferingId ? (
@@ -144,14 +163,15 @@ function RecommendationRow({
           }
         />
       ) : (
-        <Text style={styles.caption}>Ask the front desk which activities the program runs.</Text>
+        <Text variant="caption" tone="muted">
+          Ask the front desk which activities the program runs.
+        </Text>
       )}
-    </View>
+    </Card>
   );
 }
 
 function FeedbackRecord({ feedback }: { feedback: YouthFeedback }) {
-  const styles = useStyles();
   const me = useMe();
   const people = [
     ...new Set([
@@ -177,6 +197,7 @@ function FeedbackRecord({ feedback }: { feedback: YouthFeedback }) {
           <Section
             key={personId}
             title={nameOf(names, personId)}
+            variant="plain"
             testID={`feedback-person-${personId}`}
           >
             {assessments.length > 0 ? (
@@ -186,7 +207,9 @@ function FeedbackRecord({ feedback }: { feedback: YouthFeedback }) {
                 ))}
               </View>
             ) : (
-              <Caption>No feedback shared yet.</Caption>
+              <Text variant="caption" tone="muted">
+                No feedback shared yet.
+              </Text>
             )}
             {recommendations.length > 0 ? (
               <View accessibilityRole="list" style={styles.list}>
@@ -223,7 +246,7 @@ function TurnedOffNotice() {
   return (
     <StateView
       variant="turned-off"
-      subject={presentation.label}
+      subject={capabilityCustomerLabel('youth_progression')}
       decisions={presentation.decisions}
       owner={presentation.owner}
       stillAvailable="Feedback and recommendations already shared with you stay here."
@@ -244,20 +267,19 @@ function YouthFeedbackContent() {
           title: 'No feedback yet',
           description:
             'Feedback a coach shares about a child you are authorized to see, after it is reviewed, will appear here, with any recommendation for a next group or program.',
+          source: illustrations['empty-inbox'],
         }}
       >
         {(f) => <FeedbackRecord feedback={f} />}
       </QueryBoundary>
-      <Section title="About this record">
-        <Caption>
-          Only feedback a reviewer approved for families is shown. Private coaching notes never
-          appear here.
-        </Caption>
-        <Caption>
-          Which feedback is shared with families and what a recommendation may draw on are still
-          being decided ({YOUTH_FEEDBACK_DECISIONS.join(', ')}, Program manager); the app shows only
-          what the facility has shared.
-        </Caption>
+      <Section title="About this record" variant="plain">
+        <InfoCard
+          tone="info"
+          message="Only feedback a reviewer approved for families is shown. Private coaching notes never appear here."
+        >
+          <Text variant="body">{pendingMessage('DEC-054')}</Text>
+          <SupportDetails decisions={YOUTH_FEEDBACK_DECISIONS} owner="Program manager" />
+        </InfoCard>
       </Section>
     </View>
   );
@@ -283,17 +305,7 @@ export function YouthFeedbackRoute() {
   );
 }
 
-const useStyles = makeStyles(({ colors }) => ({
-  list: { paddingHorizontal: spacing.lg, gap: spacing.sm },
-  card: {
-    padding: spacing.md,
-    gap: spacing.xs,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
-    backgroundColor: colors.background,
-  },
-  title: { ...type.body, ...fonts.bold, color: colors.text },
-  body: { ...type.body, color: colors.text },
-  caption: { ...type.caption, color: colors.textMuted },
-}));
+const styles = {
+  list: { gap: spacing.sm },
+  card: { gap: spacing.xs },
+} as const;

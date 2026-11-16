@@ -1,15 +1,17 @@
 /**
- * SCR-C-20 Activity or fixture detail, fixture variant (SPK-UX-004, SPK-CAP-002, SPK-CAP-003,
- * SPK-READY-002, SPK-RESULT-001, SPK-RESULT-005, SPK-COMMS-005, SPK-SCHED-008, SPK-UX-008,
- * SPK-UX-009).
+ * SCR-C-20 Activity or fixture detail, fixture variant: the game page (SPK-UX-004, SPK-CAP-002,
+ * SPK-CAP-003, SPK-READY-002, SPK-RESULT-001, SPK-RESULT-005, SPK-COMMS-005, SPK-SCHED-008,
+ * SPK-UX-008, SPK-UX-009; PA-11 customer words, "game" for a fixture; ADR-008).
  *
+ * - The top is the game's picture with its facts as tags, its status, the change, the required
+ *   action and the RSVP (`ActivityHero`).
  * - `GET /v1/fixtures/{id}`: teams, state, time, availability counts, the venue (facility, pitches
  *   and IANA zone, CMP-04), the viewer's roster status and the answers they may see (`responses`).
  *   NOT_FOUND (the person is on neither roster and holds no view grant) is "not available", with
  *   no hint that the fixture exists (§4.10).
- * - The next-activity card (SCR-C-04) with RSVP (`POST /v1/fixtures/{id}/availability`, with the
- *   answer's revision as `expectedRevision`); answers of children the API lists are shown, not
- *   offered (DEC-090).
+ * - RSVP in the shared control (`RsvpControl`, SCR-C-04: `POST /v1/fixtures/{id}/availability`, with
+ *   the answer's revision as `expectedRevision`); answers of children the API lists are shown, not
+ *   offered (DEC-090: the page says what to do instead, the decision in "Details for support").
  * - Material changes: the newest schedule notice about the fixture's scheduling event gives old
  *   and new details; times are on the venue's facility clock (SPK-SCHED-008).
  * - Match readiness as the customer may see it: `GET /v1/fixtures/{id}/readiness` answers with
@@ -22,7 +24,7 @@
  *   its `viewer.actingAsCaptain` (the API's answer, rule set included) decides the captain view.
  * - A captain acting for a side opens dispute submission (SCR-C-29) from an official result; the
  *   dispute screen and the API decide the rest (window, eligibility).
- * - Arrival guidance is POL-046 (Operations, pending).
+ * - Arrival guidance is POL-046 (Operations, pending): its plain message, the code in the fold.
  */
 import { apiQueryKey, presentationForError, type Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
@@ -30,6 +32,8 @@ import { useLocalSearchParams, useRouter, type Href } from 'expo-router';
 import { useEffect, useRef } from 'react';
 import { Text, View } from 'react-native';
 import { useApiQuery } from '../../api/useApiQuery';
+import { artworkFor } from '../../artwork/artworkFor';
+import { pendingMessage } from '../../copy/pending';
 import { teamRoutes } from '../../features/teams/routes';
 import {
   awayOf,
@@ -41,11 +45,11 @@ import {
   venueOf,
   viewerOnRoster,
 } from '../../features/today/fixture-model';
-import { NextActivityCard, type ActivityCardModel } from '../../features/today/NextActivityCard';
+import type { ActivityCardModel } from '../../features/today/NextActivityCard';
 import { latestChangeForEvent, openAvailabilityRequest } from '../../features/today/notices';
 import { nameOf, useInbox, useMe, usePersonNames, useSignedIn } from '../../features/today/queries';
 import { RsvpControl } from '../../features/today/RsvpControl';
-import { Caption, oldestUpdate, Section, SectionQueryState } from '../../features/today/Section';
+import { oldestUpdate, SectionQueryState } from '../../features/today/read-state';
 import {
   currentResult,
   fixtureStatus,
@@ -62,9 +66,12 @@ import { RequireSession } from '../../session/RequireSession';
 import { Button } from '../../ui/Button';
 import { LastUpdated } from '../../ui/LastUpdated';
 import { Screen } from '../../ui/Screen';
+import { Section } from '../../ui/Section';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { makeStyles, radius, spacing, type } from '../../ui/theme';
+import { SupportDetails } from '../../ui/SupportDetails';
+import { layout, makeStyles, radius, spacing, type } from '../../ui/theme';
+import { ActivityHero } from './ActivityHero';
 
 type FixtureDetail = Schema<'FixtureDetail'>;
 type FixtureSide = Schema<'FixtureSide'>;
@@ -199,10 +206,10 @@ function FixtureContent({ fixtureId }: { fixtureId: string }) {
     return (
       <SectionQueryState
         read={fixture}
-        label="the fixture"
+        label="the game"
         unavailable={{
           description:
-            'This fixture is not available. Check the link, or contact the front desk if you expected to see it.',
+            'This game is not available. Check the link, or contact the front desk if you expected to see it.',
         }}
       />
     );
@@ -267,9 +274,10 @@ function FixtureContent({ fixtureId }: { fixtureId: string }) {
         at={oldestUpdate([fixture.updatedAt, readiness.updatedAt, results.updatedAt])}
         now={now}
       />
-      <Section title="Fixture">
-        <NextActivityCard
+      <View>
+        <ActivityHero
           model={model}
+          source={artworkFor({ kind: 'game', title: model.title }, 'wide').source}
           testID="fixture-card"
           rsvp={
             <RsvpControl
@@ -283,11 +291,11 @@ function FixtureContent({ fixtureId }: { fixtureId: string }) {
             />
           }
         />
-        {notice ? <Caption>{notice}</Caption> : null}
-      </Section>
+        {notice ? <Text style={styles.note}>{notice}</Text> : null}
+      </View>
 
       {!viewerKnown && (detail.responses ?? []).length > 0 ? (
-        <Section title="Family answers" testID="fixture-family-answers">
+        <Section variant="carousel" title="Family answers" testID="fixture-family-answers">
           <SectionQueryState
             read={me}
             label="the family answers"
@@ -296,7 +304,7 @@ function FixtureContent({ fixtureId }: { fixtureId: string }) {
         </Section>
       ) : null}
       {othersAnswers.length > 0 ? (
-        <Section title="Family answers" testID="fixture-family-answers">
+        <Section variant="carousel" title="Family answers" testID="fixture-family-answers">
           <View accessibilityRole="list" style={styles.pad}>
             {othersAnswers.map((r) => {
               const status = rsvpStatus(r.state as RsvpState);
@@ -313,22 +321,24 @@ function FixtureContent({ fixtureId }: { fixtureId: string }) {
               );
             })}
           </View>
-          <Caption>
-            Answering for a child in the app is still being decided (DEC-090); these are the answers
-            recorded so far.
-          </Caption>
+          <Text
+            style={styles.note}
+          >{`These are the answers recorded so far. ${pendingMessage('DEC-090')}`}</Text>
+          <View style={styles.pad}>
+            <SupportDetails decisions={['DEC-090']} />
+          </View>
         </Section>
       ) : null}
 
       {ownSide ? (
         // Only the viewer's own side: the opponent's answers are not theirs to see.
-        <Section title="Team availability" testID="fixture-availability">
-          <Caption>{availabilityLine(ownSide)}</Caption>
+        <Section variant="carousel" title="Team availability" testID="fixture-availability">
+          <Text style={styles.note}>{availabilityLine(ownSide)}</Text>
         </Section>
       ) : null}
 
       {isCaptain ? (
-        <Section title="Match readiness" testID="fixture-readiness">
+        <Section variant="carousel" title="Match readiness" testID="fixture-readiness">
           <SectionQueryState
             read={readiness}
             label="match readiness"
@@ -337,7 +347,9 @@ function FixtureContent({ fixtureId }: { fixtureId: string }) {
           {readiness.data && shownReadiness ? (
             <View style={styles.pad}>
               <StatusBadge {...readinessStatus(readiness.data.status)} testID="readiness-status" />
-              <Caption>Assessed {formatWhen(readiness.data.evaluatedAt, zone.zone)}.</Caption>
+              <Text style={styles.note}>
+                Assessed {formatWhen(readiness.data.evaluatedAt, zone.zone)}.
+              </Text>
               {shownReadiness.sides.map((side) => (
                 <Text key={side.teamEntryId} style={styles.body}>
                   {side.teamName}: {side.eligiblePlayers} of {side.rosterSize} rostered players
@@ -346,7 +358,7 @@ function FixtureContent({ fixtureId }: { fixtureId: string }) {
                 </Text>
               ))}
               {shownReadiness.issues.length === 0 ? (
-                <Caption>No open issues.</Caption>
+                <Text style={styles.note}>No open issues.</Text>
               ) : (
                 <View accessibilityRole="list" style={styles.issues}>
                   {shownReadiness.issues.map((issue, index) => (
@@ -373,13 +385,13 @@ function FixtureContent({ fixtureId }: { fixtureId: string }) {
         </Section>
       ) : null}
 
-      <Section title="Result" testID="fixture-result">
+      <Section variant="carousel" title="Result" testID="fixture-result">
         <SectionQueryState
           read={results}
           label="the result"
           unavailable={{ description: 'The result is not available to you.' }}
         />
-        {results.data && !result ? <Caption>No result yet.</Caption> : null}
+        {results.data && !result ? <Text style={styles.note}>No result yet.</Text> : null}
         {result ? (
           <View
             style={styles.pad}
@@ -389,7 +401,9 @@ function FixtureContent({ fixtureId }: { fixtureId: string }) {
             <Text style={styles.score}>{scoreLine(result, detail)}</Text>
             <StatusBadge {...resultStatus(result, (iso) => formatDay(iso, zone.zone))} />
             {result.status === 'submitted' ? (
-              <Caption>Provisional results do not count in the standings until official.</Caption>
+              <Text style={styles.note}>
+                Provisional results do not count in the standings until official.
+              </Text>
             ) : null}
           </View>
         ) : null}
@@ -406,23 +420,24 @@ function FixtureContent({ fixtureId }: { fixtureId: string }) {
         ) : null}
       </Section>
 
-      <Section title="Rules" testID="fixture-rules">
+      <Section variant="carousel" title="Rules" testID="fixture-rules">
         {workspace ? (
-          <Caption>
+          <Text style={styles.note}>
             {workspace.ruleSet.name} (version {workspace.ruleSet.version}), {workspace.season.name}
             {workspace.division ? `, ${workspace.division.name}` : ''}.
-          </Caption>
+          </Text>
         ) : homeEntry.isLoading || awayEntry.isLoading ? (
           <StateView variant="loading" label="the rules" />
         ) : (
-          <Caption>The rule set summary is shown to team members.</Caption>
+          <Text style={styles.note}>The rule set summary is shown to team members.</Text>
         )}
       </Section>
 
-      <Section title="Arrival guidance">
+      <Section variant="carousel" title="Arrival guidance">
         <StateView
           variant="pending-decision"
           subject="Arrival guidance for this activity"
+          message={pendingMessage('POL-046')}
           decisions={['POL-046']}
           owner="Operations"
         />
@@ -434,7 +449,7 @@ function FixtureContent({ fixtureId }: { fixtureId: string }) {
 export function FixtureDetailScreen({ fixtureId }: { fixtureId: string | undefined }) {
   return (
     <Screen>
-      <RequireSession what="this fixture">
+      <RequireSession what="this game">
         {fixtureId ? <FixtureContent fixtureId={fixtureId} /> : <StateView variant="unavailable" />}
       </RequireSession>
     </Screen>
@@ -461,5 +476,7 @@ const useStyles = makeStyles(({ colors }) => ({
   },
   body: { ...type.body, color: colors.text },
   caption: { ...type.caption, color: colors.textMuted },
+  /** A note at the page's side margin, inside an edge-to-edge section. */
+  note: { ...type.caption, color: colors.textMuted, paddingHorizontal: layout.gutter },
   score: { ...type.title, color: colors.text },
 }));

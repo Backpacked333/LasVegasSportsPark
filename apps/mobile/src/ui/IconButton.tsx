@@ -7,6 +7,10 @@
  * hidden from screen readers (the name already says it) and shows "99+" above 99; the name keeps
  * the exact number. No count, or 0, draws no badge and leaves the name as the label.
  *
+ * `countCapped`: the count is where the API stopped counting (the inbox's `capped`), so the real
+ * number is higher. The name then says "more than": "Notification inbox, more than 99 unread", and
+ * the badge "99+".
+ *
  * Variants: `plain` (no fill, for headers and rows), `tonal` (a soft accent tint) and `onMedia`
  * (over artwork, on the scrim token). Press feedback and haptics as `Button`: the pressed fill at
  * once, the press scale only with motion on, a light impact when the press lands.
@@ -35,8 +39,10 @@ export interface IconButtonProps {
   variant?: IconButtonVariant;
   /** A number to badge: folded into the accessible name. */
   count?: number;
-  /** The words after the count in the name (default "unread"): "Basket, 2 items". */
+  /** The words after the count in the name (default "unread"): "Cart, 2 items". */
   countLabel?: string;
+  /** The count is a cap: there are more than `count` ("more than 99 unread", badge "99+"). */
+  countCapped?: boolean;
   disabled?: boolean;
   accessibilityHint?: string;
   /** The haptic a press plays (default a light impact). */
@@ -44,14 +50,24 @@ export interface IconButtonProps {
   testID?: string;
 }
 
-/** The badge text: the count, or "99+" above 99. */
-export function badgeText(count: number): string {
+/** The badge text: the count, or "99+" above 99; "{count}+" for a capped count. */
+export function badgeText(count: number, capped = false): string {
+  if (capped) return `${count}+`;
   return count > 99 ? '99+' : String(count);
 }
 
-/** The accessible name: the label, then the count and its words when there is a count. */
-export function iconButtonName(label: string, count?: number, countLabel = 'unread'): string {
-  return count && count > 0 ? `${label}, ${count} ${countLabel}` : label;
+/**
+ * The accessible name: the label, then the count and its words when there is a count ("more than
+ * {count}" for a capped one).
+ */
+export function iconButtonName(
+  label: string,
+  count?: number,
+  countLabel = 'unread',
+  capped = false,
+): string {
+  if (!count || count <= 0) return label;
+  return `${label}, ${capped ? `more than ${count}` : count} ${countLabel}`;
 }
 
 const useStyles = makeStyles(({ colors }) => ({
@@ -72,6 +88,7 @@ export function IconButton({
   variant = 'plain',
   count,
   countLabel,
+  countCapped = false,
   disabled = false,
   accessibilityHint,
   haptic = 'light',
@@ -86,7 +103,7 @@ export function IconButton({
   return (
     <PressableScale
       accessibilityRole="button"
-      accessibilityLabel={iconButtonName(label, count, countLabel)}
+      accessibilityLabel={iconButtonName(label, count, countLabel, countCapped)}
       accessibilityHint={accessibilityHint}
       accessibilityState={{ disabled }}
       disabled={disabled}
@@ -109,7 +126,7 @@ export function IconButton({
           testID={testID ? `${testID}-badge` : undefined}
         >
           <Text style={[styles.badgeText, themed.badgeText]} maxFontSizeMultiplier={1.3}>
-            {badgeText(count)}
+            {badgeText(count, countCapped)}
           </Text>
         </View>
       ) : null}

@@ -9,6 +9,7 @@ import { ListRow } from '../ListRow';
 import { STATUS_GLYPHS, StatusBadge } from '../StatusBadge';
 import { StateView } from '../StateView';
 import { openSupportDetails } from '../../testing/ui-surfaces';
+import { pendingMessage } from '../../copy/pending';
 
 const NOW = new Date('2026-10-24T12:00:00Z');
 
@@ -119,10 +120,13 @@ describe('StateView (SPK-UX-008)', () => {
         subject="Account sign-in"
         decisions={['DEC-018']}
         owner="Technical lead/account owners"
+        message={pendingMessage('DEC-018')}
       />,
     );
     expect(
-      screen.getByLabelText("Account sign-in. This isn't available in the app yet."),
+      screen.getByLabelText(
+        'Account sign-in. Ask the front desk to help with your account for now.',
+      ),
     ).toBeOnTheScreen();
     await openSupportDetails(screen);
     expect(screen.getByText('Decision: DEC-018')).toBeOnTheScreen();

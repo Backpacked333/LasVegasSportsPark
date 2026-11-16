@@ -30,7 +30,7 @@ import { useState } from 'react';
 import { View } from 'react-native';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
-import { CommandFailure } from '../../features/money/CommandFailure';
+import { CommandError } from '../../ui/CommandError';
 import { formatDateRange } from '../../features/money/format';
 import { useNameOf } from '../../features/money/people';
 import { combineQueries } from '../../features/money/queries';
@@ -43,15 +43,6 @@ import {
   type Enrollment,
   type FinancialConsequence,
 } from '../../features/money/status';
-import {
-  Body,
-  ButtonRow,
-  Caption,
-  ChoiceRow,
-  Field,
-  Section,
-  TextField,
-} from '../../features/money/ui';
 import { useConnectivity } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
 import { Button } from '../../ui/Button';
@@ -61,6 +52,12 @@ import { NotFoundScreen } from '../not-found/NotFoundScreen';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { acceptedOf, consequenceConflict } from './participation';
+import { Section } from '../../ui/Section';
+import { FieldValue as Field } from '../../ui/Field';
+import { Text } from '../../ui/Text';
+import { spacing } from '../../ui/theme';
+import { ChoiceCard } from '../../ui/ChoiceList';
+import { TextField } from '../../ui/Field';
 
 type CancelBody = Schema<'CancelEnrollmentRequest'>;
 
@@ -69,9 +66,11 @@ function ConsequenceBlock({ consequence }: { consequence: FinancialConsequence }
   return (
     <>
       <StatusBadge tone={summary.tone} label={summary.headline} testID="consequence" />
-      <Body>{summary.explanation}</Body>
+      <Text variant="body">{summary.explanation}</Text>
       {consequence.policyVersionId ? (
-        <Caption>Worked out under the activity’s cancellation policy.</Caption>
+        <Text variant="caption" tone="muted">
+          Worked out under the activity’s cancellation policy.
+        </Text>
       ) : null}
     </>
   );
@@ -88,16 +87,16 @@ function Canceled({ enrollment }: { enrollment: Enrollment }) {
       {recorded ? (
         <>
           <Field label="Recorded money consequence" value={recorded.headline} />
-          <Body>{recorded.explanation}</Body>
-          <Caption>
+          <Text variant="body">{recorded.explanation}</Text>
+          <Text variant="caption" tone="muted">
             Refunds and credits are carried out by the facility. This app cannot show their progress
             yet; ask the front desk if you have a question.
-          </Caption>
+          </Text>
         </>
       ) : null}
-      <ButtonRow>
+      <View style={buttonRow}>
         <Button
-          label="Back to enrollments"
+          label="Back to registrations"
           onPress={() => router.replace(moneyRoutes.enrollments())}
         />
         <Button
@@ -105,7 +104,7 @@ function Canceled({ enrollment }: { enrollment: Enrollment }) {
           variant="secondary"
           onPress={() => router.push(moneyRoutes.payments())}
         />
-      </ButtonRow>
+      </View>
     </Section>
   );
 }
@@ -258,18 +257,28 @@ function CancelForm({
             error={reasonError}
             multiline
             testID="cancel-reason"
+            errorGlyph="▲"
+            errorAnnouncement="message"
+            autoCorrect
           />
-          <ChoiceRow
-            mode="checkbox"
-            label={`I understand: ${summary.headline}`}
+          <ChoiceCard
+            option={{
+              value: `I understand: ${summary.headline}`,
+              label: `I understand: ${summary.headline}`,
+            }}
+            mode="multiple"
             checked={acknowledged !== null}
             onPress={() => {
               setChanged(false);
               setAcknowledged(acknowledged ? null : preview.financialConsequence);
             }}
           />
-          {offline ? <Caption>Needs a connection.</Caption> : null}
-          <ButtonRow>
+          {offline ? (
+            <Text variant="caption" tone="muted">
+              Needs a connection.
+            </Text>
+          ) : null}
+          <View style={buttonRow}>
             <Button
               label="Cancel registration"
               onPress={() => void confirm()}
@@ -277,9 +286,10 @@ function CancelForm({
               busy={cancel.isProcessing || checking}
               accessibilityHint="Cancels the registration with the money consequence shown above"
             />
-          </ButtonRow>
+          </View>
           {failure ? (
-            <CommandFailure
+            <CommandError
+              wording="money"
               error={failure}
               what="the cancellation"
               onRetry={() => {
@@ -340,3 +350,5 @@ export function CancelEnrollmentRoute() {
     </>
   );
 }
+
+const buttonRow = { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm } as const;

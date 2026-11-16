@@ -18,7 +18,7 @@ import {
   paymentAttempt,
   receipt,
 } from '../../../features/money/testing/fixtures';
-import { formatInstant } from '../../../features/money/format';
+import { formatDay, formatInstant } from '../../../features/money/format';
 import {
   LIST_IDS,
   liveAttempt,
@@ -95,8 +95,35 @@ describe('SCR-C-34 ObligationScreen', () => {
     expect(await screen.findByLabelText('Amount: $40.00')).toBeOnTheScreen();
     expect(screen.getByLabelText('Received: $0.00')).toBeOnTheScreen();
     expect(screen.getByLabelText('Applied to this balance: $0.00')).toBeOnTheScreen();
-    expect(screen.getByLabelText('Left to pay: $40.00')).toBeOnTheScreen();
+    // Left to pay and the due date are said once, in the tile (not again in the list).
+    expect(
+      screen.getByLabelText(`Left to pay, $40.00, Due ${formatDay(obligation().dueAt)}`),
+    ).toBeOnTheScreen();
+    expect(screen.queryByLabelText('Left to pay: $40.00')).toBeNull();
     expect(await screen.findByLabelText('Order total: $120.00')).toBeOnTheScreen();
+  });
+
+  it('ADR-008 SPK-PAY-005: opens with "Left to pay" and "Paid" as stat tiles in tabular figures', async () => {
+    renderObligation();
+    const due = obligation();
+    expect(
+      await screen.findByLabelText(`Left to pay, $40.00, Due ${formatDay(due.dueAt)}`),
+    ).toBeOnTheScreen();
+    expect(screen.getByLabelText('Paid, $0.00, of $40.00')).toBeOnTheScreen();
+    // The facts below the tiles keep the other figures the API states, without repeating these.
+    expect(screen.getByLabelText('Amount: $40.00')).toBeOnTheScreen();
+    expect(screen.queryByLabelText('Left to pay: $40.00')).toBeNull();
+    expect(screen.queryByLabelText(`Due: ${formatDay(due.dueAt)}`)).toBeNull();
+  });
+
+  it('ADR-008: a past-due amount says so in the tile, in words as well as its tone', async () => {
+    const overdue = obligation({ dueAt: '2026-10-01T12:00:00.000Z' });
+    renderObligation({ 'GET /obligations/{id}': { status: 200, body: overdue } });
+    expect(
+      await screen.findByLabelText(
+        `Left to pay, $40.00, Payment due since ${formatDay(overdue.dueAt)}`,
+      ),
+    ).toBeOnTheScreen();
   });
 
   it('shows the order lines per participant and the order state', async () => {
@@ -163,7 +190,7 @@ describe('SCR-C-34 ObligationScreen', () => {
     expect(await screen.findByLabelText('Payment received')).toBeOnTheScreen();
     // The balance refreshes to "Paid"; the payment and its receipt stay on screen.
     await waitFor(() =>
-      expect(screen.getByTestId('obligation-status')).toHaveProp('accessibilityLabel', 'Paid'),
+      expect(screen.getByLabelText('Left to pay, $0.00, Paid')).toBeOnTheScreen(),
     );
     expect(screen.queryByTestId('pay-section')).toBeNull();
     expect(screen.getByTestId('receipt')).toBeOnTheScreen();
@@ -312,7 +339,7 @@ describe('SCR-C-34 ObligationScreen', () => {
     });
     const balanceReads = () =>
       app.fake.requests.filter((r) => r.method === 'GET' && r.route === '/obligations/{id}').length;
-    await screen.findByLabelText('Left to pay: $40.00');
+    await screen.findByLabelText('Amount: $40.00');
     const before = balanceReads();
     await pay();
     expect(await screen.findByTestId('payment-no-answer')).toBeOnTheScreen();
@@ -324,6 +351,7 @@ describe('SCR-C-34 ObligationScreen', () => {
         'The service answered, but its answer could not be read, so the payment may have gone through. Checking again is safe: it asks about the same payment and cannot charge twice.',
       ),
     ).toBeOnTheScreen();
+    await openSupportDetails(screen);
     expect(screen.getByText('Error code: RESPONSE_UNREADABLE')).toBeOnTheScreen();
     expect(screen.queryByText('Something went wrong')).toBeNull();
     expect(screen.queryByLabelText('Something went wrong')).toBeNull();
@@ -363,9 +391,9 @@ describe('SCR-C-34 ObligationScreen', () => {
     expect(await screen.findByTestId('command-refused-before-running')).toBeOnTheScreen();
     expect(screen.getByLabelText('Not done')).toBeOnTheScreen();
     expect(screen.getByText(paused)).toBeOnTheScreen();
-    expect(
-      screen.getByText('Error code: INTEGRATION_UNAVAILABLE. Reference: c-paused'),
-    ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(screen.getByText('Error code: INTEGRATION_UNAVAILABLE')).toBeOnTheScreen();
+    expect(screen.getByText('Reference: c-paused')).toBeOnTheScreen();
     expect(screen.queryByTestId('payment-no-answer')).toBeNull();
     expect(
       screen.queryByLabelText('Payment outcome being confirmed. Do not pay again.'),
@@ -465,9 +493,9 @@ describe('SCR-C-34 ObligationScreen', () => {
     });
     const before = balanceReads();
     expect(await screen.findByLabelText('This may already have been done')).toBeOnTheScreen();
-    expect(
-      screen.getByText('Error code: IDEMPOTENCY_OUTCOME_UNAVAILABLE. Reference: c-pay-lost'),
-    ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(screen.getByText('Error code: IDEMPOTENCY_OUTCOME_UNAVAILABLE')).toBeOnTheScreen();
+    expect(screen.getByText('Reference: c-pay-lost')).toBeOnTheScreen();
     expect(screen.queryByText('Something went wrong')).toBeNull();
     expect(screen.queryByLabelText('Something went wrong')).toBeNull();
     expect(screen.getByRole('button', { name: 'Pay $40.00' })).toBeDisabled();
@@ -493,6 +521,7 @@ describe('SCR-C-34 ObligationScreen', () => {
     });
     await pay();
     expect(await screen.findByTestId('payment-in-progress')).toBeOnTheScreen();
+    await openSupportDetails(screen);
     expect(screen.getByText(/Error code: PAYMENT_OUTCOME_UNKNOWN/)).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: 'Pay $40.00' })).toBeDisabled();
   });
@@ -620,7 +649,7 @@ describe('SCR-C-34 ObligationScreen', () => {
     );
     expect(
       screen.queryByLabelText(
-        "Completing the payment provider’s step in the app. This isn't available in the app yet.",
+        'Completing the payment provider’s step in the app. Pay at the front desk for now.',
       ),
     ).toBeNull();
   });

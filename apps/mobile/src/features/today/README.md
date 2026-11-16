@@ -15,8 +15,9 @@ No screen here has passed native acceptance on signed builds or devices (§6.2).
 Shared code lives here: time display and zones (`time.ts`), status vocabulary (`status.ts`),
 notice placement (`notices.ts`), calendar windows (`calendar.ts`), sessions and fixtures in one
 list (`entries.ts`), the fixture card (`fixture-model.ts`), the session card (`session-activity.ts`),
-the next-activity card (`NextActivityCard.tsx`), RSVP (`RsvpControl.tsx`) and the reads
-(`queries.ts`). Test fixtures shaped like the API are in `__tests__/fixtures.ts`.
+the next-activity card (`NextActivityCard.tsx`), RSVP (`RsvpControl.tsx`; Home's inline "Going / Not
+going" is `RsvpInline.tsx`, sharing its `useRsvpAnswer` logic), the per-section read state
+(`read-state.tsx`) and the reads (`queries.ts`). Test fixtures shaped like the API are in `__tests__/fixtures.ts`.
 
 ## Screens
 
@@ -83,8 +84,8 @@ the next-activity card (`NextActivityCard.tsx`), RSVP (`RsvpControl.tsx`) and th
   (an issue then answers for the pass it made, see Pass above; the RSVP keeps its `expectedRevision`;
   the support request is resent as sent even after the draft was edited, and an edited draft is
   kept). IDEMPOTENCY_OUTCOME_UNAVAILABLE reads "This may already have been done" with "Reload".
-  The pass, inbox and support screens use the account `CommandError`, the RSVP the teams
-  `CommandFailure`; both decide with `src/api/command-outcome.ts` (the shared api-client
+  The pass, inbox and support screens and the RSVP use the shared `ui/CommandError` (the RSVP in
+  its team wording); it decides with `src/api/command-outcome.ts` (the shared api-client
   predicates).
 - **Inbox (SPK-COMMS-004).** Read and acknowledge send the attempt's `revision` (the newest the
   screen knows); a stale read reloads the list; a stale acknowledgment shows the code with

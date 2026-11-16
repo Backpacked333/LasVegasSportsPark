@@ -9,9 +9,9 @@
  * - offline-stale: no connection or old data; shows the age of what is shown and what is unavailable.
  * - unavailable: protected NOT_FOUND or a permission restriction; never implies the record exists.
  * - pending-decision: the screen or value waits on an operator decision (DEC-###); nothing invented.
- *   It says in plain words what the customer can do instead (`message`, e.g. "Pay at the front
- *   desk for now."), with an optional `action`; without a message it says only "This isn't
- *   available in the app yet." The decisions and their owner are in the support fold.
+ *   It says in plain words what the customer can do instead (`message`, required: the decision's
+ *   words from `src/copy/pending.ts`, e.g. "Pay at the front desk for now."), with an optional
+ *   `action`. The decisions and their owner are in the support fold.
  * - turned-off: a conditional capability the organization has switched off (K-12): "This isn't
  *   available right now.", with the decisions that may turn it on (DEC-016 and its own record) and
  *   the refused command's code in the support fold. An `error` that is the API's ACCESS_DENIED
@@ -32,8 +32,17 @@
  * which VoiceOver hears once for the app (ConnectivityAnnouncer); a read that got no answer while
  * the device is online is announced here. Loading (exposed as a busy progress indicator) and
  * pending-decision (fixed wording that answers nothing) are not announced on iOS.
+ *
+ * One offline notice at a time (ADR-008): inside a `Screen`, whose connectivity banner already
+ * says "You are offline" with the age of what is shown, the offline-stale state of a section
+ * (while the device is offline) is not a second card. It is one quiet line with what is its own:
+ * the age of its own data ("Showing information from 5 minutes ago.", or "Not loaded yet." when it
+ * has nothing cached) and what in it needs a connection; a small "Try again" only when nothing is
+ * cached (with cached data the reads run again by themselves when the connection is back). Out of date while
+ * online, or outside a `Screen`, it is the full card as before.
  */
 import {
+  capabilityCustomerLabel,
   formatAge,
   recoveryActionFor,
   turnedOffFromError,
@@ -44,6 +53,7 @@ import type { ReactNode } from 'react';
 import { ActivityIndicator, Text, View } from 'react-native';
 import { useConnectivity } from '../providers/AppProviders';
 import { LiveRegion, sentences } from './announce';
+import { useOfflineBannerShown } from './offline-banner';
 import { Button } from './Button';
 import { Icon } from './Icon';
 import { InfoCard } from './InfoCard';
@@ -59,7 +69,13 @@ interface ActionProps {
 }
 
 export type StateViewProps =
-  | { variant: 'loading'; label: string }
+  | {
+      variant: 'loading';
+      /** What is loading: "Loading {label}". */
+      label: string;
+      /** Words instead of "Loading {label}", for a check rather than a load ("Checking class packs"). */
+      text?: string;
+    }
   | ({ variant: 'empty'; title: string; description: string } & ActionProps)
   | { variant: 'error'; error: ApiError; onRetry?: () => void; onAction?: () => void }
   | {
@@ -83,16 +99,16 @@ export type StateViewProps =
       /** Owner wording from the decision register, when known. */
       owner?: string;
       /**
-       * What the customer can do instead, in plain words ("Pay at the front desk for now.").
-       * Optional for now; without it the state says "This isn't available in the app yet."
+       * What the customer can do instead, in plain words ("Pay at the front desk for now."):
+       * `pendingMessage` or `pendingMessageFor` from `src/copy/pending.ts` (PA-11, SPK-UX-011).
        */
-      message?: string;
+      message: string;
       /** A way forward the app can offer ("Call the front desk"). */
       action?: { label: string; onPress: () => void };
     }
   | {
       variant: 'turned-off';
-      /** What is turned off, e.g. "Rentals" (CAPABILITY_PRESENTATION labels). */
+      /** What is turned off, e.g. "Rentals" (`capabilityCustomerLabel`). */
       subject: string;
       /** The decisions that may turn it on (DEC-016 and the capability's own record). */
       decisions: readonly string[];
@@ -103,25 +119,62 @@ export type StateViewProps =
       error?: ApiError;
     };
 
+/**
+ * The quiet line a section shows under the app's offline banner, or null for nothing: the age of
+ * its own data ("Showing information from 5 minutes ago.") or "Not loaded yet.", then what in it
+ * needs a connection.
+ */
+export function offlineQuietLine(
+  updatedAt: Date | null,
+  now: Date,
+  unavailableActions: readonly string[] = [],
+): string | null {
+  return (
+    sentences(
+      updatedAt === null
+        ? 'Not loaded yet'
+        : `Showing information from ${formatAge(updatedAt, now)}`,
+      unavailableActions.length > 0 ? `Needs a connection: ${unavailableActions.join(', ')}` : null,
+    ) || null
+  );
+}
+
 export function StateView(props: StateViewProps) {
   const { colors, toneBackgrounds } = useTheme();
   const styles = useStyles();
   const { reachable } = useConnectivity();
+  const bannerShown = useOfflineBannerShown();
+  // Inside a card frame (a feature Section) the state is drawn flat, without a card of its own.
+  const flat = useRowLayout() === 'flat';
+  if (props.variant === 'offline-stale' && props.offline && reachable === false && bannerShown) {
+    const line = offlineQuietLine(props.updatedAt, props.now, props.unavailableActions);
+    // With nothing cached the section keeps a small "Try again" (the device may be wrong about
+    // its connection); with cached data the reads run again by themselves when it is back.
+    const retry = props.updatedAt === null ? props.onRetry : undefined;
+    if (!line) return null;
+    return (
+      <View style={[styles.quietRow, flat && styles.flatLoading]} testID="state-offline-quiet">
+        <Text style={styles.quiet}>{line}</Text>
+        {retry ? <Button label="Try again" onPress={retry} variant="secondary" /> : null}
+      </View>
+    );
+  }
   // A command refused because its capability is turned off is not a failure (K-12, DEC-016).
   const turnedOff = props.variant === 'error' ? turnedOffFromError(props.error) : null;
   const shown: StateViewProps =
     turnedOff && props.variant === 'error'
       ? {
           variant: 'turned-off',
-          subject: turnedOff.label,
+          // The customer's word for it (PA-11): "Class packs", not the staff "Session packages".
+          subject: turnedOff.capability
+            ? capabilityCustomerLabel(turnedOff.capability)
+            : turnedOff.label,
           decisions: turnedOff.decisions,
           owner: turnedOff.owner,
           error: props.error,
         }
       : props;
   const tile = VARIANT_TILES[shown.variant];
-  // Inside a card frame (a feature Section) the state is drawn flat, without a card of its own.
-  const flat = useRowLayout() === 'flat';
   return (
     <LiveRegion
       style={
@@ -194,9 +247,6 @@ const VARIANT_TILES: Record<StateViewProps['variant'], { icon: string; tone: Til
   'turned-off': { icon: 'toggle_off', tone: 'neutral' },
 };
 
-/** Pending decision without a `message`: plain words, no codes (PA-11). */
-export const PENDING_DECISION_FALLBACK = "This isn't available in the app yet.";
-
 /** What a turned-off capability says (PA-11): the decisions are in the support fold. */
 export const TURNED_OFF_MESSAGE = "This isn't available right now.";
 
@@ -261,11 +311,11 @@ function StateBody({ state: props }: { state: StateViewProps }): ReactNode {
           style={styles.row}
           accessible
           accessibilityRole="progressbar"
-          accessibilityLabel={`Loading ${props.label}`}
+          accessibilityLabel={props.text ?? `Loading ${props.label}`}
           accessibilityState={{ busy: true }}
         >
           <ActivityIndicator color={colors.primary} />
-          <Text style={styles.body}>Loading {props.label}…</Text>
+          <Text style={styles.body}>{`${props.text ?? `Loading ${props.label}`}…`}</Text>
         </View>
       );
     case 'empty':
@@ -333,7 +383,7 @@ function StateBody({ state: props }: { state: StateViewProps }): ReactNode {
           tone="info"
           icon="schedule"
           title={props.subject}
-          message={props.message ?? PENDING_DECISION_FALLBACK}
+          message={props.message}
           action={props.action}
           style={styles.pending}
         >
@@ -397,4 +447,12 @@ const useStyles = makeStyles(({ colors }) => ({
   title: { ...type.title, fontSize: 22, lineHeight: 24, color: colors.text },
   body: { ...type.body, color: colors.text },
   caption: { ...type.caption, color: colors.textMuted },
+  // Inset like the loading line; flat inside a card frame.
+  quietRow: {
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.xs,
+    gap: spacing.xs,
+    alignItems: 'flex-start',
+  },
+  quiet: { ...type.caption, color: colors.textMuted },
 }));

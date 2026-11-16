@@ -5,6 +5,9 @@
  */
 import type { ReactNode } from 'react';
 import { View, type StyleProp, type ViewStyle } from 'react-native';
+import { activityArtwork } from '../artwork/manifest';
+import { Artwork } from '../ui/Artwork';
+import { MediaScrim } from '../ui/MediaCard';
 import { Section, type SectionAction, type SectionVariant } from '../ui/Section';
 import { Text } from '../ui/Text';
 import { makeStyles, radius, spacing } from '../ui/theme';
@@ -51,10 +54,23 @@ export function Column({ children, style }: { children: ReactNode; style?: Style
   return <View style={[styles.column, style]}>{children}</View>;
 }
 
-/** The scrim colour band that words and controls over artwork sit on. */
+/**
+ * Words and controls over artwork, as screens draw them: a picture with the scrim (`MediaScrim`)
+ * at its foot. On a plain page colour the scrim would show nothing in Legends mode (black on
+ * black), so the specimen is always over a picture.
+ */
 export function ScrimBand({ children }: { children: ReactNode }) {
   const styles = useStyles();
-  return <View style={[styles.band, styles.scrim]}>{children}</View>;
+  return (
+    <View style={styles.media}>
+      <Artwork
+        source={activityArtwork['soccer-league'].wide}
+        aspectRatio={16 / 9}
+        rounded={false}
+      />
+      <MediaScrim bandStyle={styles.scrimWords}>{children}</MediaScrim>
+    </View>
+  );
 }
 
 /** The night surface (hero cards, the pass). */
@@ -70,6 +86,7 @@ const useStyles = makeStyles(({ colors }) => ({
   row: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: spacing.sm },
   column: { gap: spacing.md },
   band: { gap: spacing.sm, padding: spacing.lg, borderRadius: radius.image },
-  scrim: { backgroundColor: colors.scrimEnd },
+  media: { borderRadius: radius.image, overflow: 'hidden' },
+  scrimWords: { gap: spacing.sm },
   night: { backgroundColor: colors.night },
 }));

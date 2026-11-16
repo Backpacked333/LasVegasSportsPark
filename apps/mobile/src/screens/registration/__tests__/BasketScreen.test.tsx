@@ -10,7 +10,7 @@ import {
   type FakeHandler,
   type FakeRequest,
 } from '@sportspark/api-client/testing';
-import { act, fireEvent, render, screen } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, within } from '@testing-library/react-native';
 import {
   IDS,
   acknowledgment,
@@ -81,15 +81,39 @@ function checkoutsBehindNewerOnes(options: { failRecoveryPage?: () => boolean } 
 }
 
 describe('SCR-C-11 BasketScreen', () => {
+  it('PA-11 ADR-008: an empty cart shows its illustration and leads to Explore; the cart is not a step', async () => {
+    const app = renderBasket({
+      routes: routes({ 'GET /baskets/{id}': { status: 200, body: basket({ lines: [] }) } }),
+    });
+    expect(await screen.findByRole('header', { name: 'Your cart is empty' })).toBeOnTheScreen();
+    expect(screen.getByText('Add an activity from Explore.')).toBeOnTheScreen();
+    expect(screen.queryByTestId('registration-steps')).toBeNull();
+    fireEvent.press(screen.getByRole('button', { name: 'Explore activities' }));
+    expect(mockRouter.push).toHaveBeenCalledWith('/discover');
+    expect(screen.queryByRole('button', { name: 'Get your price' })).toBeNull();
+    await app.settle();
+  });
+
+  it("PA-11 ADR-008: each line is a card with the person's initials, the activity and its status", async () => {
+    const app = renderBasket({ routes: routes() });
+    expect(
+      await screen.findByLabelText('Ada: Autumn Youth Program. Not held yet'),
+    ).toBeOnTheScreen();
+    const card = within(screen.getByTestId(`line-${IDS.lineA}`));
+    expect(card.getByText('A', { includeHiddenElements: true })).toBeOnTheScreen();
+    expect(card.getByRole('button', { name: 'Remove Ada from the cart' })).toBeOnTheScreen();
+    await app.settle();
+  });
+
   beforeEach(() => mockRouter.push.mockClear());
 
   it('SPK-REG-004: every line keeps its participant, offering, price and forms; all-or-nothing is stated', async () => {
     renderBasket({ routes: routes() });
     expect(await screen.findByText('Ada: Autumn Youth Program')).toBeOnTheScreen();
     expect(screen.getByText('Ben: Autumn Youth Program')).toBeOnTheScreen();
-    expect(screen.getByLabelText('In your basket. No place is held yet.')).toBeOnTheScreen();
+    expect(screen.getByLabelText('In your cart. No spots are saved yet.')).toBeOnTheScreen();
     expect(
-      screen.getByText('All places in this basket are confirmed together, or none are.'),
+      screen.getByText('All spots in this cart are confirmed together, or none are.'),
     ).toBeOnTheScreen();
     expect(screen.getAllByLabelText('Base price each: $120.00')).toHaveLength(2);
     expect(screen.getByLabelText('Subtotal: $240.00')).toBeOnTheScreen();
@@ -141,7 +165,7 @@ describe('SCR-C-11 BasketScreen', () => {
     expect((await screen.findAllByLabelText(/^Place held until /)).length).toBeGreaterThan(0);
     expect(screen.getByText('Countdown: about 9 minutes left')).toBeOnTheScreen();
     await act(async () => {
-      fireEvent.press(screen.getByRole('button', { name: 'Release my held places' }));
+      fireEvent.press(screen.getByRole('button', { name: 'Release my saved spots' }));
     });
     expect(app.fake.requests.find((r) => r.route === '/baskets/{id}/release')?.body).toEqual({
       reason: RELEASE_REASON,
@@ -162,7 +186,11 @@ describe('SCR-C-11 BasketScreen', () => {
       }),
     });
     expect((await screen.findAllByLabelText('Awaiting approval')).length).toBeGreaterThan(0);
-    expect(screen.getByText(/Places are held only\s+when you check out\./)).toBeOnTheScreen();
+    expect(
+      screen.getByText(
+        'A line in this cart needs approval by staff before you can pay. Your spots are saved only when you check out.',
+      ),
+    ).toBeOnTheScreen();
     expect(screen.queryByRole('button', { name: 'Get your price' })).toBeNull();
   });
 
@@ -237,7 +265,7 @@ describe('SCR-C-11 BasketScreen', () => {
           fakeResponse(409, apiErrorBody('STALE_REVISION', { nextAction: 'reload_and_retry' })),
       }),
     });
-    const target = await screen.findByRole('button', { name: 'Remove Ada from the basket' });
+    const target = await screen.findByRole('button', { name: 'Remove Ada from the cart' });
     await act(async () => {
       fireEvent.press(target);
     });
@@ -394,7 +422,7 @@ describe('SCR-C-11 BasketScreen', () => {
       }),
     });
     expect(
-      await screen.findByText('The payment for this basket could not be looked up.'),
+      await screen.findByText('The payment for this cart could not be looked up.'),
     ).toBeOnTheScreen();
     await openSupportDetails(screen);
     expect(screen.getByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
@@ -402,7 +430,7 @@ describe('SCR-C-11 BasketScreen', () => {
     fail = false;
     fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
     expect(await screen.findByRole('button', { name: 'See your payment' })).toBeOnTheScreen();
-    expect(screen.queryByText('The payment for this basket could not be looked up.')).toBeNull();
+    expect(screen.queryByText('The payment for this cart could not be looked up.')).toBeNull();
   });
 
   it('§4.10: a basket of another household reads not available', async () => {
@@ -416,7 +444,7 @@ describe('SCR-C-11 BasketScreen', () => {
     act(() => app.sources.setReachable(false));
     expect(screen.getByRole('button', { name: 'Get your price' })).toBeDisabled();
     expect(
-      screen.getByText('Getting a price and checking out need a connection. Your basket is kept.'),
+      screen.getByText('Getting a price and checking out need a connection. Your cart is kept.'),
     ).toBeOnTheScreen();
   });
 });

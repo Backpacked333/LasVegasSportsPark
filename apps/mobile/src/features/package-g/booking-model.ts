@@ -62,7 +62,7 @@ export function bookingStatus(booking: Pick<Booking, 'status' | 'outstanding'>):
 
 const OUTSTANDING_WORDS: Record<BookingOutstanding, string> = {
   approval: 'Staff approve or decline the request. Nothing is reserved until they approve it.',
-  payment: 'Your payment, in your basket. The booking is confirmed only when it is paid.',
+  payment: 'Your payment, in your cart. The booking is confirmed only when it is paid.',
   staffing:
     'The facility assigns the staff this booking needs. It is confirmed only when they are assigned.',
 };
@@ -187,15 +187,15 @@ export function bookingTermsOf(
 /** How the terms confirm a booking, in the customer's words. */
 export function confirmationText(mode: 'instant' | 'request'): string {
   return mode === 'instant'
-    ? 'Booked at once: the time is held for you, then you pay in your basket to confirm it.'
+    ? 'Booked at once: the time is held for you, then you pay in your cart to confirm it.'
     : 'By request: staff approve or decline it. Nothing is reserved or charged until they approve it.';
 }
 
 /** What the terms say about paying (the amount is the basket's quote, never the app's). */
 export function paymentText(terms: Pick<BookingTerms, 'installmentPolicyKey'>): string {
   return terms.installmentPolicyKey
-    ? "A deposit is taken at checkout under the facility's approved payment plan, and the rest later. Your basket shows the amounts."
-    : 'Paid in full at checkout. Your basket shows the price, taxes and fees.';
+    ? "A deposit is taken at checkout under the facility's approved payment plan, and the rest later. Your cart shows the amounts."
+    : 'Paid in full at checkout. Your cart shows the price, taxes and fees.';
 }
 
 /** One start time the customer may choose, with the resources free at it. */

@@ -36,8 +36,10 @@ import { useParticipantNames } from './participants';
 import { useRegistrationProgress } from './progress';
 import { useOfferingTimeZones } from './queries';
 import { registrationRoutes } from './routes';
+import { useKnownFacilityZone } from '../today/known-zone';
 import { basketStatus, checkoutStatus, offerDeadlineStatus } from './status';
-import { Body, Section } from './ui';
+import { Section } from '../../ui/Section';
+import { Text } from '../../ui/Text';
 
 type Basket = Schema<'Basket'>;
 
@@ -56,6 +58,7 @@ function lineCount(basket: Basket): string {
 export function InProgressCard() {
   const router = useRouter();
   const now = useNow();
+  const zone = useKnownFacilityZone().zone;
   const { progress, update } = useRegistrationProgress();
   const baskets = useMyBaskets();
   const checkouts = useMyCheckouts();
@@ -124,9 +127,9 @@ export function InProgressCard() {
         {active.map((basket) => (
           <ListRow
             key={basket.id}
-            title="Your basket"
+            title="Your cart"
             detail={lineCount(basket)}
-            status={basketStatus(basket, now)}
+            status={basketStatus(basket, now, zone)}
             onPress={() => router.push(registrationRoutes.basket(basket.id))}
             accessibilityHint="Continues this registration"
             testID={`resume-basket-${basket.id}`}
@@ -147,7 +150,11 @@ export function InProgressCard() {
           />
         ))}
       </View>
-      {nothing ? <Body muted>Nothing in progress right now.</Body> : null}
+      {nothing ? (
+        <Text variant="caption" tone="muted">
+          Nothing in progress right now.
+        </Text>
+      ) : null}
       <View style={styles.more}>
         <Button
           label="Your waitlists"

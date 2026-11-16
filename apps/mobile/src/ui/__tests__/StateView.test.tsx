@@ -10,11 +10,14 @@ import { openSupportDetails, renderSurface } from '../../testing/ui-surfaces';
 import { MotionProvider } from '../motion';
 import {
   announcementFor,
-  PENDING_DECISION_FALLBACK,
+  offlineQuietLine,
   StateView,
   TURNED_OFF_MESSAGE,
+  type StateViewProps,
 } from '../StateView';
+import { Screen } from '../Screen';
 import { classicTheme, legendsTheme } from '../theme';
+import { pendingMessage } from '../../copy/pending';
 
 const CODES = /DEC-\d|POL-\d|owner|Error code|Reference|corr-/i;
 
@@ -57,14 +60,28 @@ describe('StateView pending-decision (PA-11)', () => {
     expect(screen.getByText('Owner: Technical lead/account owners')).toBeOnTheScreen();
   });
 
-  it('SPK-UX-011: without a message, says plainly that it is not in the app yet', async () => {
+  it("SPK-UX-011: says what to do instead in the decision's plain words (`message` is required)", async () => {
     await renderSurface(
-      <StateView variant="pending-decision" subject="Account sign-in" decisions={['DEC-018']} />,
+      <StateView
+        variant="pending-decision"
+        subject="Account sign-in"
+        decisions={['DEC-018']}
+        message={pendingMessage('DEC-018')}
+      />,
     );
-    expect(PENDING_DECISION_FALLBACK).toBe("This isn't available in the app yet.");
     expect(
-      screen.getByLabelText("Account sign-in. This isn't available in the app yet."),
+      screen.getByLabelText(
+        'Account sign-in. Ask the front desk to help with your account for now.',
+      ),
     ).toBeOnTheScreen();
+    // The compiler refuses a pending decision without its message.
+    // @ts-expect-error `message` is required on pending-decision.
+    const withoutMessage: StateViewProps = {
+      variant: 'pending-decision',
+      subject: 'Account sign-in',
+      decisions: ['DEC-018'],
+    };
+    void withoutMessage;
     expect(screen.queryByText(CODES)).toBeNull();
     // Only the fold is a control: no action is invented.
     expect(screen.getAllByRole('button')).toHaveLength(1);
@@ -80,7 +97,12 @@ describe('StateView pending-decision (PA-11)', () => {
       }),
     ).toBeNull();
     await renderSurface(
-      <StateView variant="pending-decision" subject="Account sign-in" decisions={['DEC-018']} />,
+      <StateView
+        variant="pending-decision"
+        subject="Account sign-in"
+        decisions={['DEC-018']}
+        message={pendingMessage('DEC-018')}
+      />,
     );
     expect(screen.getByTestId('state-pending-decision')).toHaveProp(
       'accessibilityLiveRegion',
@@ -185,12 +207,19 @@ describe('StateView controls and looks (SPK-UX-009)', () => {
     async (name, theme) => {
       await renderSurface(
         <>
-          <StateView variant="pending-decision" subject="Account sign-in" decisions={['DEC-018']} />
+          <StateView
+            variant="pending-decision"
+            subject="Account sign-in"
+            decisions={['DEC-018']}
+            message={pendingMessage('DEC-018')}
+          />
           <StateView variant="loading" label="your teams" />
         </>,
         { theme: name },
       );
-      const notice = screen.getByLabelText("Account sign-in. This isn't available in the app yet.");
+      const notice = screen.getByLabelText(
+        'Account sign-in. Ask the front desk to help with your account for now.',
+      );
       // The InfoCard is the host view around the notice's words.
       let card = notice.parent;
       while (card && typeof card.type !== 'string') card = card.parent;
@@ -210,5 +239,61 @@ describe('StateView controls and looks (SPK-UX-009)', () => {
     rerender(<MotionProvider reduced={false}>{view}</MotionProvider>);
     await openSupportDetails(screen);
     expect(screen.getByText('Error code: TIMEOUT')).toBeOnTheScreen();
+  });
+});
+
+describe('one offline notice at a time (ADR-008, SPK-UX-008)', () => {
+  const NOW = new Date('2026-10-24T12:20:00.000Z');
+  const CACHED = new Date('2026-10-24T12:00:00.000Z');
+
+  it('§4.15: under the screen banner, a section with cached data says its age and needs on one quiet line', async () => {
+    await renderSurface(
+      <Screen>
+        <StateView
+          variant="offline-stale"
+          offline
+          updatedAt={CACHED}
+          now={NOW}
+          unavailableActions={['paying a balance']}
+          onRetry={jest.fn()}
+        />
+      </Screen>,
+      { reachable: false },
+    );
+    // The banner is the one "You are offline"; the section adds no card and no "Try again".
+    expect(screen.getAllByLabelText('You are offline')).toHaveLength(1);
+    expect(screen.getByTestId('connectivity-banner')).toBeOnTheScreen();
+    expect(
+      screen.getByText(
+        'Showing information from 20 minutes ago. Needs a connection: paying a balance.',
+      ),
+    ).toBeOnTheScreen();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+    expect(screen.queryByTestId('state-offline-stale')).toBeNull();
+  });
+
+  it('§4.15: with nothing cached the quiet line says so and keeps a "Try again"', async () => {
+    const retry = jest.fn();
+    await renderSurface(
+      <Screen>
+        <StateView variant="offline-stale" offline updatedAt={null} now={NOW} onRetry={retry} />
+      </Screen>,
+      { reachable: false },
+    );
+    expect(screen.getByText('Not loaded yet.')).toBeOnTheScreen();
+    fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+
+  it('outside a screen, or out of date while online, it is the full card', async () => {
+    await renderSurface(
+      <StateView variant="offline-stale" offline updatedAt={CACHED} now={NOW} />,
+      { reachable: false },
+    );
+    expect(screen.getByTestId('state-offline-stale')).toBeOnTheScreen();
+    expect(offlineQuietLine(CACHED, NOW, [])).toBe('Showing information from 20 minutes ago.');
+    expect(offlineQuietLine(null, NOW, ['Booking'])).toBe(
+      'Not loaded yet. Needs a connection: Booking.',
+    );
   });
 });

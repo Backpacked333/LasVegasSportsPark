@@ -1,5 +1,5 @@
 /**
- * SCR-C-14 Checkout and payment (SPK-REG-005, SPK-REG-006, SPK-REG-007, SPK-PAY-007, §4.9, §4.11;
+ * SCR-C-14 Checkout and payment, the Pay step of registering (PA-11, ADR-008) (SPK-REG-005, SPK-REG-006, SPK-REG-007, SPK-PAY-007, §4.9, §4.11;
  * SPK-AT-005 final-place contention, SPK-AT-006 payment after hold expiry; journeys A5a, A5b).
  *
  * 1. Hold: `POST /v1/baskets/{id}/hold` acquires the server-owned holds; the expiry is the server's
@@ -7,8 +7,10 @@
  *    the waitlist as the permitted alternative; nothing is charged.
  * 2. Pay: `POST /v1/registration-checkouts` for the stored quote. Card details never enter the
  *    app: a payment method comes from the approved provider's own flow, which is not selected
- *    (DEC-019, Technical lead/account owners), so release builds show that pending state;
- *    development builds use the API's fake provider. A quote with nothing due is confirmed
+ *    (DEC-019, Technical lead/account owners), so release builds say "Paying in the app isn't
+ *    available yet. Pay at the front desk for now. Your spots are held until <hold expiry>." (the
+ *    basket's server-owned hold expiry, formatted as everywhere else), with DEC-019 and its owner
+ *    in the "Details for support" fold; development builds use the API's fake provider. A quote with nothing due is confirmed
  *    without a payment.
  * 3. The answer, whatever it is, hands off to the checkout outcome (SCR-C-15), which shows success
  *    only when the API confirms it.
@@ -44,6 +46,7 @@ import { ApiError, type Schema } from '@sportspark/api-client';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { View } from 'react-native';
+import { pendingMessage } from '../../copy/pending';
 import {
   RESPONSE_UNREADABLE_CODE,
   mayHaveTakenEffect,
@@ -52,10 +55,10 @@ import {
 } from '../../api/command-outcome';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
-import { CommandError } from '../../features/registration/CommandError';
+import { CommandError } from '../../ui/CommandError';
 import { DevPaymentMethodPicker } from '../../features/registration/dev';
 import { ExpiryNotice } from '../../features/registration/ExpiryNotice';
-import { formatMoney } from '../../features/registration/format';
+import { formatInstant, formatMoney } from '../../features/registration/format';
 import { JoinWaitlistButton } from '../../features/registration/JoinWaitlist';
 import { useParticipantNames } from '../../features/registration/participants';
 import {
@@ -67,16 +70,25 @@ import {
 import { useRegistrationProgress } from '../../features/registration/progress';
 import { param, registrationRoutes } from '../../features/registration/routes';
 import { basketStatus, holdStatus, quoteStatus } from '../../features/registration/status';
-import { Body, ButtonRow, ChoiceRow, Detail, Section } from '../../features/registration/ui';
+import { RegistrationSteps } from '../../features/registration/steps';
+import { useOfferingsZone } from '../../features/registration/queries';
+import { useKnownFacilityZone } from '../../features/today/known-zone';
 import { useApp, useConnectivity, useNow } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
 import { LiveRegion, sentences } from '../../ui/announce';
 import { Button } from '../../ui/Button';
+import { Card } from '../../ui/Card';
+import { ChoiceCard } from '../../ui/ChoiceList';
+import { FieldValue } from '../../ui/Field';
+import { InfoCard } from '../../ui/InfoCard';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { RefusedBeforeRunning } from '../../ui/RefusedBeforeRunning';
 import { Screen } from '../../ui/Screen';
-import { StateView } from '../../ui/StateView';
+import { Section } from '../../ui/Section';
 import { StatusBadge } from '../../ui/StatusBadge';
+import { SupportDetails } from '../../ui/SupportDetails';
+import { Text } from '../../ui/Text';
+import { layout, makeStyles, spacing } from '../../ui/theme';
 import { quoteIsUsable } from './QuoteReviewScreen';
 
 const UNKNOWN_OUTCOME_LABEL = 'Payment outcome being confirmed. Do not pay again.';
@@ -85,6 +97,17 @@ const UNKNOWN_OUTCOME_BODY =
 /** RESPONSE_UNREADABLE: the service answered success, but its answer could not be read. */
 const UNREADABLE_OUTCOME_BODY =
   'The service answered about this payment, but its answer could not be read. Do not pay again. When the app is back online or opened again, it asks with the same request, which can never charge you twice.';
+
+/** DEC-019: what a release build says instead of a payment form (PA-11, `src/copy/pending.ts`). */
+export function payAtDeskMessage(holdExpiresAt: string | null, zone?: string): string {
+  return [
+    "Paying in the app isn't available yet.",
+    pendingMessage('DEC-019'),
+    holdExpiresAt ? `Your spots are held until ${formatInstant(holdExpiresAt, zone)}.` : null,
+  ]
+    .filter(Boolean)
+    .join(' ');
+}
 
 type Quote = Schema<'Quote'>;
 type Basket = Schema<'Basket'>;
@@ -147,7 +170,9 @@ function CheckoutContent({
   basket: Basket;
   refetch: () => void;
 }) {
+  const styles = useStyles();
   const router = useRouter();
+  const zone = useKnownFacilityZone(useOfferingsZone(quote.lines.map((l) => l.offeringId))).zone;
   const now = useNow();
   const { reachable } = useConnectivity();
   const offline = reachable === false;
@@ -285,41 +310,90 @@ function CheckoutContent({
     (dueNow === 0 || token !== null) &&
     (!installments || authorized);
 
+  // How this step is paid, right under the amount so the pay-at-desk message is on the first
+  // screen even on a small phone (375 x 667).
+  const payBlock =
+    usable && held && !basket.approvalPending && unknownOutcome === null ? (
+      dueNow === 0 ? (
+        <Section title="Nothing to pay now">
+          <Text variant="body">Nothing is due now.</Text>
+        </Section>
+      ) : DevPaymentMethodPicker ? (
+        <DevPaymentMethodPicker value={token} onChange={setToken} />
+      ) : (
+        // DEC-019 (PA-11): what to do instead, in words; the decision is in the fold.
+        <InfoCard
+          tone="info"
+          icon="storefront"
+          message={payAtDeskMessage(basket.holdExpiresAt, zone)}
+          style={styles.card}
+          testID="checkout-pay-at-desk"
+        >
+          <SupportDetails decisions={['DEC-019']} owner="Technical lead/account owners" />
+        </InfoCard>
+      )
+    ) : null;
+  // Without a way to pay in the app (a release build, DEC-019) there is no Pay button to show
+  // disabled: the pay-at-desk message is the answer.
+  const payInApp = dueNow === 0 || DevPaymentMethodPicker !== null;
+
   if (started) {
     return (
-      <Section title="Checkout started">
-        <Body>A checkout already exists for this price. It is never charged twice.</Body>
-        {existingCheckoutId ? (
-          <Button
-            label="See your payment and registration"
-            onPress={() => router.replace(registrationRoutes.outcome(existingCheckoutId))}
-          />
-        ) : (
-          <Button
-            label="Check this checkout again"
-            onPress={() => void pay({ quoteId: quote.id, authorizeFutureInstallments: false })}
-            disabled={offline}
-          />
-        )}
-      </Section>
+      <View>
+        <RegistrationSteps step="Pay" />
+        <Section title="Checkout started">
+          <Text variant="body">
+            A checkout already exists for this price. It is never charged twice.
+          </Text>
+          {existingCheckoutId ? (
+            <Button
+              label="See your payment and registration"
+              onPress={() => router.replace(registrationRoutes.outcome(existingCheckoutId))}
+            />
+          ) : (
+            <Button
+              label="Check this checkout again"
+              onPress={() => void pay({ quoteId: quote.id, authorizeFutureInstallments: false })}
+              disabled={offline}
+            />
+          )}
+        </Section>
+      </View>
     );
   }
 
   return (
     <View>
-      <Section title="Checkout">
-        <Detail label="Due now" value={m(dueNow)} emphasis testID="checkout-due-now" />
+      <RegistrationSteps step="Pay" />
+      {/* The screen's title already says "Checkout": the amount card has no heading of its own. */}
+      <Card style={styles.card}>
+        <FieldValue
+          layout="inline"
+          label="Due now"
+          value={m(dueNow)}
+          emphasis
+          testID="checkout-due-now"
+        />
         {quote.futureObligations.map((f) => (
-          <Detail key={f.sequence} label={`Later payment ${f.sequence}`} value={m(f.amountMinor)} />
+          <FieldValue
+            layout="inline"
+            key={f.sequence}
+            label={`Later payment ${f.sequence}`}
+            value={m(f.amountMinor)}
+          />
         ))}
-        <StatusBadge {...quoteStatus(quote, now)} />
-        <StatusBadge {...basketStatus(basket, now)} testID="checkout-basket-status" />
-      </Section>
+        <StatusBadge {...quoteStatus(quote, now, zone)} />
+        {held ? null : (
+          // Held spots are said once, by the hold notice below, with its countdown.
+          <StatusBadge {...basketStatus(basket, now, zone)} testID="checkout-basket-status" />
+        )}
+      </Card>
+      {payBlock}
       {held && basket.holdExpiresAt ? (
         <ExpiryNotice
           expiresAt={basket.holdExpiresAt}
-          status={holdStatus(basket.holdExpiresAt, now)}
-          explanation="The facility's system releases held places at this time; the countdown is a guide. If a payment finishes after that, its outcome is still recorded and confirmed or returned."
+          status={holdStatus(basket.holdExpiresAt, now, zone)}
+          explanation="The facility's system lets your saved spots go at this time; the countdown is a guide. If a payment finishes after that, its outcome is still recorded and confirmed or returned."
           onLapsed={refetch}
           testID="checkout-hold"
         />
@@ -342,7 +416,9 @@ function CheckoutContent({
               label={UNKNOWN_OUTCOME_LABEL}
               testID="checkout-outcome-unknown"
             />
-            <Body>{unreadable ? UNREADABLE_OUTCOME_BODY : UNKNOWN_OUTCOME_BODY}</Body>
+            <Text variant="body">
+              {unreadable ? UNREADABLE_OUTCOME_BODY : UNKNOWN_OUTCOME_BODY}
+            </Text>
             <Button
               label="Check now"
               onPress={() => void pay(unknownOutcome)}
@@ -364,7 +440,7 @@ function CheckoutContent({
       {basket.approvalPending ? (
         <Section title="Awaiting approval">
           <StatusBadge tone="pending" label="Awaiting approval" />
-          <Body>Staff must approve a line before you can pay.</Body>
+          <Text variant="body">Staff must approve a line before you can pay.</Text>
         </Section>
       ) : null}
 
@@ -382,24 +458,24 @@ function CheckoutContent({
 
       {ended ? (
         <Section title="Your held place was released">
-          <Body>
-            Nothing was charged. Go back to your basket to start again or join a waitlist.
-          </Body>
+          <Text variant="body">
+            Nothing was charged. Go back to your cart to start again or join a waitlist.
+          </Text>
           <Button
-            label="Back to your basket"
+            label="Back to your cart"
             onPress={() => router.push(registrationRoutes.basket(basket.id))}
           />
         </Section>
       ) : null}
 
       {usable && basket.status === 'open' && !basket.approvalPending && unknownOutcome === null ? (
-        <Section title="Hold your places">
-          <Body>
-            Your places are held for a short time while you pay. Holding a place is not a
+        <Section title="Save your spots">
+          <Text variant="body">
+            Your spots are saved for a short time while you pay. Saving a spot is not a
             confirmation.
-          </Body>
+          </Text>
           <Button
-            label="Hold my places"
+            label="Save my spots"
             onPress={() => void holdPlaces()}
             busy={hold.isProcessing}
             disabled={offline}
@@ -407,41 +483,24 @@ function CheckoutContent({
         </Section>
       ) : null}
 
-      {usable && held && !basket.approvalPending && unknownOutcome === null ? (
-        dueNow === 0 ? (
-          <Section title="Nothing to pay now">
-            <Body>Your quote has nothing due now.</Body>
-          </Section>
-        ) : DevPaymentMethodPicker ? (
-          <DevPaymentMethodPicker value={token} onChange={setToken} />
-        ) : (
-          <View>
-            <StateView
-              variant="pending-decision"
-              subject="Paying in the app"
-              decisions={['DEC-019']}
-              owner="Technical lead/account owners"
-            />
-            <Body muted>
-              Card details never enter this app; payment happens in the payment provider's own form
-              once a provider is chosen.
-            </Body>
-          </View>
-        )
-      ) : null}
-
       {installments && usable && held ? (
         <Section title="Future payments">
-          <ChoiceRow
-            label="I authorize the future payments listed on my price"
+          <ChoiceCard
+            option={{
+              value: 'authorize',
+              label: 'I authorize the future payments listed on my price',
+            }}
+            mode="multiple"
             checked={authorized}
-            onToggle={() => setAuthorized((v) => !v)}
+            onPress={() => setAuthorized((v) => !v)}
+            accessibilityLabel="I authorize the future payments listed on my price"
             testID="authorize-installments"
           />
         </Section>
       ) : null}
 
       <CommandError
+        wording="registration"
         error={checkRefused ? null : (failure?.error ?? null)}
         onRetry={failure?.retry}
         onReload={() => {
@@ -452,13 +511,13 @@ function CheckoutContent({
         onCompleteForms={() => router.push(registrationRoutes.basketForms(basket.id))}
       />
       {conflict === 'QUOTE_STALE' ? (
-        <ButtonRow>
+        <View style={styles.actions}>
           <Button label="Get a new price" onPress={() => void newPrice()} disabled={offline} />
-        </ButtonRow>
+        </View>
       ) : null}
       {capacityLost ? (
         <Section title="No place available">
-          <Body>Nothing was charged. You can join the waitlist instead.</Body>
+          <Text variant="body">Nothing was charged. You can join the waitlist instead.</Text>
           {basket.lines.map((line) => (
             <JoinWaitlistButton
               key={line.id}
@@ -470,16 +529,22 @@ function CheckoutContent({
         </Section>
       ) : null}
 
-      {usable && held && unknownOutcome === null && !outcomeLost ? (
-        <ButtonRow>
+      {usable && held && unknownOutcome === null && !outcomeLost && payInApp ? (
+        <View style={styles.actions}>
           <Button
             label={dueNow === 0 ? 'Confirm registration' : `Pay ${m(dueNow)}`}
             onPress={() => void pay(body)}
             disabled={!canPay}
             busy={checkout.isProcessing}
+            size="lg"
+            block
           />
-          {offline ? <Body muted>Payment cannot start without a connection.</Body> : null}
-        </ButtonRow>
+          {offline ? (
+            <Text variant="caption" tone="muted">
+              Payment cannot start without a connection.
+            </Text>
+          ) : null}
+        </View>
       ) : null}
     </View>
   );
@@ -540,3 +605,8 @@ export function CheckoutRoute() {
     </>
   );
 }
+
+const useStyles = makeStyles(() => ({
+  card: { marginHorizontal: layout.gutter, marginTop: spacing.lg },
+  actions: { gap: spacing.sm, paddingHorizontal: layout.gutter, paddingVertical: spacing.lg },
+}));

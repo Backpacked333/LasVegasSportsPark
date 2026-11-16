@@ -3,7 +3,9 @@
  * §6.2 "Fresh installation", "Account verification", "Interrupted onboarding", DEC-018, DEC-061).
  */
 import { fakeResponse } from '@sportspark/api-client/testing';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
+import { Image } from 'expo-image';
+import { onboardingArtwork } from '../../../artwork/manifest';
 import { clearLinkSecrets, holdLinkSecret, readLinkSecret } from '../../../links/link-secrets';
 import { useApp, type AppContextValue } from '../../../providers/AppProviders';
 import { createTestApp, TEST_SESSION } from '../../../testing/test-app';
@@ -51,10 +53,9 @@ describe('SCR-C-01 OnboardingScreen', () => {
   it('signed out: shows every step as not started and offers sign-in and recovery (fresh installation)', async () => {
     const app = createTestApp({ session: null });
     render(<OnboardingScreen />, { wrapper: app.wrapper });
-    expect(await screen.findByLabelText('Step 1 of 4, Sign in, Not started')).toBeOnTheScreen();
-    expect(
-      screen.getByLabelText('Step 4 of 4, Notifications and camera, Waiting on a decision'),
-    ).toBeOnTheScreen();
+    expect(await screen.findByLabelText('Step 1 of 3, Sign in, Not started')).toBeOnTheScreen();
+    expect(screen.getByLabelText('Step 2 of 3, Your record, Not started')).toBeOnTheScreen();
+    expect(screen.getByLabelText('Step 3 of 3, Email or phone, Not started')).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: 'Sign in' })).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: 'Recover an existing account' })).toBeOnTheScreen();
     expect(app.fake.requests).toHaveLength(0);
@@ -76,14 +77,12 @@ describe('SCR-C-01 OnboardingScreen', () => {
     render(<OnboardingScreen claimToken={TOKEN} />, { wrapper: app.wrapper });
 
     expect(
-      await screen.findByLabelText('Step 2 of 4, Participant record, Not linked yet'),
+      await screen.findByLabelText('Step 2 of 3, Your record, Not linked yet'),
     ).toBeOnTheScreen();
     expect(screen.getByLabelText('Claim code')).toHaveProp('value', TOKEN);
     fireEvent.press(screen.getByRole('button', { name: 'Claim record' }));
 
-    expect(
-      await screen.findByLabelText('Step 2 of 4, Participant record, Linked'),
-    ).toBeOnTheScreen();
+    expect(await screen.findByLabelText('Step 2 of 3, Your record, Linked')).toBeOnTheScreen();
     const claim = app.fake.requests.find((r) => r.method === 'POST');
     expect(claim?.route).toBe('/claims/{token}/accept');
     expect(claim?.params.token).toBe(TOKEN);
@@ -152,6 +151,7 @@ describe('SCR-C-01 OnboardingScreen', () => {
     });
     render(<OnboardingScreen claimToken={TOKEN} />, { wrapper: app.wrapper });
     fireEvent.press(await screen.findByRole('button', { name: 'Claim record' }));
+    await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
     fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
     await waitFor(() => expect(calls).toBe(2));
@@ -190,10 +190,10 @@ describe('SCR-C-01 OnboardingScreen', () => {
       await screen.findByLabelText('alex@example.test, Email, primary, Verification pending'),
     ).toBeOnTheScreen();
     expect(screen.getByLabelText('+1 555 0100, Phone, primary, Verified')).toBeOnTheScreen();
-    expect(screen.getByLabelText('Step 3 of 4, Email or phone, Verified')).toBeOnTheScreen();
+    expect(screen.getByLabelText('Step 3 of 3, Email or phone, Verified')).toBeOnTheScreen();
     expect(
       screen.getByLabelText(
-        "Verifying an email or phone in the app. This isn't available in the app yet.",
+        'Verifying an email or phone in the app. Ask the front desk to help with your account for now.',
       ),
     ).toBeOnTheScreen();
     await openSupportDetails(screen);
@@ -358,7 +358,7 @@ describe('SCR-C-01 OnboardingScreen', () => {
       });
     });
     expect(
-      await screen.findByLabelText('Step 2 of 4, Participant record, Not linked yet'),
+      await screen.findByLabelText('Step 2 of 3, Your record, Not linked yet'),
     ).toBeOnTheScreen();
     expect(screen.getByLabelText('Claim code')).toHaveProp('value', '');
     expect(screen.queryByText('Filled in from the link you opened.')).toBeNull();
@@ -432,7 +432,7 @@ describe('SCR-C-01 OnboardingScreen', () => {
       });
     });
     expect(
-      await screen.findByLabelText('Step 2 of 4, Participant record, Not linked yet'),
+      await screen.findByLabelText('Step 2 of 3, Your record, Not linked yet'),
     ).toBeOnTheScreen();
     expect(screen.getByLabelText('Claim code')).toHaveProp('value', '');
     expect(screen.queryByText('Filled in from the link you opened.')).toBeNull();
@@ -477,12 +477,11 @@ describe('SCR-C-01 OnboardingScreen', () => {
     render(<OnboardingScreen />, { wrapper: app.wrapper });
     expect(
       await screen.findByLabelText(
-        "Explaining and asking for notification and camera permission. This isn't available in the app yet.",
+        'Notifications and camera. You can carry on without them. Check your inbox in the app for notices.',
       ),
     ).toBeOnTheScreen();
     await openSupportDetails(screen);
     expect(screen.getByText('Decision: DEC-061')).toBeOnTheScreen();
-    expect(screen.getByText(/You can continue without them/)).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: 'Go to Home' })).toBeOnTheScreen();
   });
 
@@ -495,9 +494,9 @@ describe('SCR-C-01 OnboardingScreen', () => {
     });
     render(<OnboardingScreen />, { wrapper: app.wrapper });
     expect(
-      await screen.findByLabelText('Step 3 of 4, Email or phone, Not added'),
+      await screen.findByLabelText('Step 3 of 3, Email or phone, Not added'),
     ).toBeOnTheScreen();
-    expect(screen.getByLabelText('Step 2 of 4, Participant record, Linked')).toBeOnTheScreen();
+    expect(screen.getByLabelText('Step 2 of 3, Your record, Linked')).toBeOnTheScreen();
     expect(screen.queryByLabelText('Claim code')).toBeNull();
   });
 
@@ -514,6 +513,52 @@ describe('SCR-C-01 OnboardingScreen', () => {
       await screen.findByRole('header', { name: 'Claim a record from the front desk' }),
     ).toBeOnTheScreen();
     expect(screen.getByLabelText('Claim code')).toHaveProp('value', TOKEN);
+  });
+});
+
+describe('SCR-C-01 three illustrated steps (ADR-008, PA-11)', () => {
+  function artworkOf(step: number) {
+    return within(screen.getByTestId(`onboarding-step-${step}`)).UNSAFE_getByType(Image).props
+      .source;
+  }
+
+  it('SPK-UX-001: signed out, the progress shows step 1 of 3, Sign in, with the welcome artwork', async () => {
+    const app = createTestApp({ session: null });
+    render(<OnboardingScreen />, { wrapper: app.wrapper });
+    expect(await screen.findByLabelText('Step 1 of 3, Sign in')).toBeOnTheScreen();
+    expect(screen.getByRole('header', { name: 'Welcome to the park' })).toBeOnTheScreen();
+    expect(screen.getByText('Sign in to start.')).toBeOnTheScreen();
+    expect(artworkOf(1)).toBe(onboardingArtwork.welcome);
+  });
+
+  it('SPK-IAM-002: not linked yet, the progress shows step 2 of 3, Your record, with the family artwork', async () => {
+    const app = createTestApp({ routes: { 'GET /me': ok(me({ person: null })) } });
+    render(<OnboardingScreen />, { wrapper: app.wrapper });
+    expect(await screen.findByLabelText('Step 2 of 3, Your record')).toBeOnTheScreen();
+    expect(screen.getByLabelText('Step 1 of 3, Sign in, Done')).toBeOnTheScreen();
+    expect(screen.getByRole('header', { name: 'Link your record' })).toBeOnTheScreen();
+    expect(
+      screen.getByText(
+        'No claim code? Ask the front desk to make your record and link it to this account.',
+      ),
+    ).toBeOnTheScreen();
+    expect(artworkOf(2)).toBe(onboardingArtwork.family);
+  });
+
+  it('SPK-IAM-001: linked, the progress shows step 3 of 3, Email or phone, with the pass artwork', async () => {
+    const app = createTestApp({
+      routes: {
+        'GET /me': ok(me({ person: SELF_PERSON })),
+        'GET /people/{id}': ok(personDetail(SELF_PERSON)),
+      },
+    });
+    render(<OnboardingScreen />, { wrapper: app.wrapper });
+    expect(await screen.findByLabelText('Step 3 of 3, Email or phone')).toBeOnTheScreen();
+    expect(screen.getByRole('header', { name: 'Stay in touch' })).toBeOnTheScreen();
+    expect(artworkOf(3)).toBe(onboardingArtwork.pass);
+    // One step is shown at a time.
+    expect(screen.queryByTestId('onboarding-step-1')).toBeNull();
+    expect(screen.queryByTestId('onboarding-step-2')).toBeNull();
   });
 });
 

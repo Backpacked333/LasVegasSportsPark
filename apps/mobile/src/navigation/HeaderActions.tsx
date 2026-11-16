@@ -13,15 +13,16 @@
  * - **Notification inbox**: carries the unread count (`GET /v1/me/inbox/unread-count`,
  *   SPK-UX-003) in its accessible name ("Notification inbox, 3 unread") and as a badge. While the
  *   count is loading, failed or zero there is no badge and the plain name. Past the API's cap the
- *   name says "more than 99" and the badge "99+", as `inboxButtonLabel` and `unreadBadgeText` say.
+ *   name says "more than 99" and the badge "99+" (`IconButton` `countCapped`), the same words as
+ *   `inboxButtonLabel` and `unreadBadgeText`.
  */
 import { useRouter } from 'expo-router';
-import { Text, View } from 'react-native';
-import { inboxButtonLabel, unreadBadgeText, useInboxUnreadCount } from '../api/inbox-unread';
+import { View } from 'react-native';
+import { useInboxUnreadCount } from '../api/inbox-unread';
 import { basketInProgress, useMyBaskets } from '../features/registration/in-progress';
 import { registrationRoutes } from '../features/registration/routes';
 import { IconButton } from '../ui/IconButton';
-import { makeStyles, spacing, tabularFigures, type } from '../ui/theme';
+import { makeStyles, spacing } from '../ui/theme';
 
 /** The newest basket still in progress, or null (none, or the list is not known). */
 function useCartInProgress(): string | null {
@@ -31,45 +32,20 @@ function useCartInProgress(): string | null {
 
 function InboxButton() {
   const router = useRouter();
-  const styles = useStyles();
   const unread = useInboxUnreadCount();
-  const open = () => router.push('/inbox');
   const data = unread.data;
-  if (!data?.capped) {
-    // The count goes through the button itself: name "Notification inbox, 3 unread" and badge.
-    return (
-      <IconButton
-        icon="notifications"
-        label="Notification inbox"
-        count={data?.unread}
-        countLabel="unread"
-        onPress={open}
-        testID="quick-inbox"
-      />
-    );
-  }
-  // Past the cap the exact number is not known: the name says "more than <cap>" and the badge
-  // "<cap>+", drawn in the same place and tokens as the button's own badge.
+  // Name "Notification inbox, 3 unread" and the badge; past the API's cap the button says "more
+  // than <cap>" and "<cap>+" (`countCapped`), as `inboxButtonLabel` and `unreadBadgeText` do.
   return (
-    <View>
-      <IconButton
-        icon="notifications"
-        label={inboxButtonLabel(data)}
-        onPress={open}
-        testID="quick-inbox"
-      />
-      <View
-        pointerEvents="none"
-        style={styles.badge}
-        accessibilityElementsHidden
-        importantForAccessibility="no-hide-descendants"
-        testID="quick-inbox-badge"
-      >
-        <Text style={styles.badgeText} maxFontSizeMultiplier={1.3}>
-          {unreadBadgeText(data)}
-        </Text>
-      </View>
-    </View>
+    <IconButton
+      icon="notifications"
+      label="Notification inbox"
+      count={data && data.unread > 0 ? (data.capped ? data.cap : data.unread) : undefined}
+      countLabel="unread"
+      countCapped={data?.capped === true}
+      onPress={() => router.push('/inbox')}
+      testID="quick-inbox"
+    />
   );
 }
 
@@ -100,27 +76,6 @@ export function HeaderActions() {
   );
 }
 
-const BADGE_SIZE = 18;
-
-const useStyles = makeStyles(({ colors }) => ({
+const useStyles = makeStyles(() => ({
   row: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
-  badge: {
-    position: 'absolute',
-    top: spacing.xxs,
-    right: spacing.xxs,
-    minWidth: BADGE_SIZE,
-    minHeight: BADGE_SIZE,
-    paddingHorizontal: spacing.xs,
-    borderRadius: BADGE_SIZE / 2,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.countBadge,
-  },
-  badgeText: {
-    ...type.micro,
-    fontSize: 11,
-    lineHeight: 14,
-    ...tabularFigures,
-    color: colors.onCountBadge,
-  },
 }));

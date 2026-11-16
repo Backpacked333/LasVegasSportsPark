@@ -47,8 +47,12 @@ export function TabHeader({ title }: { title?: string }) {
   );
 }
 
-/** Height of the tab row itself, without the home-indicator inset below it. */
-const TAB_ROW_HEIGHT = 49;
+/**
+ * Height of the tab row itself, without the home-indicator inset below it: the item's own 5 pt
+ * padding above and below, the 30 pt icon pill, 2 pt and a 15 pt label line (room for descenders
+ * such as the "p" of "Explore"), plus the bar's top border, with a little to spare.
+ */
+export const TAB_ROW_HEIGHT = 60;
 
 export function TabsNavigator() {
   const { colors } = useTheme();
@@ -69,7 +73,11 @@ export function TabsNavigator() {
           tabBarActiveTintColor: colors.tabActive,
           tabBarInactiveTintColor: colors.textMuted,
           tabBarShowLabel: true,
-          tabBarStyle: floating ? [styles.tabBar, styles.tabBarFloating] : styles.tabBar,
+          tabBarStyle: [
+            styles.tabBar,
+            { height: TAB_ROW_HEIGHT + insets.bottom, paddingBottom: insets.bottom },
+            floating ? styles.tabBarFloating : null,
+          ],
           ...(floating
             ? {
                 tabBarBackground: () => (
@@ -123,7 +131,8 @@ const useStyles = makeStyles(({ colors }) => ({
     borderTopWidth: StyleSheet.hairlineWidth,
     elevation: 0,
   },
-  tabLabel: { ...fonts.bold, fontSize: 11 },
+  // An explicit line height, so the label's descenders are never cut at the bottom of the bar.
+  tabLabel: { ...fonts.bold, fontSize: 11, lineHeight: 15, marginTop: 2 },
   iconPill: {
     width: 56,
     height: 30,

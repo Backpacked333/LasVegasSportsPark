@@ -26,6 +26,8 @@ import { formatInstantIn } from '../../../features/money/time-zone';
 import { mePermissions } from '../../../testing/test-app';
 import { MySessionPackagesScreen, PACKAGES_STILL_AVAILABLE } from '../MySessionPackagesScreen';
 import { openSupportDetails } from '../../../testing/ui-surfaces';
+import { illustrations } from '../../../artwork/manifest';
+import { Artwork } from '../../../ui/Artwork';
 
 // The device zone is fixed so the fallback wording is deterministic on any machine.
 jest.mock('../../../features/today/device-time-zone', () => ({ deviceTimeZone: () => 'UTC' }));
@@ -55,7 +57,7 @@ describe('Session packages (SCR-C-35, Package G)', () => {
     renderPackages();
     const card = await screen.findByTestId(`package-${LIST_IDS.package}`);
     expect(within(card).getByLabelText('7 sessions left')).toBeOnTheScreen();
-    expect(within(card).getByLabelText('Package: Open skate 10-pack')).toBeOnTheScreen();
+    expect(within(card).getByLabelText('Class pack: Open skate 10-pack')).toBeOnTheScreen();
     expect(await within(card).findByLabelText('For: Sam')).toBeOnTheScreen();
     expect(within(card).getByLabelText('Sessions: 7 left, 3 used, of 10')).toBeOnTheScreen();
     expect(
@@ -68,7 +70,8 @@ describe('Session packages (SCR-C-35, Package G)', () => {
       within(card).getByLabelText('Can be used for: 1 eligible activity or program'),
     ).toBeOnTheScreen();
     expect(within(card).queryByText(/device's time zone/)).toBeNull();
-    expect(screen.getByRole('header', { name: 'Your session packages' })).toBeOnTheScreen();
+    // ADR-008: the title bar says "Class packs"; the page has no second heading saying it.
+    expect(screen.queryByRole('header', { name: 'Your class packs' })).toBeNull();
   });
 
   it('SPK-COND-002: the redemption history lists bookings and reversals with their reason, newest first', async () => {
@@ -89,7 +92,7 @@ describe('Session packages (SCR-C-35, Package G)', () => {
     const card = await screen.findByTestId(`package-${LIST_IDS.package}`);
     expect(
       await within(card).findByText(
-        "Dates are in this device's time zone (UTC): the facility's time zone is not available for this package.",
+        "Dates are in this device's time zone (UTC): the facility's time zone is not available for this class pack.",
       ),
     ).toBeOnTheScreen();
     expect(
@@ -116,7 +119,9 @@ describe('Session packages (SCR-C-35, Package G)', () => {
       ]),
     });
     const open = await screen.findByTestId(`package-${LIST_IDS.package}`);
-    expect(within(open).getByLabelText('Expiry: No expiry set for this package')).toBeOnTheScreen();
+    expect(
+      within(open).getByLabelText('Expiry: No expiry set for this class pack'),
+    ).toBeOnTheScreen();
     expect(within(open).getByText('Not used yet.')).toBeOnTheScreen();
     const revoked = screen.getByTestId(`package-${LIST_IDS.packageB}`);
     expect(within(revoked).getByLabelText('Revoked')).toBeOnTheScreen();
@@ -129,7 +134,7 @@ describe('Session packages (SCR-C-35, Package G)', () => {
   it('DEC-016, DEC-074: turned off by default, naming the decisions, and packages already held stay listed', async () => {
     renderPackages({ 'GET /me/permissions': mePermissions() });
     const state = await screen.findByTestId('state-turned-off');
-    expect(within(state).getByLabelText('Session packages turned off')).toBeOnTheScreen();
+    expect(within(state).getByLabelText('Class packs turned off')).toBeOnTheScreen();
     await openSupportDetails(within(state));
     expect(within(state).getByText('Decisions: DEC-016, DEC-074')).toBeOnTheScreen();
     expect(within(state).getByText(PACKAGES_STILL_AVAILABLE)).toBeOnTheScreen();
@@ -144,7 +149,18 @@ describe('Session packages (SCR-C-35, Package G)', () => {
 
   it('shows the empty state when the account holds no package', async () => {
     renderPackages({ 'GET /me/package-entitlements': pageOf([]) });
-    expect(await screen.findByRole('header', { name: 'No session packages' })).toBeOnTheScreen();
+    expect(await screen.findByRole('header', { name: 'No class packs' })).toBeOnTheScreen();
+    // ADR-008: the payments illustration, with what would appear (PA-11: "class pack").
+    expect(
+      screen
+        .UNSAFE_getAllByType(Artwork)
+        .filter((a) => a.props.source === illustrations['empty-cart']),
+    ).toHaveLength(1);
+    expect(
+      screen.getByText(
+        'Class packs you or your family buy appear here, with sessions left and when they expire.',
+      ),
+    ).toBeOnTheScreen();
   });
 
   it('shows the API error code and reference with "Try again"', async () => {
@@ -193,12 +209,12 @@ describe('Session packages (SCR-C-35, Package G)', () => {
     expect(within(card).getByLabelText('7 sessions left')).toBeOnTheScreen();
     // While the switch is unknown nothing new is offered.
     expect(
-      within(card).queryByRole('button', { name: 'Book a session with this package' }),
+      within(card).queryByRole('button', { name: 'Book a session with this class pack' }),
     ).toBeNull();
     expect(calls).toBe(1);
     fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
     expect(
-      await within(card).findByRole('button', { name: 'Book a session with this package' }),
+      await within(card).findByRole('button', { name: 'Book a session with this class pack' }),
     ).toBeOnTheScreen();
     expect(screen.queryByText(/INTEGRATION_UNAVAILABLE/)).toBeNull();
     expect(screen.getByTestId(`package-${LIST_IDS.package}`)).toBe(card);
@@ -213,9 +229,7 @@ describe('Session packages (SCR-C-35, Package G)', () => {
         }),
     });
     expect(await screen.findByTestId(`package-${LIST_IDS.package}`)).toBeOnTheScreen();
-    expect(
-      screen.getByLabelText('Loading whether session packages is turned on'),
-    ).toBeOnTheScreen();
+    expect(screen.getByLabelText('Checking class packs')).toBeOnTheScreen();
     expect(screen.queryByTestId('state-turned-off')).toBeNull();
     await act(async () => {
       answer(fakeResponse(200, fakePermissions({ principalKind: 'customer' })));
@@ -236,7 +250,7 @@ describe('Session packages (SCR-C-35, Package G)', () => {
     });
     await screen.findByTestId(`package-${LIST_IDS.package}`);
     await act(async () => {
-      fireEvent.press(screen.getByRole('button', { name: 'Load more session packages' }));
+      fireEvent.press(screen.getByRole('button', { name: 'Load more class packs' }));
     });
     expect(await screen.findByTestId(`package-${LIST_IDS.packageB}`)).toBeOnTheScreen();
     expect(

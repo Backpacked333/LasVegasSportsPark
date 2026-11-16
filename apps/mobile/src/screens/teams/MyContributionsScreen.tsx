@@ -31,12 +31,15 @@ import type { PaymentAttempt } from '../../features/money/status';
 import { formatMoney } from '../../features/teams/format';
 import { teamRoutes } from '../../features/teams/routes';
 import { contributionStatus, paymentStatus } from '../../features/teams/status';
-import { Body, CommandFailure, Section } from '../../features/teams/ui';
+import { CommandError } from '../../ui/CommandError';
+import { Section } from '../../ui/Section';
+import { Text } from '../../ui/Text';
 import { RequireSession } from '../../session/RequireSession';
 import { ListRow } from '../../ui/ListRow';
 import { LoadMore } from '../../ui/LoadMore';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
+import { illustrations } from '../../artwork/manifest';
 
 type ContributionRequest = Schema<'ContributionRequest'>;
 type LivePayments = ReturnType<typeof useLivePayments>;
@@ -67,11 +70,11 @@ export function PaymentsUnchecked({ payments }: { payments: LivePayments['paymen
   if (!failed) return null;
   return (
     <View testID="contribution-payments-unchecked">
-      <Body muted>
+      <Text variant="caption" tone="muted">
         We could not check for a payment already on its way. If you paid recently, check again
         before paying: a second payment is refused while one is being confirmed.
-      </Body>
-      <CommandFailure error={failed} onRetry={() => void payments.refetch()} read />
+      </Text>
+      <CommandError wording="team" error={failed} onRetry={() => void payments.refetch()} read />
     </View>
   );
 }
@@ -86,7 +89,7 @@ function ContributionRows({ items }: { items: readonly ContributionRequest[] }) 
       <View accessibilityRole="list">
         {items.map((request) => {
           const name = nameOf(request.requestedPersonId);
-          const whose = name === 'You' ? 'Your contribution' : `Contribution for ${name}`;
+          const whose = name === 'You' ? 'Your share' : `${name}'s share`;
           const attempt = request.status === 'requested' ? live.get(request.id) : undefined;
           return (
             <ListRow
@@ -105,22 +108,26 @@ function ContributionRows({ items }: { items: readonly ContributionRequest[] }) 
   );
 }
 
-/** The list itself, also shown by Payments (SCR-C-34 "Team contributions"). */
-export function MyContributionsList() {
+/**
+ * The list itself, also shown by Payments (SCR-C-34 "Your share"). On its own screen the title
+ * bar already says "Your share", so the section is untitled there (`titled={false}`).
+ */
+export function MyContributionsList({ titled = true }: { titled?: boolean }) {
   const requests = useApiPages({
     path: '/me/contribution-requests',
     request: { query: { limit: 20 } },
   });
   return (
-    <Section title="Team contributions asked of you" testID="my-contributions">
+    <Section title={titled ? 'Your share' : undefined} testID="my-contributions">
       <QueryBoundary
         query={requests}
-        label="your team contributions"
+        label="your share"
         isEmpty={(items) => items.length === 0}
         empty={{
-          title: 'No contributions asked of you',
+          title: 'No shares asked of you',
           description:
             'When a team captain asks you, or someone you pay for, to pay part of a team fee, it appears here to pay.',
+          source: illustrations['empty-teams'],
         }}
         unavailableOffline={['paying a contribution']}
       >
@@ -134,8 +141,8 @@ export function MyContributionsList() {
 export function MyContributionsScreen() {
   return (
     <Screen>
-      <RequireSession what="your team contributions">
-        <MyContributionsList />
+      <RequireSession what="your share">
+        <MyContributionsList titled={false} />
       </RequireSession>
     </Screen>
   );
@@ -145,7 +152,7 @@ export function MyContributionsScreen() {
 export function MyContributionsRoute() {
   return (
     <>
-      <Stack.Screen options={{ title: 'Your team contributions' }} />
+      <Stack.Screen options={{ title: 'Your share' }} />
       <MyContributionsScreen />
     </>
   );

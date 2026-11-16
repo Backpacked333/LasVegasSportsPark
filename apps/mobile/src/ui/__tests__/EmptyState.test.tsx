@@ -2,9 +2,9 @@
  * EmptyState (SPK-UX-008 empty, ADR-008): decorative artwork, a title read as a header, a message
  * and an optional action.
  */
-import { fireEvent, screen } from '@testing-library/react-native';
+import { act, fireEvent, screen } from '@testing-library/react-native';
 import { Image } from 'expo-image';
-import { StyleSheet } from 'react-native';
+import { AccessibilityInfo, Platform, StyleSheet } from 'react-native';
 import { renderSurface } from '../../testing/ui-surfaces';
 import { EmptyState } from '../EmptyState';
 import { MotionProvider } from '../motion';
@@ -31,6 +31,46 @@ describe('EmptyState (SPK-UX-008)', () => {
     expect(StyleSheet.flatten(action.props.style).minHeight).toBeGreaterThanOrEqual(44);
     fireEvent.press(action);
     expect(onPress).toHaveBeenCalledTimes(1);
+  });
+
+  it('SPK-UX-009: announce makes it a live region and tells VoiceOver its words and action', async () => {
+    const announce = jest
+      .spyOn(AccessibilityInfo, 'announceForAccessibilityWithOptions')
+      .mockImplementation(() => undefined);
+    const os = Platform.OS;
+    Platform.OS = 'ios';
+    try {
+      await renderSurface(
+        <EmptyState
+          source={ART}
+          title="No payments yet"
+          message="Payments you make appear here."
+          action={{ label: 'See amounts due', onPress: () => undefined }}
+          announce
+          testID="empty"
+        />,
+      );
+    } finally {
+      Platform.OS = os;
+    }
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId('empty')).toHaveProp('accessibilityLiveRegion', 'polite');
+    expect(announce.mock.calls.map(([words]) => words)).toEqual([
+      'No payments yet. Payments you make appear here. See amounts due.',
+    ]);
+    announce.mockRestore();
+  });
+
+  it('without announce it is no live region and says nothing', async () => {
+    const announce = jest
+      .spyOn(AccessibilityInfo, 'announceForAccessibilityWithOptions')
+      .mockImplementation(() => undefined);
+    await renderSurface(<EmptyState title="Nothing here" message="Check back later." testID="e" />);
+    expect(screen.getByTestId('e')).not.toHaveProp('accessibilityLiveRegion');
+    expect(announce).not.toHaveBeenCalled();
+    announce.mockRestore();
   });
 
   it('is words only without artwork, and has no control without an action', async () => {

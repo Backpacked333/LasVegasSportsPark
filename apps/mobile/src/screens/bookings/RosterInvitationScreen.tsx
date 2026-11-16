@@ -31,11 +31,9 @@ import { Text, View } from 'react-native';
 import { usePermissions } from '../../api/permissions';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
-import { Body, ButtonRow, Caption, Field, Section, TextField } from '../../features/money/ui';
 import { routeId } from '../../features/package-g/routes';
-import { CommandError } from '../../features/registration/CommandError';
+import { CommandError } from '../../ui/CommandError';
 import { useMe, useParticipantNames } from '../../features/registration/participants';
-import { ChoiceRow } from '../../features/registration/ui';
 import { displayZone, formatRange } from '../../features/today/time';
 import { WaiverCard } from '../../features/waivers/WaiverCard';
 import { formatCalendarDate } from '../../features/waivers/waivers';
@@ -49,6 +47,11 @@ import { StateView } from '../../ui/StateView';
 import { StatusBadge, type StatusTone } from '../../ui/StatusBadge';
 import { makeStyles, spacing, type } from '../../ui/theme';
 import { NotFoundScreen } from '../not-found/NotFoundScreen';
+import { Section } from '../../ui/Section';
+import { FieldValue as Field } from '../../ui/Field';
+import { Text as UiText } from '../../ui/Text';
+import { ChoiceCard } from '../../ui/ChoiceList';
+import { TextField } from '../../ui/Field';
 
 type InvitationView = Schema<'BookingRosterInvitationView'>;
 
@@ -231,35 +234,41 @@ function InvitationBody({
           testID="roster-invitation-status"
         />
         {open ? (
-          <Caption>{`Open until ${formatCalendarDate(invitation.expiresAt)}.`}</Caption>
+          <UiText
+            variant="caption"
+            tone="muted"
+          >{`Open until ${formatCalendarDate(invitation.expiresAt)}.`}</UiText>
         ) : null}
-        <Caption>
+        <UiText variant="caption" tone="muted">
           Joining puts a name on the renter&apos;s list of who is coming. It is not a registration
           and costs nothing.
-        </Caption>
+        </UiText>
       </Section>
       {open ? (
         <Section title="Your answer">
           {children.length > 0 ? (
             <View accessibilityRole="radiogroup" accessibilityLabel="Who is joining">
-              <ChoiceRow
-                mode="radio"
-                label="I am joining"
+              <ChoiceCard
+                option={{ value: 'I am joining', label: 'I am joining' }}
+                mode="single"
                 checked={who === selfId}
-                onToggle={() => setJoiner(selfId)}
+                onPress={() => setJoiner(selfId)}
               />
               {children.map((childId) => (
-                <ChoiceRow
+                <ChoiceCard
                   key={childId}
-                  mode="radio"
-                  label={`${names(childId)} is joining`}
+                  option={{
+                    value: `${names(childId)} is joining`,
+                    label: `${names(childId)} is joining`,
+                  }}
+                  mode="single"
                   checked={who === childId}
-                  onToggle={() => setJoiner(childId)}
+                  onPress={() => setJoiner(childId)}
                 />
               ))}
             </View>
           ) : null}
-          <ButtonRow>
+          <View style={buttonRow}>
             <Button
               label="Join the roster"
               onPress={() => void submitAccept()}
@@ -274,11 +283,15 @@ function InvitationBody({
               disabled={offline}
               busy={decline.isProcessing}
             />
-          </ButtonRow>
-          {offline ? <Caption>Answering needs a connection.</Caption> : null}
+          </View>
+          {offline ? (
+            <UiText variant="caption" tone="muted">
+              Answering needs a connection.
+            </UiText>
+          ) : null}
         </Section>
       ) : null}
-      <CommandError error={failure} onReload={reload} />
+      <CommandError wording="registration" error={failure} onReload={reload} />
       {joined && invitation.requiredWaiverKeys.length > 0 ? (
         <JoinerWaivers
           personId={joined}
@@ -361,7 +374,7 @@ function EnterCode() {
     return (
       <>
         <InvitationByCode invitationId={opened.id} token={opened.token} />
-        <ButtonRow>
+        <View style={buttonRow}>
           <Button
             label="Enter another code"
             variant="secondary"
@@ -371,7 +384,7 @@ function EnterCode() {
               setAttempted(false);
             }}
           />
-        </ButtonRow>
+        </View>
       </>
     );
   }
@@ -384,8 +397,11 @@ function EnterCode() {
         hint="The renter gives it to you."
         error={attempted && !parsed ? 'That is not an invitation code.' : null}
         testID="roster-invitation-code-field"
+        errorGlyph="▲"
+        errorAnnouncement="message"
+        autoCorrect
       />
-      <ButtonRow>
+      <View style={buttonRow}>
         <Button
           label="Open invitation"
           variant="secondary"
@@ -394,7 +410,7 @@ function EnterCode() {
             if (parsed) setOpened(parsed);
           }}
         />
-      </ButtonRow>
+      </View>
     </Section>
   );
 }
@@ -460,10 +476,10 @@ export function RosterInvitationsScreen() {
             <Text style={styles.title} accessibilityRole="header">
               Rental roster invitations
             </Text>
-            <Body>
+            <UiText variant="body">
               A renter can put you on the list of people they bring. You answer for yourself or for
               your child.
-            </Body>
+            </UiText>
           </View>
           <RostersGate>
             <MyInvitations />
@@ -515,3 +531,5 @@ const useStyles = makeStyles(({ colors }) => ({
   header: { paddingHorizontal: spacing.lg, paddingTop: spacing.lg, gap: spacing.sm },
   title: { ...type.title, color: colors.text },
 }));
+
+const buttonRow = { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm } as const;

@@ -21,10 +21,11 @@ import { Button } from '../../../ui/Button';
 import { StateView } from '../../../ui/StateView';
 import { LiveRegion, sentences } from '../../../ui/announce';
 import { StatusBadge } from '../../../ui/StatusBadge';
-import { spacing } from '../../../ui/theme';
+import { layout, spacing } from '../../../ui/theme';
 import { listPermissions, ME_QUERY_KEY, personNameText, usePersonName } from './account-data';
-import { CommandError } from './CommandError';
-import { Paragraph, TextField } from './forms';
+import { CommandError } from '../../../ui/CommandError';
+import { Text } from '../../../ui/Text';
+import { TextField } from '../../../ui/Field';
 
 type ClaimAccepted = Schema<'ClaimAccepted'>;
 
@@ -82,9 +83,13 @@ export function ClaimForm({
   const stale = claim.error ? claimNoLongerOpen(claim.error) : null;
   return (
     <View style={styles.form}>
-      <Paragraph>{intro}</Paragraph>
+      <Text inset>{intro}</Text>
       <TextField
         label="Claim code"
+        autoCapitalize="none"
+        autoComplete="off"
+        errorAnnouncement="message"
+        style={styles.field}
         hint={initialToken ? 'Filled in from the link you opened.' : 'From the front desk.'}
         value={token}
         onChangeText={(value) => {
@@ -105,12 +110,14 @@ export function ClaimForm({
         />
       </View>
       {offline ? (
-        <Paragraph muted>Claiming needs a connection. Your code is kept.</Paragraph>
+        <Text tone="muted" inset>
+          Claiming needs a connection. Your code is kept.
+        </Text>
       ) : null}
       {claim.error && stale ? (
         <View style={styles.result}>
           <StatusBadge tone="neutral" label="Claim code no longer open" />
-          <Paragraph inset={false}>{stale}</Paragraph>
+          <Text>{stale}</Text>
         </View>
       ) : claim.error ? (
         <CommandError
@@ -136,7 +143,7 @@ function ClaimResult({ result }: { result: ClaimAccepted }) {
         announcement={sentences('Linked', linked)}
       >
         <StatusBadge tone="success" label="Linked" />
-        <Paragraph inset={false}>{linked}</Paragraph>
+        <Text>{linked}</Text>
       </LiveRegion>
     );
   }
@@ -152,10 +159,8 @@ function GuardianClaimResult({ result }: { result: ClaimAccepted }) {
       {/* The claim's outcome is announced (SPK-UX-009); "No permissions yet" announces itself. */}
       <LiveRegion announcement={sentences('Claimed', recorded, 'Nothing else was granted.')}>
         <StatusBadge tone="success" label="Claimed" />
-        <Paragraph inset={false}>{recorded}</Paragraph>
-        <Paragraph muted inset={false}>
-          Nothing else was granted.
-        </Paragraph>
+        <Text>{recorded}</Text>
+        <Text tone="muted">Nothing else was granted.</Text>
       </LiveRegion>
       {granted.length === 0 ? (
         <StateView
@@ -171,5 +176,6 @@ function GuardianClaimResult({ result }: { result: ClaimAccepted }) {
 const styles = StyleSheet.create({
   form: { gap: spacing.md },
   inset: { paddingHorizontal: spacing.lg },
+  field: { paddingHorizontal: layout.gutter },
   result: { paddingHorizontal: spacing.lg, gap: spacing.sm },
 });

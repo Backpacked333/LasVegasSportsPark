@@ -1,5 +1,6 @@
 /**
- * SCR-C-11 Household basket (SPK-REG-004, SPK-REG-002, SPK-REG-003, SPK-REG-006, SPK-REG-008;
+ * SCR-C-11 Household basket, shown to customers as the cart (PA-11: basket → cart; ADR-008: a
+ * container between the registration steps, not a step itself) (SPK-REG-004, SPK-REG-002, SPK-REG-003, SPK-REG-006, SPK-REG-008;
  * SPK-AT-001 two children in one purchase, SPK-AT-004 one equivalent entitlement, SPK-AT-005
  * final-place contention). Reads `GET /v1/baskets/{id}`: every line keeps its own participant,
  * offering, eligibility result and reasons, price basis, policies, approval and outcome; held
@@ -29,10 +30,10 @@
 import { presentationForError, type ApiError, type Schema } from '@sportspark/api-client';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { View } from 'react-native';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
-import { CommandError } from '../../features/registration/CommandError';
+import { CommandError } from '../../ui/CommandError';
 import { ExpiryNotice } from '../../features/registration/ExpiryNotice';
 import { useFormsStatus, type FormsStatus } from '../../features/registration/forms';
 import { formatMoney } from '../../features/registration/format';
@@ -50,15 +51,22 @@ import { useRegistrationProgress } from '../../features/registration/progress';
 import { useApiRecords } from '../../features/registration/queries';
 import { param, registrationRoutes } from '../../features/registration/routes';
 import { basketLineStatus, basketStatus, holdStatus } from '../../features/registration/status';
-import { Body, ButtonRow, Detail, Section } from '../../features/registration/ui';
+import { useKnownFacilityZone } from '../../features/today/known-zone';
 import { useApp, useConnectivity, useNow } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
+import { illustrations } from '../../artwork/manifest';
+import { Avatar } from '../../ui/Avatar';
 import { Button } from '../../ui/Button';
+import { Card } from '../../ui/Card';
+import { EmptyState } from '../../ui/EmptyState';
+import { FieldValue } from '../../ui/Field';
+import { Section } from '../../ui/Section';
+import { Text } from '../../ui/Text';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { makeStyles, spacing } from '../../ui/theme';
+import { layout, makeStyles, spacing } from '../../ui/theme';
 
 type Basket = Schema<'Basket'>;
 type BasketLine = Schema<'BasketLine'>;
@@ -164,30 +172,38 @@ function LineCard({
     }
   };
   return (
-    <View style={styles.line} testID={`line-${line.id}`}>
-      <View accessible accessibilityLabel={`${title}. ${status.label}`}>
-        <Body>{title}</Body>
-        <Body muted>{INTENT_LABELS[line.intent].title}</Body>
-        <StatusBadge {...status} />
+    <Card style={styles.line} testID={`line-${line.id}`}>
+      <View style={styles.lineHead}>
+        <Avatar name={participantName} id={line.participantPersonId} decorative />
+        <View style={styles.lineWords} accessible accessibilityLabel={`${title}. ${status.label}`}>
+          <Text variant="headline">{title}</Text>
+          <Text variant="caption" tone="muted">
+            {INTENT_LABELS[line.intent].title}
+          </Text>
+          <StatusBadge {...status} />
+        </View>
       </View>
       {price ? (
         // Only the amount the API sent; line totals belong to the quote (SPK-PAY-001, SCR-C-12).
         // SPK-PAY-013, SPK-PAY-014, SPK-PAY-015: where the line is priced per class, by tier or
         // at a member price, the API's estimate is shown, never the price of one class.
         <>
-          <Detail label={price.label} value={price.value} />
+          <FieldValue layout="inline" label={price.label} value={price.value} />
           {price.notes.map((note) => (
-            <Body key={note} muted>
+            <Text key={note} variant="caption" tone="muted">
               {note}
-            </Body>
+            </Text>
           ))}
-          {line.quantity > 1 ? <Detail label="Quantity" value={String(line.quantity)} /> : null}
+          {line.quantity > 1 ? (
+            <FieldValue layout="inline" label="Quantity" value={String(line.quantity)} />
+          ) : null}
         </>
       ) : (
-        <Detail label="Price" value="No price published" />
+        <FieldValue layout="inline" label="Price" value="No price published" />
       )}
       {line.selectedSessionIds ? (
-        <Detail
+        <FieldValue
+          layout="inline"
           label="Days chosen"
           value={String(line.selectedSessionIds.length)}
           testID={`line-days-${line.id}`}
@@ -195,7 +211,8 @@ function LineCard({
       ) : null}
       {line.addons.map((addon) => (
         // SPK-PAY-014: each add-on with its own price; the quote shows it as its own line.
-        <Detail
+        <FieldValue
+          layout="inline"
           key={addon.addonId}
           label={
             addon.selection === 'per_session'
@@ -208,7 +225,8 @@ function LineCard({
       {line.uniform ? (
         // SPK-REG-012: the uniform and the size chosen for this participant.
         <>
-          <Detail
+          <FieldValue
+            layout="inline"
             label={`${line.uniform.name}, size ${line.uniform.size}`}
             value={
               line.uniform.priceMinor !== null && line.uniform.currency
@@ -217,20 +235,25 @@ function LineCard({
             }
           />
           {line.uniform.returningHolderFree && line.uniform.heldUniformOrderId ? (
-            <Body
-              muted
-            >{`${participantName} already has this uniform: it is not charged again.`}</Body>
+            <Text variant="caption" tone="muted">
+              {`${participantName} already has this uniform: it is not charged again.`}
+            </Text>
           ) : null}
         </>
       ) : null}
       {reasons.map((reason) => (
-        <Body key={reason}>{`✕ ${reason}`}</Body>
+        <Text key={reason} variant="body">{`✕ ${reason}`}</Text>
       ))}
       {alternatives.map((alternative) => (
-        <Body key={alternative.kind + alternative.message}>{`→ ${alternative.message}`}</Body>
+        <Text
+          key={alternative.kind + alternative.message}
+          variant="body"
+        >{`→ ${alternative.message}`}</Text>
       ))}
       {line.policies.requiredFormPolicyVersionIds.length > 0 ? (
-        <Body muted>{formsNote(line, participantName, forms)}</Body>
+        <Text variant="caption" tone="muted">
+          {formsNote(line, participantName, forms)}
+        </Text>
       ) : null}
       <View style={styles.lineActions}>
         {line.intent === 'individual_league' && basket.status === 'open' ? (
@@ -245,7 +268,7 @@ function LineCard({
         ) : null}
         {basket.status === 'open' ? (
           <Button
-            label={`Remove ${participantName} from the basket`}
+            label={`Remove ${participantName} from the cart`}
             variant="secondary"
             onPress={() => void removeLine()}
             busy={remove.isProcessing}
@@ -253,13 +276,15 @@ function LineCard({
           />
         ) : null}
       </View>
-    </View>
+    </Card>
   );
 }
 
 function BasketContent({ basket, refetch }: { basket: Basket; refetch: () => void }) {
+  const styles = useStyles();
   const router = useRouter();
   const now = useNow();
+  const zone = useKnownFacilityZone().zone;
   const { reachable } = useConnectivity();
   const offline = reachable === false;
   const { progress } = useRegistrationProgress();
@@ -282,7 +307,7 @@ function BasketContent({ basket, refetch }: { basket: Basket; refetch: () => voi
     invalidate: [['api', '/baskets/{id}'], MY_BASKETS_KEY],
   });
 
-  const status = basketStatus(basket, now);
+  const status = basketStatus(basket, now, zone);
   const ended = basket.status === 'expired' || basket.status === 'released';
   const capacityFailed = failure?.error.code === 'CAPACITY_UNAVAILABLE';
   const waitlistFirst =
@@ -326,17 +351,17 @@ function BasketContent({ basket, refetch }: { basket: Basket; refetch: () => voi
 
   return (
     <View>
-      <Section title="Your basket">
+      <Section title="Your cart">
         <StatusBadge {...status} testID="basket-status" />
-        <Body muted>
+        <Text variant="caption" tone="muted">
           {basket.fulfillmentMode === 'partial'
-            ? 'You accepted that some places may be confirmed without the others.'
-            : 'All places in this basket are confirmed together, or none are.'}
-        </Body>
+            ? 'You accepted that some spots may be confirmed without the others.'
+            : 'All spots in this cart are confirmed together, or none are.'}
+        </Text>
       </Section>
       {checkoutReadFailure ? (
         <Section title="Your payment">
-          <Body>The payment for this basket could not be looked up.</Body>
+          <Text variant="body">The payment for this cart could not be looked up.</Text>
           <StateView
             variant="error"
             error={checkoutReadFailure.error}
@@ -347,26 +372,32 @@ function BasketContent({ basket, refetch }: { basket: Basket; refetch: () => voi
       {basket.status === 'held' && basket.holdExpiresAt ? (
         <ExpiryNotice
           expiresAt={basket.holdExpiresAt}
-          status={holdStatus(basket.holdExpiresAt, now)}
-          explanation="The facility's system releases held places at this time; the countdown is a guide."
+          status={holdStatus(basket.holdExpiresAt, now, zone)}
+          explanation="The facility's system lets your saved spots go at this time; the countdown is a guide."
           onLapsed={refetch}
           testID="basket-hold"
         />
       ) : null}
       {basket.approvalPending ? (
         <Section title="Approval">
-          <Body>
-            A line in this basket needs approval by staff before you can pay. Places are held only
-            when you check out.
-          </Body>
+          <Text variant="body">
+            A line in this cart needs approval by staff before you can pay. Your spots are saved
+            only when you check out.
+          </Text>
         </Section>
       ) : null}
       {basket.lines.length === 0 ? (
-        <Section title="Nothing in your basket">
-          <Body>Add an activity from Discover.</Body>
-        </Section>
+        <EmptyState
+          source={illustrations['empty-cart']}
+          title="Your cart is empty"
+          message="Add an activity from Explore."
+          action={{
+            label: 'Explore activities',
+            onPress: () => router.push(registrationRoutes.discover()),
+          }}
+        />
       ) : (
-        <View accessibilityRole="list">
+        <View accessibilityRole="list" style={styles.lines}>
           {basket.lines.map((line) => (
             <LineCard
               key={line.id}
@@ -385,11 +416,19 @@ function BasketContent({ basket, refetch }: { basket: Basket; refetch: () => voi
       )}
       {basket.currency && basket.lines.length > 0 ? (
         <Section title="Before taxes, fees and discounts">
-          <Detail label="Subtotal" value={formatMoney(basket.subtotalMinor, basket.currency)} />
-          <Body muted>Your quote adds approved taxes and fees, discounts and credits.</Body>
+          <FieldValue
+            layout="inline"
+            label="Subtotal"
+            value={formatMoney(basket.subtotalMinor, basket.currency)}
+            emphasis
+          />
+          <Text variant="caption" tone="muted">
+            The review adds approved taxes and fees, discounts and credits.
+          </Text>
         </Section>
       ) : null}
       <CommandError
+        wording="registration"
         error={failure?.error ?? null}
         onRetry={failure?.retry}
         onReload={() => {
@@ -402,14 +441,14 @@ function BasketContent({ basket, refetch }: { basket: Basket; refetch: () => voi
         <Section title="No place available">
           {/* SPK-PAY-014 (quality review M-2, m-6): what is full may be the activity, a day or
               an extra that was chosen; the waitlist is joined for exactly what the line chose. */}
-          <Body>
+          <Text variant="body">
             {waitlistFirst
-              ? 'Places that come free go to the people already waiting. Nothing was charged. You can join the waitlist for what you chose, or remove the line and continue.'
+              ? 'Spots that come free go to the people already waiting. Nothing was charged. You can join the waitlist for what you chose, or remove the line and continue.'
               : 'The activity, a day or an extra you chose is full for at least one line. Nothing was charged. You can join the waitlist for exactly what you chose, or remove the line and choose something else.'}
-          </Body>
+          </Text>
         </Section>
       ) : null}
-      <ButtonRow>
+      <View style={styles.actions}>
         {needsForms && basket.status === 'open' ? (
           <Button
             label="Complete required forms"
@@ -443,14 +482,14 @@ function BasketContent({ basket, refetch }: { basket: Basket; refetch: () => voi
         ) : null}
         {basket.status === 'held' ? (
           <Button
-            label="Release my held places"
+            label="Release my saved spots"
             variant="secondary"
             onPress={() => void releaseHold()}
             busy={release.isProcessing}
             disabled={offline}
           />
         ) : null}
-        {basket.status === 'open' || ended ? (
+        {(basket.status === 'open' && basket.lines.length > 0) || ended ? (
           <Button
             label="Add another activity"
             variant="secondary"
@@ -458,11 +497,11 @@ function BasketContent({ basket, refetch }: { basket: Basket; refetch: () => voi
           />
         ) : null}
         {offline ? (
-          <Body muted>
-            Getting a price and checking out need a connection. Your basket is kept.
-          </Body>
+          <Text variant="caption" tone="muted">
+            Getting a price and checking out need a connection. Your cart is kept.
+          </Text>
         ) : null}
-      </ButtonRow>
+      </View>
     </View>
   );
 }
@@ -476,11 +515,11 @@ export function BasketScreen({ basketId }: { basketId: string }) {
   });
   return (
     <Screen>
-      <RequireSession what="your basket">
+      <RequireSession what="your cart">
         <QueryBoundary
           query={basket}
-          label="your basket"
-          empty={{ title: 'Nothing in your basket', description: 'Add an activity from Discover.' }}
+          label="your cart"
+          empty={{ title: 'Your cart is empty', description: 'Add an activity from Explore.' }}
           unavailableOffline={['Getting a price', 'Checkout']}
         >
           {(b) => <BasketContent basket={b} refetch={() => void basket.refetch()} />}
@@ -495,19 +534,17 @@ export function BasketRoute() {
   const basketId = param(useLocalSearchParams<{ basketId: string }>().basketId) ?? '';
   return (
     <>
-      <Stack.Screen options={{ title: 'Basket' }} />
+      <Stack.Screen options={{ title: 'Cart' }} />
       <BasketScreen basketId={basketId} />
     </>
   );
 }
 
-const useStyles = makeStyles(({ colors }) => ({
-  line: {
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
-    gap: spacing.xs,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.border,
-  },
+const useStyles = makeStyles(() => ({
+  lines: { gap: layout.cardGap, paddingHorizontal: layout.gutter, marginTop: spacing.lg },
+  line: { gap: spacing.xs },
+  lineHead: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.md },
+  lineWords: { flex: 1, gap: spacing.xs },
   lineActions: { gap: spacing.sm, paddingTop: spacing.xs },
+  actions: { gap: spacing.sm, paddingHorizontal: layout.gutter, paddingVertical: spacing.lg },
 }));

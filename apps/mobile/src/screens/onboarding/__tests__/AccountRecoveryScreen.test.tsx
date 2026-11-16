@@ -27,7 +27,7 @@ describe('SCR-C-02 AccountRecoveryScreen', () => {
     ).toBeOnTheScreen();
     expect(
       screen.getByLabelText(
-        "Recovering your account from the app. This isn't available in the app yet.",
+        'Recovering your account from the app. Ask the front desk to help with your account for now.',
       ),
     ).toBeOnTheScreen();
     await openSupportDetails(screen);

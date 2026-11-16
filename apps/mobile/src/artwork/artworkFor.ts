@@ -160,10 +160,14 @@ export function artworkFor(
  * The Home band for an hour of the day in the facility's time zone (SPK-SCHED-008): day from
  * 06:00 to 17:59, night otherwise. The caller derives the hour from the injected clock and
  * `facilities.timezone`; this function reads no clock. Fractions are floored and the hour is
- * taken modulo 24; a value that is not a number gives night.
+ * taken modulo 24; a value that is not a number gives night. In Legends mode it is always night.
  */
-export function homeBandFor(hourInFacilityTime: number): { source: ArtworkSource; band: HomeBand } {
+export function homeBandFor(
+  hourInFacilityTime: number,
+  { legends = false }: { legends?: boolean } = {},
+): { source: ArtworkSource; band: HomeBand } {
   const hour = ((Math.floor(hourInFacilityTime) % 24) + 24) % 24;
-  const band: HomeBand = hour >= 6 && hour <= 17 ? 'day' : 'night';
+  // Legends mode is the night theme: its band is the night one at every hour (ADR-008).
+  const band: HomeBand = !legends && hour >= 6 && hour <= 17 ? 'day' : 'night';
   return { source: homeBand[band], band };
 }

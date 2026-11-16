@@ -1,6 +1,7 @@
 /**
  * SCR-C-03 Home and the SCR-C-04 next-activity card on it (SPK-UX-002, SPK-UX-003, SPK-UX-004,
- * SPK-COMMS-005, SPK-UX-008, SPK-UX-009, §4.10, §4.15).
+ * SPK-COMMS-005, SPK-UX-008, SPK-UX-009, §4.10, §4.15; PA-11 SPK-UX-011 **Proposed** wording;
+ * ADR-008 look: the "Up next" hero card, "Needs you", results and renewals as a carousel).
  */
 import { fakeResponse, apiErrorBody, type FakeHandler } from '@sportspark/api-client/testing';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
@@ -37,6 +38,7 @@ import {
   LA,
   myTeamEntry,
 } from '../../../features/today/__tests__/fixtures';
+import { HeaderActions } from '../../../navigation/HeaderActions';
 import { createTestApp } from '../../../testing/test-app';
 import { HomeScreen } from '../HomeScreen';
 import { openSupportDetails } from '../../../testing/ui-surfaces';
@@ -106,11 +108,13 @@ describe('SCR-C-03 Home', () => {
       lastOperationId: null,
       basketId: BASKET,
     });
+    const renewal = notice({ kind: 'renewal_opportunity', title: 'Renew for spring' });
+    const result = notice({ kind: 'result_published', title: 'Result: Lions 2, Tigers 1' });
     const app = createTestApp({
       routes: routes({
         'GET /me/inbox': inboxPage([
-          notice({ kind: 'renewal_opportunity', title: 'Renew for spring' }),
-          notice({ kind: 'result_published', title: 'Result: Lions 2, Tigers 1' }),
+          renewal,
+          result,
           notice({ kind: 'team_invitation', title: 'Join the Lions' }),
           notice({ kind: 'payment_attention', title: 'Installment due' }),
           scheduleChange(),
@@ -130,25 +134,17 @@ describe('SCR-C-03 Home', () => {
     expect(await screen.findByText('Renew for spring')).toBeOnTheScreen();
     expect(await screen.findByTestId('home-recovery')).toBeOnTheScreen();
     expect(await screen.findByTestId('next-activity-card')).toBeOnTheScreen();
-    expect(
-      order([
-        'home-recovery',
-        'home-urgent',
-        'home-next',
-        'home-actions',
-        'home-invitations',
-        'home-results',
-        'home-renewals',
-      ]),
-    ).toEqual([
+    // Results and renewals are tiles of one carousel, results first (ADR-008).
+    const sections = [
       'home-recovery',
       'home-urgent',
       'home-next',
       'home-actions',
       'home-invitations',
-      'home-results',
-      'home-renewals',
-    ]);
+      `home-results-${result.attemptId}`,
+      `home-renewals-${renewal.attemptId}`,
+    ];
+    expect(order(sections)).toEqual(sections);
     // Marketing never appears on Home; it stays in the inbox.
     expect(screen.queryByText('Shop sale')).toBeNull();
     // The pinned registration names the participant and says not to pay again.
@@ -203,13 +199,12 @@ describe('SCR-C-03 Home', () => {
     });
     render(<HomeScreen />, { wrapper: app.wrapper });
     const card = await screen.findByTestId('next-activity-card');
+    // One element with one name: activity, participant, time with zone, place and status.
     expect(
-      await within(card).findByLabelText(
-        'For: Sam. When: Sat, Oct 24, 11:00 AM to 12:00 PM PDT. Where: Main Park, Pitch 2',
-      ),
+      await within(card).findByRole('button', {
+        name: 'Junior Skills. For: Sam. When: Sat, Oct 24, 11:00 AM to 12:00 PM PDT. Where: Main Park, Pitch 2. Confirmed',
+      }),
     ).toBeOnTheScreen();
-    expect(within(card).getByRole('header', { name: 'Junior Skills' })).toBeOnTheScreen();
-    expect(within(card).getByLabelText('Confirmed')).toBeOnTheScreen();
     expect(
       within(card).getByLabelText(
         'Changed. Was: Sat, Oct 24, 10:00 AM to 11:00 AM PDT at Pitch 1. Now: Sat, Oct 24, 11:00 AM to 12:00 PM PDT at Pitch 2',
@@ -227,10 +222,13 @@ describe('SCR-C-03 Home', () => {
       }),
     });
     render(<HomeScreen />, { wrapper: app.wrapper });
+    const card = await screen.findByTestId('next-activity-card');
     expect(
-      await screen.findByLabelText('Confirmed in Junior Skills. Awaiting placement.'),
+      await within(card).findByRole('button', {
+        name: 'Junior Skills. For: Sam. When: Sat, Oct 24, 10:00 AM to 11:00 AM PDT. Where: Main Park, North field. Confirmed in Junior Skills. Awaiting placement',
+      }),
     ).toBeOnTheScreen();
-    expect(screen.queryByLabelText('Confirmed')).toBeNull();
+    expect(within(card).queryByText('Confirmed')).toBeNull();
     // The calendar item states the facility's zone (ENR-02): no device-clock caveat.
     expect(screen.queryByText(/device's time zone/)).toBeNull();
   });
@@ -244,20 +242,29 @@ describe('SCR-C-03 Home', () => {
       pathname: '/inbox',
       params: { open: urgent.attemptId },
     });
-    fireEvent.press(screen.getByRole('button', { name: 'View details' }));
+    fireEvent.press(
+      screen.getByRole('button', {
+        name: 'Junior Skills. For: Sam. When: Sat, Oct 24, 10:00 AM to 11:00 AM PDT. Where: Main Park, Pitch 2. Confirmed',
+      }),
+    );
     expect(mockPush).toHaveBeenLastCalledWith({
       pathname: '/sessions/[sessionId]',
       params: { sessionId: calendarItem().sessionId, enrollmentId: ENROLLMENT },
     });
   });
 
-  it('shows the empty state with Discover when nothing is scheduled and nothing is needed', async () => {
+  it('shows the empty state "You\'re all caught up" with Explore when nothing is scheduled and nothing is needed', async () => {
     const app = createTestApp({
       routes: routes({ 'GET /me/family-calendar': ok(calendar([], { participants: [SELF] })) }),
     });
     render(<HomeScreen />, { wrapper: app.wrapper });
-    expect(await screen.findByRole('header', { name: 'Nothing scheduled yet' })).toBeOnTheScreen();
-    fireEvent.press(screen.getByRole('button', { name: 'Open Discover' }));
+    expect(await screen.findByRole('header', { name: "You're all caught up" })).toBeOnTheScreen();
+    expect(
+      screen.getByText(
+        'Your next activity, changes and anything you need to do will show up here.',
+      ),
+    ).toBeOnTheScreen();
+    fireEvent.press(screen.getByRole('button', { name: 'Explore activities' }));
     expect(mockPush).toHaveBeenCalledWith('/discover');
     expect(screen.queryByTestId('next-activity-card')).toBeNull();
   });
@@ -338,15 +345,33 @@ describe('SCR-C-03 Home', () => {
     const app = createTestApp({
       routes: routes({
         'GET /me/inbox': inboxPage([notice(), notice({ readAt: '2026-10-24T11:30:00.000Z' })]),
+        'GET /me/inbox/unread-count': ok({ unread: 1, capped: false, cap: 99 }),
+        'GET /me/baskets': ok({ items: [], nextCursor: null }),
       }),
     });
-    render(<HomeScreen />, { wrapper: app.wrapper });
-    expect(screen.getByRole('button', { name: 'Show facility pass' })).toBeOnTheScreen();
-    expect(screen.getByRole('button', { name: 'Open notifications' })).toBeOnTheScreen();
-    expect(await screen.findByLabelText('1 unread')).toBeOnTheScreen();
-    const status = await screen.findByTestId('next-activity-card-status');
-    expect(status).toHaveProp('accessibilityLabel', 'Confirmed');
-    expect(within(status).getByText('✓', { includeHiddenElements: true })).toBeOnTheScreen();
+    // Home as the tab shows it: the header's actions (pass, inbox) above the page.
+    render(
+      <>
+        <HeaderActions />
+        <HomeScreen />
+      </>,
+      { wrapper: app.wrapper },
+    );
+    expect(await screen.findByRole('button', { name: 'Show facility pass' })).toBeOnTheScreen();
+    expect(screen.getByRole('button', { name: 'Calendar' })).toBeOnTheScreen();
+    expect(screen.getByRole('button', { name: 'Explore' })).toBeOnTheScreen();
+    expect(
+      await screen.findByRole('button', { name: 'Notification inbox, 1 unread' }),
+    ).toBeOnTheScreen();
+    // The status is in words, in the card's one name, never a colour alone.
+    expect(
+      await screen.findByRole('button', {
+        name: 'Junior Skills. For: Sam. When: Sat, Oct 24, 10:00 AM to 11:00 AM PDT. Where: Main Park, North field. Confirmed',
+      }),
+    ).toBeOnTheScreen();
+    expect(
+      within(screen.getByTestId('next-activity-card')).getByText('Confirmed'),
+    ).toBeOnTheScreen();
   });
 });
 
@@ -373,20 +398,18 @@ describe('SCR-C-03 / SCR-C-04 Home: fixtures, facility clock, reasons and partic
     });
     render(<HomeScreen />, { wrapper: app.wrapper });
     // The fixture reads may land after the session card first renders: wait for the fixture.
-    expect(await screen.findByRole('header', { name: 'Lions vs Tigers' })).toBeOnTheScreen();
+    const hero = await screen.findByRole('button', {
+      name: 'Lions vs Tigers. For: Sam (Lions). Against: Tigers. When: Sat, Oct 24, 9:00 AM to 10:30 AM MDT. Where: North Complex, Field 1. Scheduled',
+    });
     const card = screen.getByTestId('next-activity-card');
-    expect(
-      await within(card).findByLabelText(
-        'For: Sam (Lions). Against: Tigers. When: Sat, Oct 24, 9:00 AM to 10:30 AM MDT. Where: North Complex, Field 1',
-      ),
-    ).toBeOnTheScreen();
-    expect(within(card).getByLabelText('Scheduled')).toBeOnTheScreen();
     // The venue states its zone: no device-clock caveat, although the device is in Los Angeles.
     expect(screen.queryByText(/device's time zone/)).toBeNull();
     // A guardian not on the roster is not offered the RSVP choices (DEC-090 for a child).
-    expect(within(card).getByTestId('rsvp-not-on-roster')).toBeOnTheScreen();
-    expect(within(card).queryByRole('radio', { name: 'Available' })).toBeNull();
-    fireEvent.press(within(card).getByRole('button', { name: 'View fixture' }));
+    expect(within(card).getByTestId('rsvp-not-on-roster')).toHaveTextContent(
+      "You're not on this game's roster. Tell your team manager whether your child can come.",
+    );
+    expect(within(card).queryByRole('radio', { name: 'Going' })).toBeNull();
+    fireEvent.press(hero);
     expect(mockPush).toHaveBeenLastCalledWith({
       pathname: '/fixtures/[id]',
       params: { id: FIXTURE },
@@ -429,16 +452,17 @@ describe('SCR-C-03 / SCR-C-04 Home: fixtures, facility clock, reasons and partic
     render(<HomeScreen />, { wrapper: app.wrapper });
     const card = await screen.findByTestId('next-activity-card');
     expect(
-      await within(card).findByLabelText(
-        'For: You (Lions). Against: Tigers. When: Sun, Oct 25, 10:00 AM to 11:30 AM PDT. Where: Main Park, Pitch 3',
-      ),
+      await within(card).findByRole('button', {
+        name: 'Lions vs Tigers. For: You (Lions). Against: Tigers. When: Sun, Oct 25, 10:00 AM to 11:30 AM PDT. Where: Main Park, Pitch 3. Scheduled',
+      }),
     ).toBeOnTheScreen();
     expect(within(card).getByTestId('rsvp-current')).toHaveProp(
       'accessibilityLabel',
       'Unavailable',
     );
     const reads = app.fake.requests.filter((r) => r.route === '/me/fixtures').length;
-    fireEvent.press(within(card).getByRole('radio', { name: 'Available' }));
+    // "Going" sends `available` (SPK-CAP-003).
+    fireEvent.press(within(card).getByRole('radio', { name: 'Going' }));
     expect(await within(card).findByTestId('rsvp-recorded')).toBeOnTheScreen();
     const post = app.fake.requests.find((r) => r.route === '/fixtures/{id}/availability');
     expect(post?.body).toEqual({ state: 'available', expectedRevision: 2 });
@@ -461,9 +485,9 @@ describe('SCR-C-03 / SCR-C-04 Home: fixtures, facility clock, reasons and partic
     render(<HomeScreen />, { wrapper: app.wrapper });
     const card = await screen.findByTestId('next-activity-card');
     expect(
-      await within(card).findByLabelText(
-        'For: Sam. When: Sat, Oct 24, 11:00 AM to 12:00 PM MDT. Where: Main Park, North field',
-      ),
+      await within(card).findByRole('button', {
+        name: 'Junior Skills. For: Sam. When: Sat, Oct 24, 11:00 AM to 12:00 PM MDT. Where: Main Park, North field. Confirmed',
+      }),
     ).toBeOnTheScreen();
     expect(app.fake.requests.find((r) => r.route === '/facilities/{id}')?.params.id).toBe(
       calendarItem().facilityId,
@@ -555,7 +579,7 @@ describe('SCR-C-03 / SCR-C-04 Home: fixtures, facility clock, reasons and partic
     render(<HomeScreen />, { wrapper: app.wrapper });
     expect(
       await screen.findByRole('button', {
-        name: 'Installment due, For: Sam. Pay before Friday., Unread',
+        name: 'Installment due, For: Sam. Pay before Friday., Pay, Unread',
       }),
     ).toBeOnTheScreen();
     // Names come from the names-only read, never from the full person record (§4.14).
@@ -658,9 +682,9 @@ describe('SCR-C-03 / SCR-C-04 Home: fixtures, facility clock, reasons and partic
     expect(within(failed).getByText('Error code: INTERNAL_ERROR')).toBeOnTheScreen();
     expect(within(failed).getByText('Reference: corr-co')).toBeOnTheScreen();
     // Nothing is called empty while it is not known whether a payment is being completed.
-    expect(screen.queryByRole('header', { name: 'Nothing scheduled yet' })).toBeNull();
+    expect(screen.queryByRole('header', { name: "You're all caught up" })).toBeNull();
     fireEvent.press(within(failed).getByRole('button', { name: 'Try again' }));
-    expect(await screen.findByRole('header', { name: 'Nothing scheduled yet' })).toBeOnTheScreen();
+    expect(await screen.findByRole('header', { name: "You're all caught up" })).toBeOnTheScreen();
     expect(screen.queryByTestId('home-recovery-error')).toBeNull();
   });
 
@@ -677,7 +701,7 @@ describe('SCR-C-03 / SCR-C-04 Home: fixtures, facility clock, reasons and partic
     await waitFor(() =>
       expect(app.fake.requests.some((r) => r.route === '/me/registration-checkouts')).toBe(true),
     );
-    expect(screen.queryByRole('header', { name: 'Nothing scheduled yet' })).toBeNull();
+    expect(screen.queryByRole('header', { name: "You're all caught up" })).toBeNull();
   });
 
   it('SPK-PAY-007: a payment reason whose basket cannot be read, or is still being read, never says "payment outstanding"', async () => {
@@ -771,17 +795,25 @@ describe('SCR-C-03 / SCR-C-04 Home: fixtures, facility clock, reasons and partic
     });
     render(<HomeScreen />, { wrapper: app.wrapper });
     const card = await screen.findByTestId('next-activity-card');
-    expect(await within(card).findByRole('header', { name: 'Lions vs Tigers' })).toBeOnTheScreen();
-    fireEvent.press(within(card).getByRole('radio', { name: 'Available' }));
+    expect(
+      await within(card).findByRole('button', {
+        name: 'Lions vs Tigers. For: You (Lions). Against: Tigers. When: Sun, Oct 25, 10:00 AM to 11:30 AM PDT. Where: Main Park, Pitch 3. Scheduled',
+      }),
+    ).toBeOnTheScreen();
+    fireEvent.press(within(card).getByRole('radio', { name: 'Going' }));
     // The answer reloads the list; the first fixture is postponed, so the second is next.
-    expect(await screen.findByRole('header', { name: 'Lions vs Bears' })).toBeOnTheScreen();
+    expect(
+      await screen.findByRole('button', {
+        name: 'Lions vs Bears. For: You (Lions). Against: Bears. When: Mon, Oct 26, 10:00 AM to 11:30 AM PDT. Where: Main Park, Pitch 3. Scheduled',
+      }),
+    ).toBeOnTheScreen();
     const next = screen.getByTestId('next-activity-card');
     expect(within(next).getByTestId('rsvp-current')).toHaveProp(
       'accessibilityLabel',
       'No response',
     );
     expect(within(next).queryByTestId('rsvp-recorded')).toBeNull();
-    fireEvent.press(within(next).getByRole('radio', { name: 'Available' }));
+    fireEvent.press(within(next).getByRole('radio', { name: 'Going' }));
     await waitFor(() =>
       expect(
         app.fake.requests.filter((r) => r.route === '/fixtures/{id}/availability'),
@@ -824,7 +856,7 @@ describe('SCR-C-03 / SCR-C-04 Home: fixtures, facility clock, reasons and partic
     const card = await screen.findByTestId('next-activity-card');
     expect(
       await within(card).findByLabelText(
-        'Action needed: Answer the availability request for this fixture.',
+        'Action needed. Answer the availability request for this game.',
       ),
     ).toBeOnTheScreen();
 

@@ -9,6 +9,10 @@
  * - The error is shown in words next to the field (never by colour alone) and announced when it
  *   appears (`LiveText`, `ui/announce`). Valid input is kept (SPK-UX-008).
  * - `TextField` wraps `TextInput`; its `accessibilityLabel` is always the label.
+ * - Error options (`FieldErrorOptions`), for the forms whose words were fixed before this system:
+ *   the glyph ("✕", or "▲" on the money and team screens), whether the error is announced as
+ *   "Error: …" or as the bare message, and whether it is exposed as an alert. The defaults are the
+ *   words above; a form keeps its own exactly.
  * - `SearchField` is a search box with a clear button and an optional debounce (`debounceMs`),
  *   timed with plain timers so tests drive it with Jest's fake timers.
  *
@@ -61,7 +65,17 @@ export function fieldAccessibility({ label, hint, error, required }: FieldBasePr
   return { accessibilityLabel: label, accessibilityHint: description || undefined };
 }
 
-export interface FieldProps extends FieldBaseProps {
+/** How a field's error is drawn and announced; the defaults are `FieldError`'s. */
+export interface FieldErrorOptions {
+  /** The glyph before the words: "✕" (default) or "▲". */
+  errorGlyph?: string;
+  /** Announced as "Error: …" (`prefixed`, default) or as the bare message (`message`). */
+  errorAnnouncement?: 'prefixed' | 'message';
+  /** Exposed as an alert (default true). */
+  errorAlert?: boolean;
+}
+
+export interface FieldProps extends FieldBaseProps, FieldErrorOptions {
   children: ReactNode;
   style?: StyleProp<ViewStyle>;
   testID?: string;
@@ -71,7 +85,18 @@ export interface FieldProps extends FieldBaseProps {
  * A label, an optional hint, the control and its error. Give the control
  * `fieldAccessibility(props)` so it carries the same words.
  */
-export function Field({ label, hint, error, required, children, style, testID }: FieldProps) {
+export function Field({
+  label,
+  hint,
+  error,
+  required,
+  errorGlyph = '✕',
+  errorAnnouncement = 'prefixed',
+  errorAlert = true,
+  children,
+  style,
+  testID,
+}: FieldProps) {
   const styles = useFieldStyles();
   return (
     <View style={[styles.field, style]} testID={testID}>
@@ -81,7 +106,12 @@ export function Field({ label, hint, error, required, children, style, testID }:
       </View>
       {hint ? <Text style={styles.hint}>{hint}</Text> : null}
       {children}
-      <FieldError error={error} />
+      <FieldErrorText
+        error={error}
+        glyph={errorGlyph}
+        announcement={error && errorAnnouncement === 'prefixed' ? `Error: ${error}` : undefined}
+        alert={errorAlert}
+      />
     </View>
   );
 }
@@ -113,7 +143,7 @@ type PassThroughInputProps = Omit<
   | 'editable'
 >;
 
-export interface TextFieldProps extends FieldBaseProps, PassThroughInputProps {
+export interface TextFieldProps extends FieldBaseProps, FieldErrorOptions, PassThroughInputProps {
   value: string;
   onChangeText: (value: string) => void;
   editable?: boolean;
@@ -134,12 +164,24 @@ export function TextField({
   style,
   onFocus,
   onBlur,
+  errorGlyph,
+  errorAnnouncement,
+  errorAlert,
   ...input
 }: TextFieldProps) {
   const styles = useFieldStyles();
   const chrome = useInputChrome();
   return (
-    <Field label={label} hint={hint} error={error} required={required} style={style}>
+    <Field
+      label={label}
+      hint={hint}
+      error={error}
+      required={required}
+      style={style}
+      errorGlyph={errorGlyph}
+      errorAnnouncement={errorAnnouncement}
+      errorAlert={errorAlert}
+    >
       <TextInput
         autoCorrect={false}
         {...input}
@@ -335,9 +377,9 @@ export const useFieldStyles = makeStyles(({ colors }) => ({
 }));
 
 /*
- * Additions for the feature kits' adapters (ADR-008, Phase 3): pieces of a field that a kit
- * composes itself when its accessible words differ from `TextField`'s, so it keeps them exactly
- * while it draws with the shared field styles. They add to the exports above and change none.
+ * Pieces of a field for a form that composes its own (ADR-008): the error with its glyph, the
+ * outlined input without words of its own, and a read-only "label: value" fact. They draw with
+ * the shared field styles.
  */
 
 export interface FieldErrorTextProps {
@@ -346,7 +388,7 @@ export interface FieldErrorTextProps {
   glyph?: string;
   /** What is announced when it appears; the bare message by default. */
   announcement?: string | null;
-  /** Exposed as an alert (default true); some kits announce a field's error without the role. */
+  /** Exposed as an alert (default true); some forms announce a field's error without the role. */
   alert?: boolean;
   testID?: string;
 }
@@ -354,7 +396,7 @@ export interface FieldErrorTextProps {
 /**
  * A field's error in words with its glyph, announced when it appears (`LiveText`; SPK-UX-008,
  * SPK-UX-009). Unlike `FieldError` it announces the bare message unless told otherwise, as the
- * feature kits always have.
+ * money, team and choice errors always have.
  */
 export function FieldErrorText({
   error,
@@ -381,7 +423,7 @@ export interface FieldInputProps extends Omit<TextInputProps, 'style' | 'editabl
   /** Draws the error border (the words are the caller's, with `FieldErrorText`). */
   invalid?: boolean;
   editable?: boolean;
-  /** Further styles after the shared box (a kit's own dimming). */
+  /** Further styles after the shared box (a form's own dimming). */
   style?: StyleProp<TextStyle>;
 }
 

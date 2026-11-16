@@ -18,8 +18,22 @@
  *   screen is rendered), with the title and `children` above the items as its header. Every
  *   FlatList or SectionList prop passes through except the header, the refresh control and the
  *   content container, which the screen owns.
+ * - `listRef` or `sectionsRef`: the FlatList or SectionList itself, for a screen that scrolls it.
+ * - `scrollToSection`: in `sections` mode, scrolls the section with that `key` to the top (the day
+ *   picked on Calendar). Each new object scrolls, so picking the same section again scrolls back to
+ *   it; a key the sections do not have does nothing. It scrolls at once while motion is reduced
+ *   (`useMotion`), and a section not yet laid out is reached through its estimated offset.
  */
-import { createContext, useContext, type ReactElement, type ReactNode } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  type ReactElement,
+  type ReactNode,
+  type Ref,
+} from 'react';
 import {
   FlatList,
   RefreshControl,
@@ -31,7 +45,9 @@ import {
   type SectionListProps,
 } from 'react-native';
 import { ConnectivityBanner } from '../connectivity/ConnectivityBanner';
+import { OfflineBannerContext } from './offline-banner';
 import { AppHeader } from './AppHeader';
+import { useMotion } from './motion';
 import { makeStyles, spacing, useTheme } from './theme';
 
 /** Height of a bar floating over the bottom of the screen; 0 when the bar is in the layout. */
@@ -68,6 +84,18 @@ export interface ScreenProps<ItemT = unknown, SectionT = DefaultSectionT> {
   list?: ScreenListProps<ItemT>;
   /** List mode: a SectionList (when both are given, `sections` wins). */
   sections?: ScreenSectionsProps<ItemT, SectionT>;
+  /** The FlatList of `list` mode. */
+  listRef?: Ref<FlatList<ItemT>>;
+  /** The SectionList of `sections` mode. */
+  sectionsRef?: Ref<SectionList<ItemT, SectionT>>;
+  /** Scrolls the section with this `key` to the top; each new object scrolls again. */
+  scrollToSection?: { key: string } | null;
+}
+
+/** Sets a ref the caller gave, whichever kind it is. */
+function assignRef<T>(ref: Ref<T> | undefined, value: T | null): void {
+  if (typeof ref === 'function') ref(value);
+  else if (ref) (ref as { current: T | null }).current = value;
 }
 
 export function Screen<ItemT = unknown, SectionT = DefaultSectionT>({
@@ -80,9 +108,36 @@ export function Screen<ItemT = unknown, SectionT = DefaultSectionT>({
   footer,
   list,
   sections,
+  listRef,
+  sectionsRef,
+  scrollToSection,
 }: ScreenProps<ItemT, SectionT>): ReactElement {
   const { dark, colors } = useTheme();
   const styles = useStyles();
+  const motion = useMotion();
+  const sectionList = useRef<SectionList<ItemT, SectionT> | null>(null);
+  const setSectionList = useCallback(
+    (node: SectionList<ItemT, SectionT> | null) => {
+      sectionList.current = node;
+      assignRef(sectionsRef, node);
+    },
+    [sectionsRef],
+  );
+  const sectionKeys = sections?.sections.map((section) => (section as { key?: string }).key);
+  // Read when a request comes: only a new request scrolls, with the motion setting of that moment.
+  const latest = useRef({ sectionKeys, reduced: motion.reduced });
+  latest.current = { sectionKeys, reduced: motion.reduced };
+  useEffect(() => {
+    if (!scrollToSection) return;
+    const sectionIndex = latest.current.sectionKeys?.indexOf(scrollToSection.key) ?? -1;
+    if (sectionIndex < 0) return;
+    sectionList.current?.scrollToLocation({
+      sectionIndex,
+      itemIndex: 0,
+      viewOffset: 0,
+      animated: !latest.current.reduced,
+    });
+  }, [scrollToSection]);
   const bottomBar = useContext(BottomBarInsetContext);
   // With a footer the footer stands on the bar; the content ends at the footer.
   const contentInset = footer ? 0 : bottomBar;
@@ -118,13 +173,22 @@ export function Screen<ItemT = unknown, SectionT = DefaultSectionT>({
   if (sections) {
     body = (
       <SectionList<ItemT, SectionT>
+        // A section not laid out yet: go to its estimated place, the next request lands exactly.
+        onScrollToIndexFailed={({ averageItemLength, index }) =>
+          sectionList.current
+            ?.getScrollResponder()
+            ?.scrollTo({ y: averageItemLength * index, animated: !motion.reduced })
+        }
         {...sections}
         {...scrollProps}
+        ref={setSectionList}
         ListHeaderComponent={listHeader}
       />
     );
   } else if (list) {
-    body = <FlatList<ItemT> {...list} {...scrollProps} ListHeaderComponent={listHeader} />;
+    body = (
+      <FlatList<ItemT> {...list} {...scrollProps} ref={listRef} ListHeaderComponent={listHeader} />
+    );
   } else if (scroll) {
     body = (
       <ScrollView {...scrollProps}>
@@ -142,13 +206,15 @@ export function Screen<ItemT = unknown, SectionT = DefaultSectionT>({
   }
 
   return (
-    <View style={styles.root}>
-      <ConnectivityBanner />
-      {footer ? <View style={styles.root}>{body}</View> : body}
-      {footer ? (
-        <View style={bottomBar > 0 ? { paddingBottom: bottomBar } : null}>{footer}</View>
-      ) : null}
-    </View>
+    <OfflineBannerContext.Provider value>
+      <View style={styles.root}>
+        <ConnectivityBanner />
+        {footer ? <View style={styles.root}>{body}</View> : body}
+        {footer ? (
+          <View style={bottomBar > 0 ? { paddingBottom: bottomBar } : null}>{footer}</View>
+        ) : null}
+      </View>
+    </OfflineBannerContext.Provider>
   );
 }
 

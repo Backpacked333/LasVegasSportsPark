@@ -1,7 +1,7 @@
 /**
  * Text of the visual system v2 (ADR-008, **Proposed**): one component for every line of words, in
- * the type scale of `theme.ts` and a tone that follows the theme. It is to replace the feature
- * kits' Body, Caption, Paragraph and Detail as screens are rebuilt.
+ * the type scale of `theme.ts` and a tone that follows the theme. It replaced the feature kits'
+ * Body, Caption and Paragraph.
  *
  * - `variant` picks the type style (below). Sizes are base sizes: the OS text-size setting scales
  *   them (no `allowFontScaling={false}`), and nothing is set in capitals.
@@ -11,13 +11,15 @@
  * - `heading` exposes the line as a header to VoiceOver and TalkBack (SPK-UX-009), so people can
  *   move between the sections of a screen. The variant alone never makes a header.
  * - `tabular` sets fixed-width figures (times, scores, amounts), so digits do not shift.
+ * - `inset` keeps the line at the page's side margin (`layout.gutter`), for running text placed
+ *   straight on a page or in an edge-to-edge section (what the old Paragraph and Caption did).
  */
 import {
   Text as NativeText,
   type TextProps as NativeTextProps,
   type TextStyle,
 } from 'react-native';
-import { makeStyles, tabularFigures, type, type ThemeColors } from './theme';
+import { layout, makeStyles, tabularFigures, type, type ThemeColors } from './theme';
 
 /** Variant names and the type style each one draws with. */
 export const TEXT_VARIANTS = {
@@ -72,11 +74,14 @@ export interface TextProps extends NativeTextProps {
   heading?: boolean;
   /** Fixed-width figures. */
   tabular?: boolean;
+  /** At the page's side margin (running text straight on a page). */
+  inset?: boolean;
 }
 
 const useStyles = makeStyles(({ colors }) => ({
   ...TEXT_VARIANTS,
   tabular: tabularFigures,
+  inset: { paddingHorizontal: layout.gutter },
   // Tones under their own keys, so they never clash with a variant name.
   tone_default: { color: colors[TEXT_TONES.default] },
   tone_muted: { color: colors[TEXT_TONES.muted] },
@@ -93,6 +98,7 @@ export function Text({
   tone = 'default',
   heading = false,
   tabular = false,
+  inset = false,
   style,
   accessibilityRole,
   ...text
@@ -102,7 +108,13 @@ export function Text({
     <NativeText
       {...text}
       accessibilityRole={heading ? 'header' : accessibilityRole}
-      style={[styles[variant], styles[`tone_${tone}`], tabular && styles.tabular, style]}
+      style={[
+        styles[variant],
+        styles[`tone_${tone}`],
+        tabular && styles.tabular,
+        inset && styles.inset,
+        style,
+      ]}
     />
   );
 }

@@ -50,10 +50,11 @@
  * processing (adding); success (the basket, SCR-C-11); turned off.
  */
 import {
-  CAPABILITY_PRESENTATION,
-  turnedOffLabel,
   type ApiError,
+  CAPABILITY_PRESENTATION,
+  capabilityCustomerLabel,
   type Schema,
+  turnedOffLabel,
 } from '@sportspark/api-client';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
@@ -69,7 +70,7 @@ import {
   useCampWeeks,
   weekChoosable,
 } from '../../features/registration/CampWeeks';
-import { CommandError } from '../../features/registration/CommandError';
+import { CommandError } from '../../ui/CommandError';
 import type { RegistrationIntent } from '../../features/registration/format';
 import {
   MY_BASKETS_KEY,
@@ -103,7 +104,10 @@ import {
 import { SessionBookingFlow } from '../../features/registration/SessionBooking';
 import { param, registrationRoutes } from '../../features/registration/routes';
 import { registrationWindowStatus } from '../../features/registration/status';
-import { Body, ButtonRow, ChoiceRow, Section } from '../../features/registration/ui';
+import { RegistrationSteps } from '../../features/registration/steps';
+import { eligibilitySupportLines } from '../../features/registration/eligibility-words';
+import { PersonCard, RegistrationTypePicker } from '../../features/registration/WhoCards';
+import { pendingMessageFor } from '../../copy/pending';
 import { useApp, useConnectivity } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
 import { Button } from '../../ui/Button';
@@ -111,7 +115,11 @@ import { Hero } from '../../ui/Hero';
 import { QueryBoundary, QueryErrorView } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
+import { Section as UiSection } from '../../ui/Section';
 import { StatusBadge } from '../../ui/StatusBadge';
+import { SupportDetails } from '../../ui/SupportDetails';
+import { Text } from '../../ui/Text';
+import { layout, makeStyles, spacing } from '../../ui/theme';
 
 type Offering = Schema<'Offering'>;
 type Basket = Schema<'Basket'>;
@@ -123,6 +131,7 @@ interface Selection {
 }
 
 function IntentChooser({ offering }: { offering: Offering }) {
+  const styles = useStyles();
   const router = useRouter();
   const { reachable } = useConnectivity();
   const offline = reachable === false;
@@ -208,8 +217,8 @@ function IntentChooser({ offering }: { offering: Offering }) {
       <StateView
         variant="empty"
         title="No one to register yet"
-        description="Add yourself or your family members in Account, then come back to register."
-        actionLabel="Open Account"
+        description="Add yourself or your family members under You, then come back to register."
+        actionLabel="Go to You"
         onAction={() => router.push('/account')}
       />
     );
@@ -332,45 +341,55 @@ function IntentChooser({ offering }: { offering: Offering }) {
       ? intent
       : null;
   const permissionsUnknown = intents.some((i) => switchOf(i) === undefined);
+  /** What a type is and, when it cannot be chosen, why: in words, the decisions in the fold. */
+  const typeDetail = (option: RegistrationIntent): string => {
+    const optionHandling = INTENT_HANDLING[option];
+    const capability = reportedOff.get(option) ?? INTENT_CAPABILITY[option];
+    const { description } = INTENT_LABELS[option];
+    if (turnedOff(option) && capability) {
+      const presentation = CAPABILITY_PRESENTATION[capability];
+      return `${description} ${turnedOffLabel(capabilityCustomerLabel(capability))}. ${pendingMessageFor(presentation.decisions)}`;
+    }
+    if (switchOf(option) === undefined && capability) {
+      return `${description} Checking ${capabilityCustomerLabel(capability).toLowerCase()}.`;
+    }
+    return optionHandling === 'basket' || optionHandling === 'session'
+      ? description
+      : `${description} ${HANDLING_NOTE[optionHandling]}`;
+  };
+  /** DEC-016 and each turned-off type's own record, for the support fold only (PA-11). */
+  const offDecisions = [
+    ...new Set(
+      intents.flatMap((option) => {
+        const capability = reportedOff.get(option) ?? INTENT_CAPABILITY[option];
+        return turnedOff(option) && capability ? CAPABILITY_PRESENTATION[capability].decisions : [];
+      }),
+    ),
+  ];
+  /** SPK-PAY-014, SPK-REG-012: the options of the people chosen are being asked for. */
+  const askingOptions = basketIntent && withChoices && pending.length > 0;
   return (
     <View>
-      <Section title="How do you want to register?">
+      <RegistrationSteps step={askingOptions ? 'Options' : 'Who'} />
+      <UiSection title="Who's going?" variant="plain">
         {intents.length === 0 ? (
-          <Body>This activity cannot be registered for in the app.</Body>
+          <Text variant="body">This activity cannot be registered for in the app.</Text>
         ) : (
-          <View accessibilityRole="radiogroup">
-            {intents.map((option) => {
-              const optionHandling = INTENT_HANDLING[option];
-              const capability = reportedOff.get(option) ?? INTENT_CAPABILITY[option];
-              const off = turnedOff(option);
-              const unknown = switchOf(option) === undefined;
-              const usable = switchKnownOn(option) && carried(option);
-              const detail =
-                off && capability
-                  ? `${INTENT_LABELS[option].description} ${turnedOffLabel(CAPABILITY_PRESENTATION[capability].label)} (${CAPABILITY_PRESENTATION[capability].decisions.join(', ')}).`
-                  : unknown && capability
-                    ? `${INTENT_LABELS[option].description} Checking whether ${CAPABILITY_PRESENTATION[capability].label.toLowerCase()} is turned on.`
-                    : optionHandling === 'basket' || optionHandling === 'session'
-                      ? INTENT_LABELS[option].description
-                      : `${INTENT_LABELS[option].description} ${HANDLING_NOTE[optionHandling]}`;
-              return (
-                <ChoiceRow
-                  key={option}
-                  mode="radio"
-                  label={INTENT_LABELS[option].title}
-                  detail={detail}
-                  checked={intent === option}
-                  disabled={!usable}
-                  onToggle={() => {
-                    setChosen(option);
-                    setFailure(null);
-                  }}
-                  testID={`intent-${option}`}
-                />
-              );
-            })}
-          </View>
+          <RegistrationTypePicker
+            options={intents.map((option) => ({
+              value: option,
+              label: INTENT_LABELS[option].title,
+              detail: typeDetail(option),
+              disabled: !(switchKnownOn(option) && carried(option)),
+            }))}
+            value={intent}
+            onChange={(option) => {
+              setChosen(option);
+              setFailure(null);
+            }}
+          />
         )}
+        {offDecisions.length > 0 ? <SupportDetails decisions={offDecisions} /> : null}
         {permissionsUnknown && permissions.query.data === undefined && permissions.query.error ? (
           // The switches could not be read: the gated intents stay unusable until they are.
           <QueryErrorView
@@ -385,18 +404,64 @@ function IntentChooser({ offering }: { offering: Offering }) {
             onPress={() => router.push(moneyRoutes.credits())}
           />
         ) : null}
-      </Section>
+        {basketIntent ? (
+          <View style={styles.people}>
+            {participants.map((p) => {
+              const allowed = mayRegister(registrationOptions, p.personId);
+              const personAdded = isAdded(p.personId);
+              const result = intent ? eligibilityOf(registrationOptions, p.personId, intent) : null;
+              const messages = result ? eligibilityMessages(result, p.displayName) : null;
+              const summary = personAdded
+                ? 'Added to your cart'
+                : !allowed
+                  ? 'Not available: your account can view this person but not register them.'
+                  : result
+                    ? eligibilityStatus(result).label
+                    : undefined;
+              const lines =
+                personAdded || !allowed
+                  ? []
+                  : [...(messages?.reasons ?? []), ...(messages?.alternatives ?? [])];
+              return (
+                <PersonCard
+                  key={p.personId}
+                  personId={p.personId}
+                  name={p.displayName}
+                  summary={summary}
+                  lines={lines}
+                  checked={selected.includes(p.personId) && selectable(p.personId)}
+                  disabled={!selectable(p.personId)}
+                  onToggle={() => toggle(p.personId)}
+                  testID={`participant-${p.self ? 'self' : p.personId}`}
+                />
+              );
+            })}
+            <SupportDetails
+              lines={participants.flatMap((p) => {
+                if (!intent || isAdded(p.personId)) return [];
+                const result = eligibilityOf(registrationOptions, p.personId, intent);
+                return result ? eligibilitySupportLines(result, p.displayName) : [];
+              })}
+              testID="eligibility-support"
+            />
+          </View>
+        ) : null}
+      </UiSection>
 
       {handling === 'booking' && intent !== null && switchKnownOn(intent) ? (
-        <ButtonRow>
+        <View style={styles.actions}>
           <Button
             label="Continue to booking"
             onPress={() => router.push(packageGRoutes.newBooking(offering.id))}
             disabled={offline}
             accessibilityHint="Opens the booking for this activity: times, space and what you need"
           />
-          {offline ? <Body muted>Booking needs a connection.</Body> : null}
-        </ButtonRow>
+          {offline ? (
+            <Text variant="caption" tone="muted">
+              Booking needs a connection.
+            </Text>
+          ) : null}
+        </View>
       ) : null}
 
       {sessionIntent ? (
@@ -421,39 +486,7 @@ function IntentChooser({ offering }: { offering: Offering }) {
           }
         />
       ) : null}
-      {basketIntent ? (
-        <Section title="Who are you registering?">
-          {participants.map((p) => {
-            const allowed = mayRegister(registrationOptions, p.personId);
-            const personAdded = isAdded(p.personId);
-            const result = intent ? eligibilityOf(registrationOptions, p.personId, intent) : null;
-            const messages = result ? eligibilityMessages(result) : null;
-            const detail = personAdded
-              ? 'Added to your basket'
-              : !allowed
-                ? 'Not available: your account can view this person but not register them.'
-                : result
-                  ? [
-                      eligibilityStatus(result).label,
-                      ...(messages?.reasons ?? []),
-                      ...(messages?.alternatives ?? []),
-                    ].join('. ')
-                  : undefined;
-            return (
-              <ChoiceRow
-                key={p.personId}
-                label={p.displayName}
-                detail={detail}
-                checked={selected.includes(p.personId) && selectable(p.personId)}
-                disabled={!selectable(p.personId)}
-                onToggle={() => toggle(p.personId)}
-                testID={`participant-${p.self ? 'self' : p.personId}`}
-              />
-            );
-          })}
-        </Section>
-      ) : null}
-      {basketIntent && withChoices
+      {askingOptions
         ? participants
             .filter((p) => pending.includes(p.personId))
             .map((p) => (
@@ -488,6 +521,7 @@ function IntentChooser({ offering }: { offering: Offering }) {
       ) : null}
       {basketIntent ? (
         <CommandError
+          wording="registration"
           error={failure}
           onRetry={() => void submit()}
           onReload={() => {
@@ -512,13 +546,9 @@ function IntentChooser({ offering }: { offering: Offering }) {
         />
       ) : null}
       {basketIntent ? (
-        <ButtonRow>
+        <View style={styles.actions}>
           <Button
-            label={
-              pending.length > 1
-                ? `Add ${pending.length} people to your basket`
-                : 'Add to your basket'
-            }
+            label={pending.length > 1 ? `Add ${pending.length} people to cart` : 'Add to cart'}
             onPress={() => void submit()}
             disabled={
               pending.length === 0 ||
@@ -527,11 +557,15 @@ function IntentChooser({ offering }: { offering: Offering }) {
               (basketUnknown && !baskets.error)
             }
             busy={working || (basketUnknown && baskets.fetchStatus === 'fetching')}
+            size="lg"
+            block
           />
           {offline ? (
-            <Body muted>Adding to your basket needs a connection. Your choices are kept.</Body>
+            <Text variant="caption" tone="muted">
+              Adding to your cart needs a connection. Your choices are kept.
+            </Text>
           ) : null}
-        </ButtonRow>
+        </View>
       ) : null}
     </View>
   );
@@ -585,3 +619,8 @@ export function RegistrationIntentRoute() {
     </>
   );
 }
+
+const useStyles = makeStyles(() => ({
+  people: { gap: spacing.sm },
+  actions: { gap: spacing.sm, paddingHorizontal: layout.gutter, paddingVertical: spacing.lg },
+}));

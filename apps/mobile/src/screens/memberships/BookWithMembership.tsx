@@ -24,13 +24,12 @@
  */
 import type { ApiError } from '@sportspark/api-client';
 import { useState } from 'react';
-import { View } from 'react-native';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
-import { CommandFailure } from '../../features/money/CommandFailure';
+import { CommandError } from '../../ui/CommandError';
 import { formatDateRange, hasPassed } from '../../features/money/format';
 import { bookingStatus, type SessionBooking } from '../../features/money/status';
-import { Body, ButtonRow, Caption, ChoiceRow, Field, Section } from '../../features/money/ui';
+import { ChoiceCard } from '../../ui/ChoiceList';
 import { detailCode } from '../../features/package-g/booking-model';
 import { useIncludedOfferings } from '../../features/package-g/included-offerings';
 import {
@@ -45,6 +44,11 @@ import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { LiveRegion, sentences } from '../../ui/announce';
 import { StatusBadge } from '../../ui/StatusBadge';
+import { Text } from '../../ui/Text';
+import { FieldValue as Field } from '../../ui/Field';
+import { Section } from '../../ui/Section';
+import { Actions, Choices } from '../../features/money/surfaces';
+import { SupportDetails } from '../../ui/SupportDetails';
 
 const INELIGIBLE_LABEL = 'This session cannot be booked with this membership';
 
@@ -95,14 +99,14 @@ function BookingForm({ membership, onClose }: { membership: Membership; onClose:
           label="Session"
           value={formatRange(booked.scheduledStart, booked.scheduledEnd, zone.zone)}
         />
-        <Caption>
+        <Text variant="caption" tone="muted">
           {membership.attendance?.mode === 'included_sessions'
             ? 'It counts toward the sessions this membership includes for that period.'
             : 'Booked with this membership.'}
-        </Caption>
-        <ButtonRow>
+        </Text>
+        <Actions>
           <Button label="Done" variant="secondary" onPress={onClose} />
-        </ButtonRow>
+        </Actions>
       </Section>
     );
   }
@@ -136,7 +140,9 @@ function BookingForm({ membership, onClose }: { membership: Membership; onClose:
 
   return (
     <Section title="Book a session" testID={`membership-booking-${membership.enrollmentId}`}>
-      <Caption>Only the activities this membership names are listed.</Caption>
+      <Text variant="caption" tone="muted">
+        Only the activities this membership names are listed.
+      </Text>
       {loading && offerings.size === 0 ? (
         <StateView variant="loading" label="activities this membership includes" />
       ) : offerings.size === 0 ? (
@@ -146,13 +152,16 @@ function BookingForm({ membership, onClose }: { membership: Membership; onClose:
           description="None of the activities this membership includes is published right now. The front desk can help."
         />
       ) : (
-        <View accessibilityRole="radiogroup" accessibilityLabel="Included activity">
+        <Choices label="Included activity">
           {[...offerings.values()].map((o) => (
-            <ChoiceRow
+            <ChoiceCard
               key={o.id}
-              mode="radio"
-              label={o.name}
-              detail={formatDateRange(o.startsOn, o.endsOn)}
+              mode="single"
+              option={{
+                value: o.id,
+                label: o.name,
+                description: formatDateRange(o.startsOn, o.endsOn),
+              }}
               checked={offeringId === o.id}
               onPress={() => {
                 setOfferingId(o.id);
@@ -161,7 +170,7 @@ function BookingForm({ membership, onClose }: { membership: Membership; onClose:
               }}
             />
           ))}
-        </View>
+        </Choices>
       )}
       {offeringId ? (
         <QueryBoundary
@@ -176,13 +185,16 @@ function BookingForm({ membership, onClose }: { membership: Membership; onClose:
           unavailableOffline={['booking with a membership']}
         >
           {() => (
-            <View accessibilityRole="radiogroup" accessibilityLabel="Session">
+            <Choices label="Session">
               {upcoming.map((s) => (
-                <ChoiceRow
+                <ChoiceCard
                   key={s.id}
-                  mode="radio"
-                  label={s.title ?? `Session ${s.sequence}`}
-                  detail={formatRange(s.scheduledStart, s.scheduledEnd, zone.zone)}
+                  mode="single"
+                  option={{
+                    value: s.id,
+                    label: s.title ?? `Session ${s.sequence}`,
+                    description: formatRange(s.scheduledStart, s.scheduledEnd, zone.zone),
+                  }}
                   checked={sessionId === s.id}
                   onPress={() => {
                     setSessionId(s.id);
@@ -190,13 +202,21 @@ function BookingForm({ membership, onClose }: { membership: Membership; onClose:
                   }}
                 />
               ))}
-            </View>
+            </Choices>
           )}
         </QueryBoundary>
       ) : null}
-      {offeringId && notice ? <Caption>{notice}</Caption> : null}
-      {offline ? <Caption>Booking needs a connection.</Caption> : null}
-      <ButtonRow>
+      {offeringId && notice ? (
+        <Text variant="caption" tone="muted">
+          {notice}
+        </Text>
+      ) : null}
+      {offline ? (
+        <Text variant="caption" tone="muted">
+          Booking needs a connection.
+        </Text>
+      ) : null}
+      <Actions>
         <Button
           label="Book with this membership"
           onPress={() => void submit()}
@@ -205,12 +225,15 @@ function BookingForm({ membership, onClose }: { membership: Membership; onClose:
           accessibilityHint="Uses this membership's included sessions to book the chosen session"
         />
         <Button label="Not now" variant="secondary" onPress={onClose} />
-      </ButtonRow>
+      </Actions>
       {refusal && failure ? (
         // Each refusal is announced (SPK-UX-009); the code is for support, not read out.
         <LiveRegion testID="membership-booking-refused" announcement={refusal} occurrence={failure}>
           <StatusBadge tone="neutral" label={refusal} />
-          <Caption>{`Error code: ${failure.code} (${detailCode(failure.details) ?? ''})`}</Caption>
+          <SupportDetails
+            errorCode={`${failure.code} (${detailCode(failure.details) ?? ''})`}
+            reference={failure.correlationId}
+          />
         </LiveRegion>
       ) : ineligible && failure ? (
         <LiveRegion
@@ -220,12 +243,19 @@ function BookingForm({ membership, onClose }: { membership: Membership; onClose:
         >
           <StatusBadge tone="warning" label={INELIGIBLE_LABEL} />
           {reasonsOf(failure).map((m) => (
-            <Body key={m}>{m}</Body>
+            <Text variant="body" key={m}>
+              {m}
+            </Text>
           ))}
-          <Caption>{`Error code: ${failure.code}`}</Caption>
+          <SupportDetails errorCode={failure.code} reference={failure.correlationId} />
         </LiveRegion>
       ) : failure ? (
-        <CommandFailure error={failure} what="the booking" onRetry={() => void submit()} />
+        <CommandError
+          wording="money"
+          error={failure}
+          what="the booking"
+          onRetry={() => void submit()}
+        />
       ) : null}
     </Section>
   );
@@ -247,13 +277,13 @@ export function BookWithMembership({
   if (open) return <BookingForm membership={membership} onClose={() => setOpen(false)} />;
   if (!canStart) return null;
   return (
-    <ButtonRow>
+    <Actions>
       <Button
         label="Book a session with this membership"
         variant="secondary"
         onPress={() => setOpen(true)}
         accessibilityHint="Lists the sessions this membership includes"
       />
-    </ButtonRow>
+    </Actions>
   );
 }

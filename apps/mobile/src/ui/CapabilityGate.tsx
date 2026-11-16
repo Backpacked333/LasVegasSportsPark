@@ -14,13 +14,16 @@
  *   never gated).
  * - On: the children, which still render ACCESS_DENIED and protected NOT_FOUND as "not available".
  *
+ * The capability is named in the customer's words (`capabilityCustomerLabel`: "Class packs", PA-11).
+ *
  * Several capabilities: the children render when any of them is on (one booking flow serves
  * rentals and parties); the API still refuses a command of the kind that is off.
  */
 import {
   CAPABILITY_PRESENTATION,
-  presentationForError,
+  capabilityCustomerLabel,
   type CapabilityId,
+  presentationForError,
 } from '@sportspark/api-client';
 import type { ReactNode } from 'react';
 import { usePermissions } from '../api/permissions';
@@ -52,7 +55,7 @@ export function CapabilityGate({
   const { reachable } = useConnectivity();
   const now = useNow();
   const ids: readonly CapabilityId[] = typeof capability === 'string' ? [capability] : capability;
-  const label = subject ?? ids.map((id) => CAPABILITY_PRESENTATION[id].label).join(' and ');
+  const label = subject ?? ids.map((id) => capabilityCustomerLabel(id)).join(' and ');
   const { query } = permissions;
 
   if (query.data === undefined) {
@@ -73,8 +76,9 @@ export function CapabilityGate({
         <StateView variant="offline-stale" offline updatedAt={null} now={now} onRetry={retry} />
       );
     } else {
+      // "Checking class packs": no verb to agree with a plural name.
       unknown = (
-        <StateView variant="loading" label={`whether ${label.toLowerCase()} is turned on`} />
+        <StateView variant="loading" label={label} text={`Checking ${label.toLowerCase()}`} />
       );
     }
     // What the customer already has is readable whatever the switch says (reads are never gated,

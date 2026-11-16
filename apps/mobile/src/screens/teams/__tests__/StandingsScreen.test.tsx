@@ -21,6 +21,7 @@ import {
 } from '../../../features/teams/testing/fixtures';
 import { createTeamsTestApp } from '../../../features/teams/testing/teams-test-app';
 import { mePermissions } from '../../../testing/test-app';
+import { classicTheme } from '../../../ui/theme';
 import { FixtureResultsScreen } from '../FixtureResultsScreen';
 import { StandingsScreen, standingsRowLabel } from '../StandingsScreen';
 import { openSupportDetails } from '../../../testing/ui-surfaces';
@@ -68,6 +69,34 @@ describe('SCR-C-28 StandingsScreen', () => {
     expect(app.requestsTo('GET', '/seasons/{id}/standings')[0]?.query).toEqual({
       divisionId: IDS.division,
     });
+  });
+
+  it('SPK-RESULT-003, ADR-008: figures are tabular and the person’s own team is highlighted, in words too', async () => {
+    // The table at the default text size (the test renderer's own default is a large scale).
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const reactNative = require('react-native') as { useWindowDimensions: () => unknown };
+    const dimensions = jest
+      .spyOn(reactNative, 'useWindowDimensions')
+      .mockReturnValue({ width: 390, height: 844, scale: 3, fontScale: 1 });
+    const app = createTeamsTestApp({ routes: routes() });
+    render(<StandingsScreen entryId={IDS.entry} />, { wrapper: app.wrapper });
+    const own = await screen.findByTestId(`standings-row-${IDS.entry}`);
+    const other = screen.getByTestId(`standings-row-${IDS.opponentEntry}`);
+    // The highlight: a tonal fill with an accent bar on the own row only.
+    expect(own).toHaveStyle({
+      backgroundColor: classicTheme.colors.tonal,
+      borderLeftColor: classicTheme.colors.primary,
+    });
+    expect(other).not.toHaveStyle({ backgroundColor: classicTheme.colors.tonal });
+    // Never colour alone: the own row says so.
+    expect(within(own).getByText('Desert Foxes (your team)')).toBeOnTheScreen();
+    expect(within(other).getByText('Canyon Hawks')).toBeOnTheScreen();
+    // Every figure is in tabular digits, so the columns line up.
+    for (const figure of ['2', '4', '3', '0', '1', '9']) {
+      expect(within(own).getAllByText(figure)[0]).toHaveStyle({ fontVariant: ['tabular-nums'] });
+    }
+    await app.settle();
+    dimensions.mockRestore();
   });
 
   it('SPK-UX-009: at large text sizes each row is stacked text instead of fixed-width cells', async () => {

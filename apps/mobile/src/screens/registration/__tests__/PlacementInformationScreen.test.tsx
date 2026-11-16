@@ -78,11 +78,20 @@ describe('SCR-C-10 PlacementInformationScreen', () => {
       wrapper: app.wrapper,
     });
     expect(
-      await screen.findByLabelText("Placement information. This isn't available in the app yet."),
+      await screen.findByLabelText(
+        'Placement information. Tell the front desk anything the coaches should know.',
+      ),
     ).toBeOnTheScreen();
     await openSupportDetails(screen);
     expect(screen.getByText('Decisions: DEC-051, DEC-031')).toBeOnTheScreen();
     expect(app.fake.requests).toHaveLength(0);
+  });
+
+  it("PA-11 ADR-008: a player's placement answers are the Options step of registering", async () => {
+    const app = renderPlacement({ routes: routes() });
+    expect(await screen.findByRole('header', { name: 'About you as a player' })).toBeOnTheScreen();
+    expect(screen.getByLabelText('Step 2 of 5, Options')).toBeOnTheScreen();
+    await app.settle();
   });
 
   it("SPK-PLACE-001: records only the approved fields and never another person's identity", async () => {
@@ -123,7 +132,9 @@ describe('SCR-C-10 PlacementInformationScreen', () => {
       requestedTeammatePersonIds: [],
     });
     expect(await screen.findByLabelText('Placement information sent')).toBeOnTheScreen();
-    expect(screen.getByText(/No team is assigned yet, and no place is reserved/)).toBeOnTheScreen();
+    expect(
+      screen.getByText('Staff review placement. No team is assigned yet, and no spot is saved.'),
+    ).toBeOnTheScreen();
     expect(app.fake.requests.find((r) => r.route === '/competitions')?.query).toEqual({
       status: 'active',
     });

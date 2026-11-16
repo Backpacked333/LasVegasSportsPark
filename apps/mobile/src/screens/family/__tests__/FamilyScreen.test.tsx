@@ -24,7 +24,8 @@ import {
 } from '../../account/__tests__/fixtures';
 import { FamilyScreen } from '../FamilyScreen';
 import { SHARE_MESSAGE, WITHHELD_REVOKE_REASON } from '../InviteAdultForm';
-import { openSupportDetails } from '../../../testing/ui-surfaces';
+import { illustrations } from '../../../artwork/manifest';
+import { openSupportDetails, pullToRefresh } from '../../../testing/ui-surfaces';
 
 const SAM = person(CHILD, 'Sam', 'Morgan', 'child');
 const INVITATION = '0192f1a0-0000-7000-8000-00000000c001';
@@ -131,9 +132,7 @@ function emptyFamilyApp(routes: Record<string, unknown> = {}) {
 }
 
 async function openInvite() {
-  fireEvent.press(
-    await screen.findByRole('button', { name: 'Invite another adult for Sam Morgan' }),
-  );
+  fireEvent.press(await screen.findByRole('button', { name: 'Invite an adult for Sam Morgan' }));
   return screen.getByTestId('invite-form');
 }
 
@@ -181,6 +180,44 @@ describe('SCR-C-31 FamilyScreen', () => {
     expect(await screen.findByRole('header', { name: 'No family members yet' })).toBeOnTheScreen();
   });
 
+  it('PA-11 ADR-008: the empty family shows the family illustration above its words', async () => {
+    const app = emptyFamilyApp();
+    render(<FamilyScreen />, { wrapper: app.wrapper });
+    const empty = await screen.findByTestId('family-empty');
+    expect(within(empty).getByRole('header', { name: 'No family members yet' })).toBeOnTheScreen();
+    expect(
+      within(empty).UNSAFE_getAllByProps({ source: illustrations['empty-family'] }).length,
+    ).toBeGreaterThan(0);
+  });
+
+  it('PA-11 SCR-C-31: each person is a card with their avatar and name; "Invite an adult" opens in a sheet and closes back', async () => {
+    const app = familyApp();
+    render(<FamilyScreen />, { wrapper: app.wrapper });
+    const sam = await screen.findByTestId('person-access-0');
+    expect(await within(sam).findByRole('header', { name: 'Sam Morgan' })).toBeOnTheScreen();
+    // the avatar's initials are drawn and hidden from screen readers
+    expect(within(sam).getByText('SM', { includeHiddenElements: true })).toBeOnTheScreen();
+    expect(screen.queryByTestId('sheet')).toBeNull();
+    const form = await openInvite();
+    const sheet = screen.getByTestId('sheet');
+    expect(within(sheet).getByRole('header', { name: 'Invite an adult' })).toBeOnTheScreen();
+    expect(within(sheet).getByTestId('invite-form')).toBe(form);
+    expect(within(form).getByText('For Sam Morgan.')).toBeOnTheScreen();
+    fireEvent.press(within(form).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByTestId('invite-form')).toBeNull());
+    expect(app.fake.requests.some((r) => r.route === '/invitations')).toBe(false);
+  });
+
+  it('PA-11: pull to refresh reads the family again', async () => {
+    const app = familyApp();
+    render(<FamilyScreen />, { wrapper: app.wrapper });
+    await screen.findByTestId('person-access-0');
+    const reads = () => app.fake.requests.filter((r) => r.route === '/me/households').length;
+    const before = reads();
+    await pullToRefresh(screen);
+    await waitFor(() => expect(reads()).toBeGreaterThan(before));
+  });
+
   it('asks to finish setup when the account is not linked to a participant record', async () => {
     const app = familyApp({ 'GET /me': ok(me({ person: null })) });
     render(<FamilyScreen />, { wrapper: app.wrapper });
@@ -193,20 +230,22 @@ describe('SCR-C-31 FamilyScreen', () => {
     render(<FamilyScreen />, { wrapper: app.wrapper });
     expect(
       await screen.findByLabelText(
-        "Adding a child from the app. This isn't available in the app yet.",
-      ),
-    ).toBeOnTheScreen();
-    expect(
-      screen.getByLabelText("Supervised pickup arrangements. This isn't available in the app yet."),
-    ).toBeOnTheScreen();
-    expect(
-      screen.getByLabelText(
-        "Seeing the permissions other adults hold over the people you manage. This isn't available in the app yet.",
+        'Adding a child from the app. Ask the front desk to make this change for you.',
       ),
     ).toBeOnTheScreen();
     expect(
       screen.getByLabelText(
-        "Ending another adult's permissions over you or the people you manage. This isn't available in the app yet.",
+        'Supervised pickup arrangements. Tell the front desk who is collecting your child.',
+      ),
+    ).toBeOnTheScreen();
+    expect(
+      screen.getByLabelText(
+        'Seeing the permissions other adults hold over the people you manage. Ask the front desk to make this change for you.',
+      ),
+    ).toBeOnTheScreen();
+    expect(
+      screen.getByLabelText(
+        "Ending another adult's permissions over you or the people you manage. Ask the front desk to change this for you.",
       ),
     ).toBeOnTheScreen();
     await openSupportDetails(screen);
@@ -294,13 +333,15 @@ describe('SCR-C-31 FamilyScreen', () => {
     expect(within(form).getByRole('radio', { name: /^Delegate/ })).toBeOnTheScreen();
     expect(within(form).queryByText(/supervised sessions \(pickup\)/)).toBeNull();
     expect(
-      within(form).getByLabelText("Supervised pickup. This isn't available in the app yet."),
+      within(form).getByLabelText(
+        'Supervised pickup. Tell the front desk who is collecting your child.',
+      ),
     ).toBeOnTheScreen();
     await openSupportDetails(within(form));
     expect(within(form).getByText('Decisions: DEC-075, DEC-005')).toBeOnTheScreen();
     expect(
       within(form).getByLabelText(
-        "Choosing how long an invitation stays open. This isn't available in the app yet.",
+        'Choosing how long an invitation stays open. Check the invitation for the date it closes.',
       ),
     ).toBeOnTheScreen();
     await openSupportDetails(within(form));
@@ -393,9 +434,9 @@ describe('SCR-C-31 FamilyScreen', () => {
     expect(
       within(withheld).getByLabelText('Created, but the link cannot be shown again'),
     ).toBeOnTheScreen();
-    expect(
-      within(withheld).getByText('Error code: IDEMPOTENCY_SECRET_WITHHELD. Reference: corr-w'),
-    ).toBeOnTheScreen();
+    await openSupportDetails(within(withheld));
+    expect(within(withheld).getByText('Error code: IDEMPOTENCY_SECRET_WITHHELD')).toBeOnTheScreen();
+    expect(within(withheld).getByText('Reference: corr-w')).toBeOnTheScreen();
     expect(within(form).queryByLabelText('Something went wrong')).toBeNull();
     // Nothing new is created beside the invitation nobody has a link for.
     expect(within(form).getByRole('button', { name: 'Create invitation' })).toBeDisabled();
@@ -442,9 +483,9 @@ describe('SCR-C-31 FamilyScreen', () => {
     fireEvent.press(checkAgain);
     const lost = await within(form).findByTestId('secret-withheld');
     expect(within(lost).getByLabelText('This may already have been done')).toBeOnTheScreen();
-    expect(
-      within(lost).getByText('Error code: IDEMPOTENCY_OUTCOME_UNAVAILABLE. Reference: corr-lost'),
-    ).toBeOnTheScreen();
+    await openSupportDetails(within(lost));
+    expect(within(lost).getByText('Error code: IDEMPOTENCY_OUTCOME_UNAVAILABLE')).toBeOnTheScreen();
+    expect(within(lost).getByText('Reference: corr-lost')).toBeOnTheScreen();
     expect(
       within(lost).getByText('Find it under "Invitations you sent" and revoke it there.'),
     ).toBeOnTheScreen();
@@ -487,6 +528,9 @@ describe('SCR-C-31 FamilyScreen', () => {
     const result = await screen.findByTestId('invitation-issued');
     fireEvent.changeText(within(result).getByLabelText('Reason for withdrawing'), 'Mistake');
     fireEvent.press(within(result).getByRole('button', { name: 'Withdraw invitation' }));
+    // The answer arrives after the press: wait for it before opening its support fold.
+    await within(result).findByLabelText('No longer open');
+    await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: STALE_REVISION/)).toBeOnTheScreen();
     expect(within(result).getByLabelText('No longer open')).toBeOnTheScreen();
     expect(within(result).queryByText(/Open until/)).toBeNull();
@@ -644,7 +688,7 @@ describe('SCR-C-31 permissions as the grants state them (GET /me/access-grants)'
     expect(await within(sam).findByRole('header', { name: 'Sam Morgan' })).toBeOnTheScreen();
     expect(within(sam).getByLabelText(/^View: under review\./)).toBeOnTheScreen();
     // Nothing can be passed on from a paused permission.
-    expect(screen.queryByRole('button', { name: /^Invite another adult/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Invite an adult/ })).toBeNull();
   });
 
   it('a permission that starts later says when', async () => {
@@ -685,7 +729,7 @@ describe('SCR-C-31 giving up a permission (SPK-IAM-006)', () => {
     const app = familyApp();
     render(<FamilyScreen />, { wrapper: app.wrapper });
     expect(
-      await screen.findByRole('button', { name: 'Invite another adult for Sam Morgan' }),
+      await screen.findByRole('button', { name: 'Invite an adult for Sam Morgan' }),
     ).toBeOnTheScreen();
     await waitFor(() =>
       expect(app.fake.requests.some((r) => r.route === '/me/permissions')).toBe(true),
@@ -762,6 +806,7 @@ describe('SCR-C-31 giving up a permission (SPK-IAM-006)', () => {
     fireEvent.press(within(form).getByRole('radio', { name: /^Pay, Starts / }));
     fireEvent.changeText(within(form).getByLabelText('Reason'), 'Not needed');
     fireEvent.press(within(form).getByRole('button', { name: 'Give up permission' }));
+    await openSupportDetails(within(form));
     expect(await within(form).findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
     const post = app.fake.requests.find((r) => r.method === 'POST');
     expect(post?.params.id).toBe(`grant-pay-${CHILD}`);
@@ -864,17 +909,19 @@ describe('SCR-C-31 households (SPK-IAM-001)', () => {
         '1 other member is not shown, because you do not have permission to view them.',
       ),
     ).toBeOnTheScreen();
-    expect(screen.getByText(/Being in a household gives nobody any permission/)).toBeOnTheScreen();
+    expect(
+      screen.getByText(/Being in a family group gives nobody any permission/),
+    ).toBeOnTheScreen();
   });
 
   it('empty: no household yet; without the create action, only the front desk can make one', async () => {
     const app = familyApp();
     render(<FamilyScreen />, { wrapper: app.wrapper });
-    expect(await screen.findByRole('header', { name: 'No household yet' })).toBeOnTheScreen();
+    expect(await screen.findByRole('header', { name: 'No family group yet' })).toBeOnTheScreen();
     expect(
-      await screen.findByText('The front desk can group your family into a household.'),
+      await screen.findByText('The front desk can put your family into a group.'),
     ).toBeOnTheScreen();
-    expect(screen.queryByRole('button', { name: 'Create a household' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Create a family group' })).toBeNull();
   });
 
   const MAY_GROUP = mePermissions({
@@ -922,16 +969,16 @@ describe('SCR-C-31 households (SPK-IAM-001)', () => {
     });
     render(<FamilyScreen />, { wrapper: app.wrapper });
     expect(await screen.findByText('You can create one below.')).toBeOnTheScreen();
-    fireEvent.press(screen.getByRole('button', { name: 'Create a household' }));
+    fireEvent.press(screen.getByRole('button', { name: 'Create a family group' }));
     const form = screen.getByTestId('household-create');
     expect(
-      within(form).getByText(/Being in a household gives nobody any permission/),
+      within(form).getByText(/Being in a family group gives nobody any permission/),
     ).toBeOnTheScreen();
-    fireEvent.press(within(form).getByRole('button', { name: 'Create household' }));
-    expect(within(form).getByText(/Give the household a name/)).toBeOnTheScreen();
+    fireEvent.press(within(form).getByRole('button', { name: 'Create family group' }));
+    expect(within(form).getByText(/Give the family group a name/)).toBeOnTheScreen();
     expect(app.fake.requests.some((r) => r.method === 'POST')).toBe(false);
-    fireEvent.changeText(within(form).getByLabelText('Household name'), ' Morgan household ');
-    fireEvent.press(within(form).getByRole('button', { name: 'Create household' }));
+    fireEvent.changeText(within(form).getByLabelText('Family group name'), ' Morgan household ');
+    fireEvent.press(within(form).getByRole('button', { name: 'Create family group' }));
     expect(
       await screen.findByTestId('household-0192f1a0-0000-7000-8000-00000000f201'),
     ).toBeOnTheScreen();

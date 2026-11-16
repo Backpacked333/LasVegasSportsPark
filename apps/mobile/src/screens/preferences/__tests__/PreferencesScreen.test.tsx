@@ -94,13 +94,15 @@ describe('SCR-C-36 PreferencesScreen', () => {
     expect(
       screen.getByRole('switch', { name: 'In the app for promotional messages' }),
     ).toBeChecked();
+    // PA-11: channels not decided yet (DEC-062, DEC-020) are hidden; only the app's own rows show
     expect(
-      screen.getByRole('switch', { name: 'Push notifications for essential notices' }),
-    ).toBeChecked();
+      screen.queryByRole('switch', { name: 'Push notifications for essential notices' }),
+    ).toBeNull();
+    expect(screen.queryByRole('switch', { name: 'Email for promotional messages' })).toBeNull();
     expect(
-      screen.getByRole('switch', { name: 'Push notifications for promotional messages' }),
-    ).not.toBeChecked();
-    expect(screen.getAllByText('Off. Facility default').length).toBeGreaterThan(0);
+      screen.queryByRole('switch', { name: 'Text messages (SMS) for essential notices' }),
+    ).toBeNull();
+    expect(screen.getAllByText('On. Facility default').length).toBeGreaterThan(0);
   });
 
   it('Appearance: the Legends mode switch is offered first and is not sent to the API', async () => {
@@ -120,16 +122,17 @@ describe('SCR-C-36 PreferencesScreen', () => {
     render(<PreferencesScreen />, { wrapper: app.wrapper });
     expect(
       await screen.findByLabelText(
-        "The choice of channels the facility uses. This isn't available in the app yet.",
+        'Email, text and push notices. Check your inbox in the app for notices.',
       ),
     ).toBeOnTheScreen();
+    expect(screen.queryByText(/DEC-062/)).toBeNull();
     await openSupportDetails(screen);
-    expect(screen.getByText('Decision: DEC-062')).toBeOnTheScreen();
+    expect(screen.getByText('Decisions: DEC-062, DEC-020')).toBeOnTheScreen();
   });
 
   it('saves only the changed preferences with an idempotency key and says "Preferences saved"', async () => {
     let saved = false;
-    const after = prefs({ 'promotional:email': { enabled: false, stored: true } });
+    const after = prefs({ 'promotional:in_app': { enabled: false, stored: true } });
     const app = prefsApp({
       'GET /me/communication-preferences': () => fakeResponse(200, saved ? after : prefs()),
       'PATCH /me/communication-preferences': () => {
@@ -140,23 +143,19 @@ describe('SCR-C-36 PreferencesScreen', () => {
     render(<PreferencesScreen />, { wrapper: app.wrapper });
     const save = await screen.findByRole('button', { name: 'Save preferences' });
     expect(save).toBeDisabled();
-    fireEvent(
-      screen.getByRole('switch', { name: 'Email for promotional messages' }),
-      'valueChange',
-      false,
-    );
+    fireEvent.press(screen.getByRole('switch', { name: 'In the app for promotional messages' }));
     expect(screen.getByRole('button', { name: 'Save preferences' })).not.toBeDisabled();
     fireEvent.press(screen.getByRole('button', { name: 'Save preferences' }));
 
     expect(await screen.findByLabelText('Preferences saved')).toBeOnTheScreen();
     const patch = app.fake.requests.find((r) => r.method === 'PATCH');
     expect(patch?.body).toEqual({
-      preferences: [{ channel: 'email', category: 'promotional', enabled: false }],
+      preferences: [{ channel: 'in_app', category: 'promotional', enabled: false }],
     });
     expect(patch?.headers['idempotency-key']).toBe('key-00000001');
     await waitFor(() =>
       expect(
-        screen.getByRole('switch', { name: 'Email for promotional messages' }),
+        screen.getByRole('switch', { name: 'In the app for promotional messages' }),
       ).not.toBeChecked(),
     );
   });
@@ -170,16 +169,17 @@ describe('SCR-C-36 PreferencesScreen', () => {
       },
     });
     render(<PreferencesScreen />, { wrapper: app.wrapper });
-    fireEvent(
-      await screen.findByRole('switch', { name: 'Text messages (SMS) for essential notices' }),
-      'valueChange',
-      true,
+    fireEvent.press(
+      await screen.findByRole('switch', { name: 'In the app for promotional messages' }),
     );
     fireEvent.press(screen.getByRole('button', { name: 'Save preferences' }));
+    // The answer arrives after the press: wait for it before opening its support fold.
+    await screen.findByRole('button', { name: 'Check again' });
+    await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
     expect(
-      screen.getByRole('switch', { name: 'Text messages (SMS) for essential notices' }),
-    ).toBeChecked();
+      screen.getByRole('switch', { name: 'In the app for promotional messages' }),
+    ).not.toBeChecked();
     // A 5xx may come after the change was stored: never "Something went wrong" (§4.9).
     expect(
       screen.getByLabelText('No answer yet: this may already have been recorded'),
@@ -201,16 +201,14 @@ describe('SCR-C-36 PreferencesScreen', () => {
         }),
     });
     render(<PreferencesScreen />, { wrapper: app.wrapper });
-    fireEvent(
-      await screen.findByRole('switch', { name: 'Text messages (SMS) for essential notices' }),
-      'valueChange',
-      true,
+    fireEvent.press(
+      await screen.findByRole('switch', { name: 'In the app for promotional messages' }),
     );
     fireEvent.press(screen.getByRole('button', { name: 'Save preferences' }));
     expect(await screen.findByLabelText('This may already have been done')).toBeOnTheScreen();
-    expect(
-      screen.getByText('Error code: IDEMPOTENCY_OUTCOME_UNAVAILABLE. Reference: corr-prefs'),
-    ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(screen.getByText('Error code: IDEMPOTENCY_OUTCOME_UNAVAILABLE')).toBeOnTheScreen();
+    expect(screen.getByText('Reference: corr-prefs')).toBeOnTheScreen();
     expect(screen.queryByLabelText('Something went wrong')).toBeNull();
     const reads = () =>
       app.fake.requests.filter(
@@ -226,10 +224,12 @@ describe('SCR-C-36 PreferencesScreen', () => {
     const app = prefsApp();
     render(<PreferencesScreen />, { wrapper: app.wrapper });
     expect(
-      await screen.findByRole('switch', { name: 'Email for essential notices' }),
+      await screen.findByRole('switch', { name: 'In the app for promotional messages' }),
     ).not.toBeDisabled();
     act(() => app.sources.setReachable(false));
-    expect(screen.getByRole('switch', { name: 'Email for essential notices' })).toBeDisabled();
+    expect(
+      screen.getByRole('switch', { name: 'In the app for promotional messages' }),
+    ).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Save preferences' })).toBeDisabled();
     expect(screen.getByText('Changes need a connection and are not queued.')).toBeOnTheScreen();
   });
@@ -237,10 +237,12 @@ describe('SCR-C-36 PreferencesScreen', () => {
   it('push on this device: not set up in this build (DEC-061), essential notices stay in the inbox', async () => {
     const app = prefsApp();
     render(<PreferencesScreen />, { wrapper: app.wrapper });
-    expect(await screen.findByLabelText('Push is not set up in this version')).toBeOnTheScreen();
-    expect(screen.getAllByText(/Essential notices always appear in the app's inbox/).length).toBe(
-      1,
-    );
+    expect(
+      await screen.findByLabelText(
+        'Push notifications. You can carry on without them. Check your inbox in the app for notices.',
+      ),
+    ).toBeOnTheScreen();
+    expect(screen.queryByLabelText('Push is not set up in this version')).toBeNull();
   });
 
   it('permission restriction: push denied by the operating system is explained and in-app notices continue', async () => {
@@ -508,7 +510,7 @@ describe('SCR-C-36 push devices (SPK-UX-001 push registration, SPK-IAM-006; DEC-
     render(<PreferencesScreen />, { wrapper: app.wrapper });
     expect(
       await screen.findByLabelText(
-        "Registering this device for push notifications. This isn't available in the app yet.",
+        'Push notifications. You can carry on without them. Check your inbox in the app for notices.',
       ),
     ).toBeOnTheScreen();
     await openSupportDetails(screen);
@@ -607,6 +609,7 @@ describe('SCR-C-36 push devices (SPK-UX-001 push registration, SPK-IAM-006; DEC-
     );
     fireEvent.changeText(within(row).getByLabelText('Reason'), 'Old phone');
     fireEvent.press(within(row).getByRole('button', { name: 'Stop push' }));
+    await openSupportDetails(within(row));
     expect(await within(row).findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
     expect(within(row).getByLabelText('Reason')).toHaveProp('value', 'Old phone');
     // A 5xx may come after the device was stopped: checked again under the same key (§4.9).
@@ -641,7 +644,30 @@ describe('SCR-C-36 push devices (SPK-UX-001 push registration, SPK-IAM-006; DEC-
   it('empty: no device receives push, and essential notices stay in the app', async () => {
     const app = prefsApp();
     render(<PreferencesScreen />, { wrapper: app.wrapper });
+    // PA-11: this build cannot register for push, so an empty device list is not shown at all
+    await waitFor(() =>
+      expect(app.fake.requests.some((r) => r.route === '/me/push-devices')).toBe(true),
+    );
+    await screen.findByRole('header', { name: 'Push on this device' });
+    expect(screen.queryByRole('header', { name: 'Devices registered for push' })).toBeNull();
+    expect(screen.queryByRole('header', { name: 'No devices registered' })).toBeNull();
+  });
+
+  it('PA-11: where push can be set up, the empty device list says so', async () => {
+    const app = prefsApp({ 'POST /me/push-devices': { status: 201, body: device() } });
+    const reader = {
+      status: async () => 'granted' as const,
+      deviceToken: async () => 'platform-push-token-a1b2',
+    };
+    render(
+      <app.wrapper>
+        <PushPermissionProvider reader={reader}>
+          <PreferencesScreen />
+        </PushPermissionProvider>
+      </app.wrapper>,
+    );
     expect(await screen.findByRole('header', { name: 'No devices registered' })).toBeOnTheScreen();
+    expect(screen.getByRole('header', { name: 'Devices registered for push' })).toBeOnTheScreen();
   });
 
   it('a build that supplies a push token registers this install with platform, token and app version', async () => {
@@ -672,7 +698,7 @@ describe('SCR-C-36 push devices (SPK-UX-001 push registration, SPK-IAM-006; DEC-
     expect(post?.headers['idempotency-key']).toBe('key-00000001');
     expect(
       screen.queryByLabelText(
-        "Registering this device for push notifications. This isn't available in the app yet.",
+        'Push notifications. You can carry on without them. Check your inbox in the app for notices.',
       ),
     ).toBeNull();
   });

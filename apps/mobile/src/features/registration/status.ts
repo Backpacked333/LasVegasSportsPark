@@ -55,26 +55,29 @@ export function registrationWindowStatus(
   }
 }
 
-/** "Place held until <server time>": a hold is never a confirmation (SPK-REG-006). */
-export function holdStatus(expiresAt: string, now: Date): StatusBadgeProps {
+/**
+ * "Place held until <server time>": a hold is never a confirmation (SPK-REG-006). The time is on
+ * the facility's clock when the app knows it (`zone`, SPK-SCHED-008), else the device's; named.
+ */
+export function holdStatus(expiresAt: string, now: Date, zone?: string): StatusBadgeProps {
   if (hasPassed(expiresAt, now)) {
     return {
       tone: 'warning',
       label: 'Hold time is up. Checking whether your place is still held.',
     };
   }
-  return { tone: 'pending', label: `Place held until ${formatInstant(expiresAt)}` };
+  return { tone: 'pending', label: `Place held until ${formatInstant(expiresAt, zone)}` };
 }
 
-export function basketStatus(basket: Basket, now: Date): StatusBadgeProps {
+export function basketStatus(basket: Basket, now: Date, zone?: string): StatusBadgeProps {
   switch (basket.status) {
     case 'open':
       return basket.approvalPending
         ? { tone: 'pending', label: 'Awaiting approval' }
-        : { tone: 'neutral', label: 'In your basket. No place is held yet.' };
+        : { tone: 'neutral', label: 'In your cart. No spots are saved yet.' };
     case 'held':
       return basket.holdExpiresAt
-        ? holdStatus(basket.holdExpiresAt, now)
+        ? holdStatus(basket.holdExpiresAt, now, zone)
         : { tone: 'pending', label: 'Place held' };
     case 'checking_out':
       return { tone: 'pending', label: 'Payment processing' };
@@ -86,7 +89,7 @@ export function basketStatus(basket: Basket, now: Date): StatusBadgeProps {
     case 'released':
       return { tone: 'warning', label: 'Your held place was released' };
     case 'abandoned':
-      return { tone: 'neutral', label: 'This basket is no longer active' };
+      return { tone: 'neutral', label: 'This cart is no longer active' };
   }
 }
 
@@ -112,7 +115,7 @@ export function basketLineStatus(line: BasketLine): StatusBadgeProps {
 }
 
 /** "Price valid until <time>" or "Price expired. Get a new price." (SPK-PAY-002, POL-013). */
-export function quoteStatus(quote: Pick<Quote, 'status' | 'expiresAt'>, now: Date) {
+export function quoteStatus(quote: Pick<Quote, 'status' | 'expiresAt'>, now: Date, zone?: string) {
   if (quote.status === 'consumed') {
     return { tone: 'neutral', label: 'This price was used for a checkout' } as StatusBadgeProps;
   }
@@ -121,7 +124,7 @@ export function quoteStatus(quote: Pick<Quote, 'status' | 'expiresAt'>, now: Dat
   }
   return {
     tone: 'info',
-    label: `Price valid until ${formatInstant(quote.expiresAt)}`,
+    label: `Price valid until ${formatInstant(quote.expiresAt, zone)}`,
   } as StatusBadgeProps;
 }
 

@@ -6,6 +6,9 @@
  * - `plain`: the content straight on the page, inside the screen gutter.
  * - `carousel`: the content edge to edge (a `Carousel`, which keeps the gutter itself).
  *
+ * Without a `title` the section draws no heading row (a screen whose own title already names its
+ * one section, so the name is not said twice).
+ *
  * The action is a text button at least 44 pt tall. Its name says which section it belongs to
  * ("See all, Upcoming"), so a screen with several sections never has two buttons of the same name.
  */
@@ -33,7 +36,8 @@ export interface SectionAction {
 }
 
 export interface SectionProps {
-  title: string;
+  /** The section's heading; leave it out where the screen's title already says it. */
+  title?: string;
   /** A line under the title. */
   subtitle?: string;
   action?: SectionAction;
@@ -58,26 +62,32 @@ export function Section({
   const styles = useStyles();
   return (
     <View style={[styles.root, style]} testID={testID}>
-      <View style={styles.head}>
-        <View style={styles.words}>
-          <Text style={styles.title} accessibilityRole="header">
-            {title}
-          </Text>
-          {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
+      {title || subtitle || action ? (
+        <View style={styles.head}>
+          <View style={styles.words}>
+            {title ? (
+              <Text style={styles.title} accessibilityRole="header">
+                {title}
+              </Text>
+            ) : null}
+            {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
+          </View>
+          {action ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={
+                action.accessibilityLabel ?? (title ? `${action.label}, ${title}` : action.label)
+              }
+              accessibilityHint={action.accessibilityHint}
+              onPress={action.onPress}
+              hitSlop={{ left: spacing.sm, right: spacing.sm }}
+              style={({ pressed }) => [styles.action, pressed && styles.pressed]}
+            >
+              <Text style={styles.actionLabel}>{action.label}</Text>
+            </Pressable>
+          ) : null}
         </View>
-        {action ? (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={action.accessibilityLabel ?? `${action.label}, ${title}`}
-            accessibilityHint={action.accessibilityHint}
-            onPress={action.onPress}
-            hitSlop={{ left: spacing.sm, right: spacing.sm }}
-            style={({ pressed }) => [styles.action, pressed && styles.pressed]}
-          >
-            <Text style={styles.actionLabel}>{action.label}</Text>
-          </Pressable>
-        ) : null}
-      </View>
+      ) : null}
       {variant === 'card' ? (
         <Card elevation={elevation} style={styles.card}>
           {children}

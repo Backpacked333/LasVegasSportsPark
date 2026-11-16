@@ -29,7 +29,10 @@ import {
 } from '../../features/teams/status';
 import { DisputeWithdraw } from '../../features/teams/DisputeWithdraw';
 import { TeamFrame } from '../../features/teams/TeamFrame';
-import { Body, Detail, Section, Title } from '../../features/teams/ui';
+import { AppHeader } from '../../ui/AppHeader';
+import { FieldValue } from '../../ui/Field';
+import { Section } from '../../ui/Section';
+import { Text } from '../../ui/Text';
 import { Button } from '../../ui/Button';
 import { ListRow } from '../../ui/ListRow';
 import { QueryBoundary, QueryErrorView } from '../../ui/QueryBoundary';
@@ -69,20 +72,29 @@ function OfficialResult({
   return (
     <View testID="official-result">
       <StatusBadge {...resultStatus(revision)} testID="official-status" />
-      {score ? <Detail label="Score" value={score} /> : null}
-      <Detail label="Outcome" value={CLASSIFICATION_LABELS[revision.classification]} />
-      {forfeiting ? <Detail label="Forfeited by" value={forfeiting} /> : null}
+      {score ? <FieldValue layout="inline" label="Score" value={score} /> : null}
+      <FieldValue
+        layout="inline"
+        label="Outcome"
+        value={CLASSIFICATION_LABELS[revision.classification]}
+      />
+      {forfeiting ? <FieldValue layout="inline" label="Forfeited by" value={forfeiting} /> : null}
       {revision.details.abandonment ? (
-        <Detail
+        <FieldValue
+          layout="inline"
           label="Abandoned"
           value={`At minute ${revision.details.abandonment.minutePlayed}: ${revision.details.abandonment.reason}`}
         />
       ) : null}
       {revision.publishedAt ? (
-        <Detail label="Published" value={formatInstant(revision.publishedAt, timeZone)} />
+        <FieldValue
+          layout="inline"
+          label="Published"
+          value={formatInstant(revision.publishedAt, timeZone)}
+        />
       ) : null}
       {revision.supersedesRevisionId && revision.reason ? (
-        <Detail label="Reason for the correction" value={revision.reason} />
+        <FieldValue layout="inline" label="Reason for the correction" value={revision.reason} />
       ) : null}
     </View>
   );
@@ -143,13 +155,19 @@ function ResultsContent({
     >
       {(f) => (
         <View>
-          <Title>{`${f.home.teamName} vs ${f.away?.teamName ?? 'Bye'}`}</Title>
+          <AppHeader title={`${f.home.teamName} vs ${f.away?.teamName ?? 'Bye'}`} />
           <Section title="Game">
             <StatusBadge {...fixtureStatus(f, f.venue?.timezone)} />
             {f.scheduledStart ? (
-              <Detail label="Kickoff" value={formatInstant(f.scheduledStart, f.venue?.timezone)} />
+              <FieldValue
+                layout="inline"
+                label="Kickoff"
+                value={formatInstant(f.scheduledStart, f.venue?.timezone)}
+              />
             ) : null}
-            {f.venue ? <Detail label="Where" value={f.venue.facilityName} /> : null}
+            {f.venue ? (
+              <FieldValue layout="inline" label="Where" value={f.venue.facilityName} />
+            ) : null}
           </Section>
           <Section title="Result">
             <QueryBoundary
@@ -168,11 +186,13 @@ function ResultsContent({
                     {official ? (
                       <OfficialResult revision={official} fixture={f} />
                     ) : (
-                      <Body>No official result yet.</Body>
+                      <Text variant="body">No official result yet.</Text>
                     )}
                     {history.length > 0 ? (
                       <View accessibilityRole="list" testID="result-history">
-                        <Body muted>Earlier results, kept as history</Body>
+                        <Text variant="caption" tone="muted">
+                          Earlier results, kept as history
+                        </Text>
                         {history.map((r) => (
                           <ListRow
                             key={r.id}

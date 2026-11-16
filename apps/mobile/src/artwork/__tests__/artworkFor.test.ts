@@ -212,4 +212,11 @@ describe('ADR-008 / PA-11 homeBandFor: day from 06:00 to 17:59 facility time', (
   ] as const)('hour %s is %s', (hour, band) => {
     expect(homeBandFor(hour)).toEqual({ band, source: homeBand[band] });
   });
+
+  it.each([0, 6, 12, 17, 23])('ADR-008: in Legends mode hour %s is night', (hour) => {
+    expect(homeBandFor(hour, { legends: true })).toEqual({
+      band: 'night',
+      source: homeBand.night,
+    });
+  });
 });

@@ -5,6 +5,9 @@
  * always say what the tone means, never the colour alone (SPK-UX-009).
  *
  * The tile is one element for screen readers, read "Label, value, sublabel". It is not a control.
+ *
+ * `plain`: the same words without a card of its own, sized to its words, for a figure that sits
+ * inside another card next to other content (a team card's standing beside its members).
  */
 import { Text, View, type StyleProp, type ViewStyle } from 'react-native';
 import {
@@ -26,6 +29,8 @@ export interface StatTileProps {
   value: string;
   sublabel?: string;
   tone?: StatTone;
+  /** No card of its own (inside another card). */
+  plain?: boolean;
   style?: StyleProp<ViewStyle>;
   testID?: string;
 }
@@ -35,6 +40,7 @@ export function StatTile({
   value,
   sublabel,
   tone = 'default',
+  plain = false,
   style,
   testID,
 }: StatTileProps) {
@@ -43,7 +49,7 @@ export function StatTile({
   const valueColor = tone === 'default' ? theme.colors.text : theme.colors[tone];
   return (
     <View
-      style={[elevation(theme, 'card'), styles.tile, style]}
+      style={plain ? [styles.plain, style] : [elevation(theme, 'card'), styles.tile, style]}
       accessible
       accessibilityLabel={[label, value, sublabel].filter(Boolean).join(', ')}
       testID={testID}
@@ -64,6 +70,7 @@ const useStyles = makeStyles(({ colors }) => ({
     borderRadius: radius.lg,
     ...continuousCorners,
   },
+  plain: { gap: spacing.xxs },
   label: { ...type.footnote, ...fonts.semibold, color: colors.textMuted },
   value: { ...tabular(type.title1) },
   sublabel: { ...type.footnote, color: colors.textMuted },

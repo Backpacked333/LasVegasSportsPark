@@ -1,10 +1,11 @@
 /**
- * SCR-C-34 Payments and obligations, one balance (SPK-PAY-005, SPK-PAY-006, SPK-PAY-007,
+ * SCR-C-34 Payments, one amount due (SPK-PAY-005, SPK-PAY-006, SPK-PAY-007,
  * SPK-REG-003, SPK-AT-004, §4.9, §4.11, SPK-UX-004, SPK-UX-008; DEC-008, DEC-019, DEC-056,
  * DEC-073 and POL-016 are the API's configuration or pending decisions, never the app's).
  *
- * - `GET /v1/obligations/{id}`: amount, received, applied, left to pay and any overpayment, which
- *   stays visible (SPK-PAY-005), with the due date.
+ * - `GET /v1/obligations/{id}`: "Left to pay" and "Paid" as stat tiles (ADR-008 `StatTile`), then
+ *   amount, received, applied, left to pay and any overpayment, which stays visible (SPK-PAY-005),
+ *   with the due date.
  * - `GET /v1/orders/{id}`: the order lines per participant, credits applied and the order's
  *   payment and fulfillment state ("Payment received. We are completing your registration." for
  *   `recovery_required`).
@@ -37,8 +38,11 @@
  *   account's own payments list it (another payer's attempt says it may be someone else's).
  *
  * The payment provider and its card entry are not selected (DEC-019, Technical lead/account
- * owners): release builds show that pending decision instead of a payment method; development
- * builds use the API's fake provider (features/money/dev).
+ * owners): release builds say "Paying in the app isn't available yet. Pay at the front desk for
+ * now." (PA-11) with the decision in the "Details for support" fold, instead of a payment method;
+ * development builds use the API's fake provider (features/money/dev), gated by `__DEV__` and the
+ * release-bundle check. A step the provider asks for (`action_required`) also says to pay at the
+ * front desk for now.
  *
  * States: loading; empty: not applicable; ready; validation failure (the API's message, e.g. a
  * payment above the balance); permission restriction (not available; only the payer sees payment
@@ -59,9 +63,10 @@ import {
 } from '../../api/command-outcome';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
-import { CommandFailure } from '../../features/money/CommandFailure';
+import { CommandError } from '../../ui/CommandError';
 import { DevPaymentMethodPicker } from '../../features/money/dev';
-import { formatDay, formatInstant, formatMoney } from '../../features/money/format';
+import { formatInstant, formatMoney } from '../../features/money/format';
+import { useKnownFacilityZone } from '../../features/today/known-zone';
 import {
   liveAttemptStatus,
   liveAttemptText,
@@ -79,17 +84,30 @@ import {
   type PaymentOutcome,
   type Receipt,
 } from '../../features/money/status';
-import { Body, ButtonRow, Caption, Field, Section } from '../../features/money/ui';
+import {
+  Actions,
+  PAY_AT_DESK_MESSAGE,
+  PAY_AT_DESK_SUPPORT,
+  usePullToRefresh,
+} from '../../features/money/surfaces';
+import { pendingMessage } from '../../copy/pending';
 import { useConnectivity, useNow } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
 import { LiveRegion, sentences } from '../../ui/announce';
 import { Button } from '../../ui/Button';
+import { FieldValue as Field } from '../../ui/Field';
+import { InfoCard } from '../../ui/InfoCard';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { RefusedBeforeRunning } from '../../ui/RefusedBeforeRunning';
 import { Screen } from '../../ui/Screen';
-import { NotFoundScreen } from '../not-found/NotFoundScreen';
+import { Section } from '../../ui/Section';
+import { StatTile } from '../../ui/StatTile';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
+import { SupportDetails } from '../../ui/SupportDetails';
+import { Text } from '../../ui/Text';
+import { layout, makeStyles, spacing } from '../../ui/theme';
+import { NotFoundScreen } from '../not-found/NotFoundScreen';
 import { InstallmentsSection, OrderSection } from './OrderSections';
 
 type PayBody = Schema<'PayObligationRequest'>;
@@ -101,35 +119,62 @@ const NO_ANSWER_BODY =
 const UNREADABLE_ANSWER_BODY =
   'The service answered, but its answer could not be read, so the payment may have gone through. Checking again is safe: it asks about the same payment and cannot charge twice.';
 
-function Totals({ obligation }: { obligation: Obligation }) {
+/** "Left to pay" and "Paid" at the top of the page: the figures the customer came for. */
+function Tiles({ obligation }: { obligation: Obligation }) {
+  const styles = useStyles();
   const now = useNow();
+  const zone = useKnownFacilityZone().zone;
+  const t = obligation.totals;
+  const status = obligationStatus(obligation, now, zone);
+  return (
+    <View style={styles.tiles} testID="obligation-tiles">
+      <StatTile
+        label="Left to pay"
+        value={formatMoney(t.remainingMinor, t.currency)}
+        sublabel={status.label}
+        tone={status.tone === 'warning' ? 'warning' : 'default'}
+        testID="obligation-left"
+      />
+      <StatTile
+        label="Paid"
+        value={formatMoney(t.receivedMinor, t.currency)}
+        sublabel={`of ${formatMoney(t.amountMinor, t.currency)}`}
+        testID="obligation-paid"
+      />
+    </View>
+  );
+}
+
+/**
+ * The rest of the figures the API states. "Left to pay", the due date and the state are in the
+ * tiles above, so they are not repeated here.
+ */
+function Totals({ obligation }: { obligation: Obligation }) {
   const t = obligation.totals;
   return (
     <Section title={obligation.description}>
-      <StatusBadge {...obligationStatus(obligation, now)} testID="obligation-status" />
       <Field label="Amount" value={formatMoney(t.amountMinor, t.currency)} />
       <Field label="Received" value={formatMoney(t.receivedMinor, t.currency)} />
       <Field label="Applied to this balance" value={formatMoney(t.allocatedMinor, t.currency)} />
-      <Field label="Left to pay" value={formatMoney(t.remainingMinor, t.currency)} />
       {t.excessMinor > 0 ? (
         <>
           <Field label="Paid beyond the balance" value={formatMoney(t.excessMinor, t.currency)} />
-          <Caption>
+          <Text variant="caption" tone="muted">
             The extra is not lost: the facility holds it under its overpayment policy.
-          </Caption>
+          </Text>
         </>
       ) : null}
-      <Field label="Due" value={formatDay(obligation.dueAt)} />
     </Section>
   );
 }
 
 function ReceiptView({ receipt }: { receipt: Receipt }) {
+  const zone = useKnownFacilityZone().zone;
   return (
     <View testID="receipt">
       <Field
         label="Receipt"
-        value={`${formatMoney(receipt.amountMinor, receipt.currency)} received ${formatInstant(receipt.receivedAt)}`}
+        value={`${formatMoney(receipt.amountMinor, receipt.currency)} received ${formatInstant(receipt.receivedAt, zone)}`}
       />
       <Field
         label="Applied to this balance"
@@ -186,30 +231,35 @@ function PaymentResult({
         <StatusBadge {...status} testID="payment-status" />
         <Field label="Amount" value={formatMoney(attempt.amountMinor, attempt.currency)} />
         {explanation ? (
-          <Body>
+          <Text variant="body">
             {attempt.status === 'unknown'
               ? `${explanation}${attempt.unknownSince ? ` (waiting since ${formatInstant(attempt.unknownSince)})` : ''}.`
               : explanation}
-          </Body>
+          </Text>
         ) : null}
       </LiveRegion>
       {attempt.status === 'action_required' ? (
         <StateView
           variant="pending-decision"
           subject="Completing the payment provider’s step in the app"
-          decisions={['DEC-019']}
-          owner="Technical lead/account owners"
+          decisions={[...PAY_AT_DESK_SUPPORT.decisions]}
+          owner={PAY_AT_DESK_SUPPORT.owner}
+          message={pendingMessage('DEC-019')}
         />
       ) : null}
       {unresolved ? (
-        <ButtonRow>
+        <Actions>
           <Button label="Check again" variant="secondary" onPress={onCheck} busy={checking} />
-        </ButtonRow>
+        </Actions>
       ) : null}
       {outcome.receipt && attempt.status === 'succeeded' ? (
         <ReceiptView receipt={outcome.receipt} />
       ) : null}
-      {overpaid ? <Caption>{overpaid}</Caption> : null}
+      {overpaid ? (
+        <Text variant="caption" tone="muted">
+          {overpaid}
+        </Text>
+      ) : null}
     </Section>
   );
 }
@@ -273,7 +323,7 @@ function PaySection({
 
   // No definite answer yet: the payment may still take effect, so it is never shown as a failure
   // (SPK-PAY-007) and paying stays blocked; "Check again" re-sends the same request under the same
-  // key. A refusal before running of a first attempt is not one (CommandFailure shows "Not done");
+  // key. A refusal before running of a first attempt is not one (CommandError shows "Not done");
   // a refusal of "Check again" leaves it unanswered and is shown beside it ("Check not run").
   const unknown = unanswered !== null;
   const checkRefused = failure !== null && refusedAfterNoAnswer(failure);
@@ -287,28 +337,33 @@ function PaySection({
   const disabled = !token || offline || blocked || unknown || inProgressElsewhere || lost;
 
   return (
-    <Section title="Pay this balance" testID="pay-section">
+    <Section title="Pay" testID="pay-section">
       {DevPaymentMethodPicker ? (
         <DevPaymentMethodPicker value={token} onChange={setToken} />
       ) : (
-        <StateView
-          variant="pending-decision"
-          subject="Paying in the app"
-          decisions={['DEC-019']}
-          owner="Technical lead/account owners"
-        />
+        // DEC-019 (PA-11): what to do instead, in words; the decision is in the fold.
+        <InfoCard tone="info" icon="storefront" message={PAY_AT_DESK_MESSAGE} testID="pay-at-desk">
+          <SupportDetails
+            decisions={PAY_AT_DESK_SUPPORT.decisions}
+            owner={PAY_AT_DESK_SUPPORT.owner}
+          />
+        </InfoCard>
       )}
-      {offline ? <Caption>Needs a connection.</Caption> : null}
+      {offline ? (
+        <Text variant="caption" tone="muted">
+          Needs a connection.
+        </Text>
+      ) : null}
       {DevPaymentMethodPicker ? (
-        <ButtonRow>
+        <Actions>
           <Button
             label={`Pay ${formatMoney(t.remainingMinor, t.currency)}`}
             onPress={() => token && void submit({ paymentMethodToken: token })}
             disabled={disabled}
             busy={pay.isProcessing}
-            accessibilityHint="Pays the amount left on this balance"
+            accessibilityHint="Pays the amount left to pay"
           />
-        </ButtonRow>
+        </Actions>
       ) : null}
       {unknown && sent ? (
         <>
@@ -318,16 +373,16 @@ function PaySection({
             occurrence={unanswered}
           >
             <StatusBadge tone="warning" label={UNCONFIRMED_LABEL} />
-            <Body>{noAnswerBody}</Body>
-            <Caption>Error code: {unanswered?.code}</Caption>
-            <ButtonRow>
+            <Text variant="body">{noAnswerBody}</Text>
+            <Actions>
               <Button
                 label="Check again"
                 onPress={() => void submit(sent)}
                 busy={pay.isProcessing}
                 disabled={offline}
               />
-            </ButtonRow>
+            </Actions>
+            <SupportDetails errorCode={unanswered?.code} reference={unanswered?.correlationId} />
           </LiveRegion>
           {checkRefused && failure ? (
             <RefusedBeforeRunning
@@ -345,14 +400,12 @@ function PaySection({
           occurrence={failure}
         >
           <StatusBadge tone="warning" label={UNCONFIRMED_LABEL} />
-          <Body>{failure?.message}</Body>
-          <Caption>
-            Error code: {failure?.code}
-            {failure?.correlationId ? `. Reference: ${failure.correlationId}` : ''}
-          </Caption>
+          <Text variant="body">{failure?.message}</Text>
+          <SupportDetails errorCode={failure?.code} reference={failure?.correlationId} />
         </LiveRegion>
       ) : failure ? (
-        <CommandFailure
+        <CommandError
+          wording="money"
           error={failure}
           what="the payment"
           onRetry={() => sent && void submit(sent)}
@@ -397,23 +450,24 @@ function LiveAttemptSection({
         )}
       >
         <StatusBadge {...liveAttemptStatus(live)} testID="live-attempt-status" />
-        <Body>{liveAttemptText(live)}</Body>
+        <Text variant="body">{liveAttemptText(live)}</Text>
       </LiveRegion>
       {mine.data !== undefined && !openable ? (
-        <Caption>
+        <Text variant="caption" tone="muted">
           It may have been started by someone else who pays for this balance. It is shown here so
           the balance is not paid twice.
-        </Caption>
+        </Text>
       ) : null}
       {live.status === 'action_required' ? (
         <StateView
           variant="pending-decision"
           subject="Completing the payment provider’s step in the app"
-          decisions={['DEC-019']}
-          owner="Technical lead/account owners"
+          decisions={[...PAY_AT_DESK_SUPPORT.decisions]}
+          owner={PAY_AT_DESK_SUPPORT.owner}
+          message={pendingMessage('DEC-019')}
         />
       ) : null}
-      <ButtonRow>
+      <Actions>
         <Button
           label="Check again"
           variant="secondary"
@@ -429,7 +483,7 @@ function LiveAttemptSection({
             onPress={() => router.push(moneyRoutes.payment(live.id))}
           />
         ) : null}
-      </ButtonRow>
+      </Actions>
     </Section>
   );
 }
@@ -482,6 +536,7 @@ function ObligationDetail({
   }, [latestStatus, queryClient]);
   return (
     <View>
+      <Tiles obligation={obligation} />
       <Totals obligation={obligation} />
       {liveElsewhere ? (
         <LiveAttemptSection live={liveElsewhere} onCheck={onCheck} checking={checking} />
@@ -516,8 +571,9 @@ export function ObligationScreen({ obligationId }: { obligationId: string }) {
     path: '/obligations/{id}',
     request: { path: { id: obligationId } },
   });
+  const { refreshing, onRefresh } = usePullToRefresh();
   return (
-    <Screen>
+    <Screen onRefresh={onRefresh} refreshing={refreshing}>
       <RequireSession what="this balance">
         <QueryBoundary
           query={obligation}
@@ -543,8 +599,18 @@ export function ObligationRoute() {
   const id = param(useLocalSearchParams<{ obligationId: string }>().obligationId);
   return (
     <>
-      <Stack.Screen options={{ title: 'Balance' }} />
+      <Stack.Screen options={{ title: 'Amount due' }} />
       {id ? <ObligationScreen obligationId={id} /> : <NotFoundScreen />}
     </>
   );
 }
+
+const useStyles = makeStyles(() => ({
+  tiles: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.md,
+    paddingHorizontal: layout.gutter,
+    marginTop: spacing.sm,
+  },
+}));

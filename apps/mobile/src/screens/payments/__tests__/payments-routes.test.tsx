@@ -72,16 +72,14 @@ describe('stage-4 money routes (SCR-C-25, SCR-C-34, SCR-C-35)', () => {
 
   it('/team/contributions opens the player list, not a team workspace', async () => {
     const { router, app } = renderAt('/team/contributions');
-    expect(
-      await screen.findByRole('header', { name: 'Team contributions asked of you' }),
-    ).toBeOnTheScreen();
+    expect(await screen.findByTestId('my-contributions')).toBeOnTheScreen();
     expect(router.getPathname()).toBe('/team/contributions');
     expect(app.fake.requests.filter((r) => r.route === '/team-entries/{id}')).toHaveLength(0);
   });
 
-  it('/session-packages opens the packages list', async () => {
+  it('/session-packages opens the class packs list (PA-11: "class pack")', async () => {
     renderAt('/session-packages');
-    expect(await screen.findByRole('header', { name: 'Your session packages' })).toBeOnTheScreen();
-    expect(await screen.findByLabelText('Package: Open skate 10-pack')).toBeOnTheScreen();
+    expect(await screen.findByTestId('packages-section')).toBeOnTheScreen();
+    expect(await screen.findByLabelText('Class pack: Open skate 10-pack')).toBeOnTheScreen();
   });
 });

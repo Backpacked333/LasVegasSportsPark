@@ -32,6 +32,41 @@ re-export the `*Route` component of the screen.
 `__tests__/registration-routes.test.tsx` renders the real Expo Router tree and checks that every
 route above resolves to its screen.
 
+## Registration steps and customer words (PA-11, ADR-008)
+
+PA-11 (DEC-107) and ADR-008 are **Proposed**; what is below is **Verified** by the jest tests
+named, in a test render only (no device, §6.2).
+
+- **Five steps, one route each.** Who → Options → Forms → Review → Pay, shown with `ProgressSteps`
+  ("Step 2 of 5, Options") by `features/registration/steps.tsx`: Who and Options on SCR-C-09 (the
+  steps read Options while a person's tier, days, add-ons and uniform are asked), Options on
+  SCR-C-10, Forms on SCR-C-13 from a cart (not from a waitlist offer), Review on SCR-C-12, Pay on
+  SCR-C-14. The routes are unchanged, so back navigation, the remembered checkout and recovery
+  work as before. The cart (SCR-C-11) is a container between the steps and shows no steps; the
+  outcome (SCR-C-15) comes after them.
+- **Who** (`features/registration/WhoCards.tsx`): "Who's going?" with a card per person (initials
+  avatar, name, and the API's eligibility, reasons and alternatives inside the card; one checkbox
+  or radio for screen readers, named "Name. Status. Reasons."). The registration type is a sheet
+  behind a "Registration type" button only when there is more than one choice; with one it is said,
+  not offered. A turned-off type reads its plain message (`src/copy/pending.ts`); DEC-016 and the
+  capability's record are in the "Details for support" fold.
+- **Forms**: each form is a card with a "Read and sign" button that opens a sheet with the
+  wording, the agreement and the Sign button; signing closes it, and the answer is kept while it
+  is closed.
+- **Review**: titled Review, with "Price summary" and the lines grouped by person ("For Ada").
+- **Pay** in a release build: "Paying in the app isn't available yet. Pay at the front desk for
+  now. Your spots are held until <hold expiry>." (the basket's server-owned expiry, formatted as
+  everywhere else), with DEC-019 and its owner in the fold. The development payment method stays
+  development-only (`src/features/registration/dev`, checked by `scripts/check-release-bundle.mjs`).
+- **Outcome**: once the API reports the checkout completed, the success illustration, the status
+  "Registration complete", "See it in Calendar" (`/schedule`) and one success haptic.
+- **Words**: basket → cart, quote → review or price summary, hold → save spots, and the intent
+  names "Register a child", "Join as a player", "Enter a new team" and "Class pack"
+  (`src/copy/vocabulary.ts`). The status phrases of `docs/package-a/journeys.md` section 3 stay
+  word for word ("Place held until …", "Price valid until …", "Payment outcome being confirmed. Do
+  not pay again."). The screen titles are Cart and Review. The screen ids and API names in this
+  file (basket, quote) are the specification's.
+
 ## Behaviour asserted by the tests (Verified)
 
 - **Intents are the API's** (SPK-REG-001, ENR-05): the chooser offers exactly

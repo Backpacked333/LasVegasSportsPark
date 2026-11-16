@@ -1,20 +1,30 @@
 /**
- * SCR-C-21 Teams (SPK-UX-002, SPK-CAP-001, SPK-CAP-002, CMP-02, CMP-03): the person's teams from
- * `GET /v1/me/team-entries` with family members, next game in the facility's zone, standing and
- * readiness; open team invitations from `GET /v1/me/team-invitations`, each opening its detail and
- * declinable here with its revision; empty, error, not-available, offline and signed-out states.
+ * SCR-C-21 Teams (SPK-UX-002, SPK-CAP-001, SPK-CAP-002, CMP-02, CMP-03; PA-11, ADR-008): the
+ * person's teams from `GET /v1/me/team-entries` as picture cards with the family members on the
+ * team (an avatar stack), the next game in the facility's zone with its RSVP quick action, the
+ * standing (a stat tile) and readiness; "Your share" under the cards; open team invitations from
+ * `GET /v1/me/team-invitations` first, each with Accept (its detail, by id) and Decline (with its
+ * revision); empty, error, not-available, offline and signed-out states.
  */
 import { apiErrorBody, fakeResponse, type FakeRequest } from '@sportspark/api-client/testing';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
 import {
   IDS,
   baseRoutes,
+  contributionRequest,
   myTeamEntry,
   standings,
   teamInvitationView,
+  upcomingFixtureDetail,
 } from '../../../features/teams/testing/fixtures';
 import { createTeamsTestApp } from '../../../features/teams/testing/teams-test-app';
-import { TeamsScreen, memberRoleWords, membersText, readinessStatus } from '../TeamsScreen';
+import {
+  TeamsScreen,
+  memberRoleWords,
+  membersText,
+  readinessStatus,
+  teamCardLabel,
+} from '../TeamsScreen';
 import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), navigate: jest.fn() };
@@ -62,11 +72,16 @@ describe('SCR-C-21 TeamsScreen', () => {
 
   it('SPK-CAP-001, CMP-02: lists the person’s teams with family, next game, standing and readiness', async () => {
     const app = renderTeams();
+    // The card is one element: team, season and division, next game, readiness.
     const row = await screen.findByRole('button', {
-      name: /^Desert Foxes, Fall 2026, Coed Division 2\. On the team: You \(captain\), Kim \(player\)\. Next: vs Canyon Hawks, Sat, Oct 31, 10:00\sAM PDT at Las Vegas Sports Park\. Standing: 2nd of 2, Next game: 1 issue to resolve$/,
+      name: /^Desert Foxes, Fall 2026, Coed Division 2\. Next: vs Canyon Hawks, Sat, Oct 31, 10:00\sAM PDT at Las Vegas Sports Park, Next game: 1 issue to resolve$/,
     });
     expect(screen.getByLabelText('Your teams')).toBeOnTheScreen();
-    expect(screen.getByLabelText('Next game: 1 issue to resolve')).toBeOnTheScreen();
+    // Family members and the standing are their own elements beside the card.
+    expect(
+      await screen.findByRole('image', { name: 'On the team: You (captain), Kim (player)' }),
+    ).toBeOnTheScreen();
+    expect(await screen.findByLabelText('Standing, 2nd, of 2 teams')).toBeOnTheScreen();
     // §4.14: family members are named through the names read only, never by a route.
     expect(app.requestsTo('GET', '/person-names')[0]?.query).toEqual({ ids: IDS.child });
     fireEvent.press(row);
@@ -93,12 +108,12 @@ describe('SCR-C-21 TeamsScreen', () => {
     });
     expect(
       await screen.findByRole('button', {
-        name: /^Desert Foxes, .*Standing: .*\. Team entry awaiting approval, Next game: 1 issue to resolve$/,
+        name: /^Desert Foxes, Fall 2026, Coed Division 2\. Next: vs Canyon Hawks, .*\. Team entry awaiting approval, Next game: 1 issue to resolve$/,
       }),
     ).toBeOnTheScreen();
     expect(
       screen.getByRole('button', {
-        name: /^Mesa Owls, .*No upcoming games\. Standing: [^.]*, Team entry awaiting approval$/,
+        name: 'Mesa Owls, Fall 2026, Coed Division 2. No upcoming games, Team entry awaiting approval',
       }),
     ).toBeOnTheScreen();
     await app.settle();
@@ -125,14 +140,133 @@ describe('SCR-C-21 TeamsScreen', () => {
         new Map([[IDS.child, { state: 'unavailable' }]]),
       ),
     ).toBe('On the team: Family member (guest player)');
+    expect(teamCardLabel(myTeamEntry({ nextFixture: null }))).toBe(
+      'Desert Foxes, Fall 2026, Coed Division 2. No upcoming games, Team entry approved',
+    );
+  });
+
+  it('SPK-UX-009: the family on the team is an avatar stack read as one element, viewer first', async () => {
+    const app = renderTeams();
+    const stack = await screen.findByTestId(`team-members-${IDS.entry}`);
+    await waitFor(() =>
+      expect(stack).toHaveProp('accessibilityLabel', 'On the team: You (captain), Kim (player)'),
+    );
+    expect(stack).toHaveProp('accessibilityRole', 'image');
+    // Initials only: the viewer (Casey Captain) first, then Kim by given name only (§4.14).
+    // The avatars are decorative inside the stack: the stack's name says who they are.
+    const initials = within(stack)
+      .getAllByText(/^[A-Z]{1,2}$/, { includeHiddenElements: true })
+      .map((t) => t.props.children);
+    expect(initials).toEqual(['CC', 'K']);
+    await app.settle();
+  });
+
+  it('SPK-RESULT-003: the standing is a stat tile, and says so when there is no official table yet', async () => {
+    const app = renderTeams({
+      'GET /seasons/{id}/standings': { status: 200, body: standings({ sourceResultIds: [] }) },
+    });
+    expect(
+      await screen.findByLabelText('Standing, Not yet, No official results'),
+    ).toBeOnTheScreen();
+    expect(screen.queryByLabelText(/^Standing, 2nd/)).toBeNull();
+    await app.settle();
+  });
+
+  describe('the next game’s RSVP quick action (SCR-C-04, SPK-CAP-003, CMP-04)', () => {
+    const answered = (state: string, revision: number) => ({
+      id: '0192f1a0-0000-7000-8000-00000000fa01',
+      fixtureId: IDS.fixture,
+      teamEntryId: IDS.entry,
+      personId: IDS.me,
+      state,
+      respondedAt: '2026-10-24T12:00:00.000Z',
+      note: null,
+      revision,
+    });
+
+    it('answers from the card with the revision the game read gave, under one key', async () => {
+      const app = renderTeams({
+        'GET /fixtures/{id}': { status: 200, body: upcomingFixtureDetail() },
+        'POST /fixtures/{id}/availability': (request: FakeRequest) =>
+          fakeResponse(200, answered((request.body as { state: string }).state, 3)),
+      });
+      const card = await screen.findByTestId(`team-row-${IDS.entry}`);
+      const group = await within(card).findByLabelText(
+        'Are you going to the next Desert Foxes game?',
+      );
+      expect(group).toHaveProp('accessibilityRole', 'radiogroup');
+      expect(within(group).getByRole('radio', { name: 'Going' })).toHaveProp(
+        'accessibilityState',
+        expect.objectContaining({ checked: true }),
+      );
+      fireEvent.press(within(group).getByRole('radio', { name: 'Not going' }));
+      expect(await within(card).findByText('Answer recorded: Unavailable.')).toBeOnTheScreen();
+      expect(app.requestsTo('GET', '/fixtures/{id}')[0]?.params).toEqual({ id: IDS.fixture });
+      expect(app.bodiesOf('POST', '/fixtures/{id}/availability')).toEqual([
+        { state: 'unavailable', expectedRevision: 2 },
+      ]);
+      expect(app.keysOf('POST', '/fixtures/{id}/availability')).toHaveLength(1);
+      await app.settle();
+    });
+
+    it('is not offered to someone on neither roster, nor while the game read is missing', async () => {
+      const app = renderTeams({
+        'GET /fixtures/{id}': {
+          status: 200,
+          body: upcomingFixtureDetail({ rosterStatus: null, responses: [] }),
+        },
+      });
+      expect(await screen.findByRole('button', { name: /^Desert Foxes, / })).toBeOnTheScreen();
+      await app.settle();
+      expect(screen.queryByLabelText('Are you going to the next Desert Foxes game?')).toBeNull();
+      expect(app.requestsTo('POST', '/fixtures/{id}/availability')).toHaveLength(0);
+    });
+  });
+
+  it('SPK-PAY-004: "Your share" lists what a captain asked of the person and opens it', async () => {
+    const app = renderTeams({
+      'GET /me/contribution-requests': {
+        status: 200,
+        body: {
+          items: [
+            contributionRequest(),
+            contributionRequest({ id: '0192f1a0-0000-7000-8000-000000000062', status: 'paid' }),
+          ],
+          nextCursor: null,
+        },
+      },
+    });
+    const share = await screen.findByRole('button', {
+      name: 'Your share, Fall 2026 team fee, $75.00',
+    });
+    // A paid share is not asked for again.
+    expect(within(screen.getByTestId('your-share')).getAllByRole('button')).toHaveLength(1);
+    fireEvent.press(share);
+    expect(mockRouter.push).toHaveBeenCalledWith(`/team/contribution/${IDS.contribution}`);
+    await app.settle();
   });
 
   it('empty: explains joining and creating, and the create entry point opens SCR-C-27', async () => {
-    renderTeams({ 'GET /me/team-entries': { status: 200, body: [] } });
-    expect(await screen.findByRole('header', { name: 'No teams to show' })).toBeOnTheScreen();
-    expect(screen.getByRole('header', { name: 'No open team invitations' })).toBeOnTheScreen();
-    fireEvent.press(screen.getByRole('button', { name: 'Create a team entry' }));
+    const app = renderTeams({ 'GET /me/team-entries': { status: 200, body: [] } });
+    expect(await screen.findByRole('header', { name: 'No teams yet' })).toBeOnTheScreen();
+    expect(
+      screen.getByText(
+        'To join a team, accept the invitation your captain sent you. To start one, enter a new team in an open season.',
+      ),
+    ).toBeOnTheScreen();
+    await app.settle();
+    // No open invitation: the invitations section is not shown at all.
+    expect(screen.queryByTestId('team-invitations')).toBeNull();
+    // One way in: the empty state's own action.
+    fireEvent.press(screen.getByRole('button', { name: 'Enter a new team' }));
     expect(mockRouter.push).toHaveBeenCalledWith('/team/new');
+  });
+
+  it('with teams, "Enter a new team" sits under the cards and opens SCR-C-27', async () => {
+    const app = renderTeams();
+    fireEvent.press(await screen.findByRole('button', { name: 'Enter a new team' }));
+    expect(mockRouter.push).toHaveBeenCalledWith('/team/new');
+    await app.settle();
   });
 
   it('shows the API error code on a failed list with "Try again"', async () => {
@@ -163,9 +297,7 @@ describe('SCR-C-21 TeamsScreen', () => {
       },
     });
     expect(await screen.findByRole('button', { name: /^Desert Foxes, / })).toBeOnTheScreen();
-    const decline = await screen.findByRole('button', {
-      name: 'Decline the invitation to join Canyon Hawks',
-    });
+    const decline = await screen.findByRole('button', { name: 'Decline' });
     act(() => app.sources.setReachable(false));
     expect(decline).toBeDisabled();
     expect(screen.getByRole('button', { name: /^Desert Foxes, / })).toBeOnTheScreen();
@@ -188,6 +320,26 @@ describe('SCR-C-21 TeamsScreen', () => {
         },
         ...overrides,
       });
+
+    it('invitations come first, before the teams', async () => {
+      const app = createTeamsTestApp({ routes: withInvitation() });
+      render(<TeamsScreen />, { wrapper: app.wrapper });
+      expect(await screen.findByLabelText('Team invitations')).toBeOnTheScreen();
+      expect(await screen.findByRole('button', { name: /^Desert Foxes, / })).toBeOnTheScreen();
+      const headers = screen.getAllByRole('header').map((h) => h.props.children);
+      expect(headers.indexOf('Invitations')).toBeGreaterThanOrEqual(0);
+      expect(headers.indexOf('Invitations')).toBeLessThan(headers.indexOf('Your teams'));
+      await app.settle();
+    });
+
+    it('Accept opens the invitation’s detail by id only, where the link’s token accepts it', async () => {
+      const app = createTeamsTestApp({ routes: withInvitation() });
+      render(<TeamsScreen />, { wrapper: app.wrapper });
+      fireEvent.press(await screen.findByRole('button', { name: 'Accept' }));
+      expect(mockRouter.push).toHaveBeenCalledWith(`/invitations/${IDS.invitation}?type=team`);
+      expect(app.requestsTo('POST', '/team-invitations/{id}/accept')).toHaveLength(0);
+      await app.settle();
+    });
 
     it('lists an open invitation that opens its detail by id only', async () => {
       const app = createTeamsTestApp({ routes: withInvitation() });
@@ -223,9 +375,7 @@ describe('SCR-C-21 TeamsScreen', () => {
         }),
       });
       render(<TeamsScreen />, { wrapper: app.wrapper });
-      fireEvent.press(
-        await screen.findByRole('button', { name: 'Decline the invitation to join Canyon Hawks' }),
-      );
+      fireEvent.press(await screen.findByRole('button', { name: 'Decline' }));
       expect(
         screen.getByText(
           'Decline the invitation to join Canyon Hawks? It can no longer be accepted afterwards.',
@@ -239,9 +389,10 @@ describe('SCR-C-21 TeamsScreen', () => {
         { expectedRevision: 1 },
       ]);
       expect(app.keysOf('POST', '/team-invitations/{id}/decline')).toHaveLength(1);
-      expect(
-        await screen.findByRole('header', { name: 'No open team invitations' }),
-      ).toBeOnTheScreen();
+      // The list is read again and no longer holds the invitation.
+      await waitFor(() =>
+        expect(screen.queryByTestId(`team-invitation-${IDS.invitation}`)).toBeNull(),
+      );
       await app.settle();
     });
 
@@ -264,10 +415,9 @@ describe('SCR-C-21 TeamsScreen', () => {
         }),
       });
       render(<TeamsScreen />, { wrapper: app.wrapper });
-      fireEvent.press(
-        await screen.findByRole('button', { name: 'Decline the invitation to join Canyon Hawks' }),
-      );
+      fireEvent.press(await screen.findByRole('button', { name: 'Decline' }));
       fireEvent.press(screen.getByRole('button', { name: 'Decline invitation' }));
+      await openSupportDetails(screen);
       expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
       fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
       expect(
@@ -289,9 +439,7 @@ describe('SCR-C-21 TeamsScreen', () => {
         }),
       });
       render(<TeamsScreen />, { wrapper: app.wrapper });
-      fireEvent.press(
-        await screen.findByRole('button', { name: 'Decline the invitation to join Canyon Hawks' }),
-      );
+      fireEvent.press(await screen.findByRole('button', { name: 'Decline' }));
       fireEvent.press(screen.getByRole('button', { name: 'Decline invitation' }));
       expect(await screen.findByLabelText('This changed since you opened it')).toBeOnTheScreen();
       const reads = app.requestsTo('GET', '/me/team-invitations').length;
@@ -300,9 +448,7 @@ describe('SCR-C-21 TeamsScreen', () => {
       await waitFor(() =>
         expect(app.requestsTo('GET', '/me/team-invitations').length).toBeGreaterThan(reads),
       );
-      expect(
-        await screen.findByRole('button', { name: 'Decline the invitation to join Canyon Hawks' }),
-      ).toBeOnTheScreen();
+      expect(await screen.findByRole('button', { name: 'Decline' })).toBeOnTheScreen();
       expect(screen.queryByLabelText('This changed since you opened it')).toBeNull();
       await app.settle();
     });
@@ -315,9 +461,7 @@ describe('SCR-C-21 TeamsScreen', () => {
         }),
       });
       render(<TeamsScreen />, { wrapper: app.wrapper });
-      fireEvent.press(
-        await screen.findByRole('button', { name: 'Decline the invitation to join Canyon Hawks' }),
-      );
+      fireEvent.press(await screen.findByRole('button', { name: 'Decline' }));
       fireEvent.press(screen.getByRole('button', { name: 'Decline invitation' }));
       expect(
         await screen.findByText('Declining this invitation is not available to you.'),
@@ -338,7 +482,8 @@ describe('SCR-C-21 TeamsScreen', () => {
       render(<TeamsScreen />, { wrapper: app.wrapper });
       const list = await screen.findByLabelText('Team invitations');
       expect(within(list).getByLabelText('Expired')).toBeOnTheScreen();
-      expect(screen.queryByRole('button', { name: /^Decline the invitation/ })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Decline' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Accept' })).toBeNull();
       await app.settle();
     });
 

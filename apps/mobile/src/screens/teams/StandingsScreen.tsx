@@ -14,6 +14,10 @@
  * API does not yet name the pool a team plays in (no pool list for a division or an entry,
  * reported), so no pool table can be listed here; with tournaments off nothing is shown.
  *
+ * The table (ADR-008): figures in tabular digits so columns line up; the person's own team is
+ * highlighted with a tonal fill and an accent bar, and named "(your team)", so the highlight is
+ * never colour alone (SPK-UX-009).
+ *
  * States: loading; empty (no official results yet); ready; permission restriction (not
  * available); stale version (the standings revision changed: "Calculated <time>" and refetch on
  * focus); offline (cached with its calculation time and age); processing and success: not
@@ -21,7 +25,7 @@
  */
 import type { Schema } from '@sportspark/api-client';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
-import { StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { StyleSheet, useWindowDimensions, View } from 'react-native';
 import { usePermissions } from '../../api/permissions';
 import { useApiQuery } from '../../api/useApiQuery';
 import { formatDay, formatInstant, ordinal, plural } from '../../features/teams/format';
@@ -29,11 +33,13 @@ import type { Workspace } from '../../features/teams/queries';
 import { idParam, teamRoutes } from '../../features/teams/routes';
 import { fixtureStatus } from '../../features/teams/status';
 import { TeamFrame } from '../../features/teams/TeamFrame';
-import { Body, Section, Title } from '../../features/teams/ui';
+import { AppHeader } from '../../ui/AppHeader';
+import { Section } from '../../ui/Section';
+import { Text } from '../../ui/Text';
 import { ListRow } from '../../ui/ListRow';
 import { QueryBoundary, QueryErrorView } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
-import { fonts, makeStyles, spacing, type } from '../../ui/theme';
+import { fonts, makeStyles, spacing, tabular, type, useTheme } from '../../ui/theme';
 
 /** The published component is nullable (reported); a null answer reads as "no official results". */
 type Standings = NonNullable<Schema<'Standings'>>;
@@ -87,6 +93,7 @@ export function StandingsTable({
   entryId: string;
 }) {
   const styles = useStyles();
+  const { colors } = useTheme();
   const { fontScale } = useWindowDimensions();
   if (fontScale > LARGE_TEXT_SCALE) {
     // SPK-UX-009 large text: one readable row per team instead of clipped numeric cells.
@@ -98,6 +105,7 @@ export function StandingsTable({
             <ListRow
               key={row.teamEntryId}
               title={standingsRowLabel(row, ours)}
+              accent={ours ? colors.primary : undefined}
               testID={`standings-row-${row.teamEntryId}`}
             />
           );
@@ -130,13 +138,13 @@ export function StandingsTable({
             accessibilityLabel={standingsRowLabel(row, ours)}
             testID={`standings-row-${row.teamEntryId}`}
           >
-            <Text style={styles.cellPos}>{row.position}</Text>
-            <Text style={[styles.cellTeam, ours && styles.bold]}>
+            <Text style={[styles.cellPos, ours && styles.oursText]}>{row.position}</Text>
+            <Text style={[styles.cellTeam, ours && styles.oursText]}>
               {ours ? `${row.teamName} (your team)` : row.teamName}
             </Text>
             {[row.played, row.won, row.drawn, row.lost, row.goalDifference, row.points].map(
               (v, i) => (
-                <Text key={i} style={styles.cell}>
+                <Text key={i} style={[styles.cell, ours && styles.oursText]}>
                   {String(v)}
                 </Text>
               ),
@@ -162,7 +170,7 @@ export function TiebreakList({
     <Section title="How ties were decided" testID="tiebreaks">
       {explanations.map((tie, index) => (
         <View key={index} style={styles.tie}>
-          <Body>{`Tied on ${plural(tie.points, 'point')}: ${tie.teamEntryIds.map(name).join(' and ')}`}</Body>
+          <Text variant="body">{`Tied on ${plural(tie.points, 'point')}: ${tie.teamEntryIds.map(name).join(' and ')}`}</Text>
           {tie.steps.map((step, i) => (
             <View
               key={i}
@@ -181,7 +189,9 @@ export function TiebreakList({
               ) : null}
             </View>
           ))}
-          {!tie.resolved ? <Body>Still tied after every tiebreaker in the rule set.</Body> : null}
+          {!tie.resolved ? (
+            <Text variant="body">Still tied after every tiebreaker in the rule set.</Text>
+          ) : null}
         </View>
       ))}
     </Section>
@@ -308,7 +318,9 @@ function StandingsContent({ workspace }: { workspace: Workspace }) {
       : 'the season rule set';
   return (
     <View>
-      <Title>{`${workspace.season.name}${workspace.division ? `: ${workspace.division.name}` : ''}`}</Title>
+      <AppHeader
+        title={`${workspace.season.name}${workspace.division ? `: ${workspace.division.name}` : ''}`}
+      />
       <Section title="Standings">
         <QueryBoundary
           query={standings}
@@ -324,9 +336,9 @@ function StandingsContent({ workspace }: { workspace: Workspace }) {
             s ? (
               <View style={styles.group}>
                 <StandingsTable standings={s} entryId={entryId} />
-                <Body muted>
+                <Text variant="caption" tone="muted">
                   {`Calculated ${formatInstant(s.computedAt)} from ${plural(s.sourceResultIds.length, 'official result')} with ${ruleSetName}, version ${s.ruleSetVersion}. Provisional results are never counted.`}
-                </Body>
+                </Text>
               </View>
             ) : null
           }
@@ -388,12 +400,24 @@ const useStyles = makeStyles(({ colors }) => ({
     borderBottomColor: colors.border,
     gap: spacing.xs,
   },
-  ours: { backgroundColor: colors.surface },
+  // The own row: a tonal fill and an accent bar, with its words in the tonal text colour.
+  ours: {
+    backgroundColor: colors.tonal,
+    borderLeftWidth: 4,
+    borderLeftColor: colors.primary,
+    paddingLeft: spacing.xs,
+  },
+  oursText: { ...fonts.bold, color: colors.onTonal },
   head: { ...fonts.bold, color: colors.textMuted },
-  cellPos: { ...type.body, minWidth: 28, flexShrink: 0, color: colors.text },
+  cellPos: { ...tabular(type.body), minWidth: 28, flexShrink: 0, color: colors.text },
   cellTeam: { ...type.body, flex: 1, color: colors.text },
-  cell: { ...type.body, minWidth: 34, flexShrink: 0, textAlign: 'right', color: colors.text },
-  bold: { ...fonts.bold },
+  cell: {
+    ...tabular(type.body),
+    minWidth: 34,
+    flexShrink: 0,
+    textAlign: 'right',
+    color: colors.text,
+  },
   tie: { gap: spacing.xs, paddingVertical: spacing.xs },
   step: { gap: 2, paddingLeft: spacing.sm },
   stepTitle: { ...type.body, ...fonts.semibold, color: colors.text },

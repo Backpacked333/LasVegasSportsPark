@@ -12,26 +12,34 @@
  * `whenOff="notice"`: the API keeps the bookings a customer already has readable, and cancellable,
  * while a switch is off. Booking something new starts from Discover (SCR-C-07, SCR-C-09).
  *
- * States: loading; empty ("No rentals or parties yet", with Discover); ready; error with the code
+ * Cards (PA-11, ADR-008): each booking is a card with its picture (`artworkFor`: a rental or a
+ * party) and its status in the journeys.md words ("Booking pending", "Booked"). Customer words:
+ * Explore, never Discover. Pull to refresh.
+ *
+ * States: loading; empty ("No rentals or parties yet", with Explore); ready; error with the code
  * and "Try again"; permission restriction (not available); offline or stale (cached list with its
  * age, cancelling needs a connection); turned off (notice above the list).
  */
+import { useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
-import { Text, View } from 'react-native';
+import { useState } from 'react';
+import { View } from 'react-native';
 import { usePermissions } from '../../api/permissions';
 import { useApiPages } from '../../api/useApiPages';
-import { Caption } from '../../features/money/ui';
+import { artworkFor } from '../../artwork/artworkFor';
 import { bookingStatus, KIND_LABELS, type Booking } from '../../features/package-g/booking-model';
 import { packageGRoutes } from '../../features/package-g/routes';
 import { displayZone, formatRange, zoneNotice } from '../../features/today/time';
 import { RequireSession } from '../../session/RequireSession';
 import { Button } from '../../ui/Button';
 import { CapabilityGate } from '../../ui/CapabilityGate';
-import { ListRow } from '../../ui/ListRow';
 import { LoadMore } from '../../ui/LoadMore';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
-import { makeStyles, spacing, type } from '../../ui/theme';
+import { Text } from '../../ui/Text';
+import { makeStyles, spacing } from '../../ui/theme';
+import { RegistrationCard } from '../enrollments/RegistrationCard';
+import { illustrations } from '../../artwork/manifest';
 
 export const BOOKINGS_STILL_AVAILABLE = 'Bookings you already made stay available here.';
 export const BOOKINGS_PAGE_SIZE = 20;
@@ -52,21 +60,31 @@ function BookingRows({ items }: { items: Booking[] }) {
   const router = useRouter();
   const deviceZoneNotice = items.find((b) => !displayZone(b.timezone).facility);
   return (
-    <View accessibilityRole="list" accessibilityLabel="Your rentals and parties">
-      {items.map((booking) => (
-        <ListRow
-          key={booking.id}
-          title={booking.offeringName ?? KIND_LABELS[booking.kind]}
-          detail={bookingSummary(booking)}
-          status={bookingStatus(booking)}
-          onPress={() => router.push(packageGRoutes.booking(booking.id))}
-          accessibilityHint="Opens the booking"
-          testID={`booking-${booking.id}`}
-        />
-      ))}
+    <View
+      accessibilityRole="list"
+      accessibilityLabel="Your rentals and parties"
+      style={styles.cards}
+    >
+      {items.map((booking) => {
+        const title = booking.offeringName ?? KIND_LABELS[booking.kind];
+        return (
+          <RegistrationCard
+            key={booking.id}
+            title={title}
+            detail={bookingSummary(booking)}
+            status={bookingStatus(booking)}
+            art={artworkFor({ kind: booking.kind, name: title }, 'square').source}
+            onPress={() => router.push(packageGRoutes.booking(booking.id))}
+            accessibilityHint="Opens the booking"
+            testID={`booking-${booking.id}`}
+          />
+        );
+      })}
       {deviceZoneNotice ? (
         <View style={styles.note}>
-          <Caption>{zoneNotice(displayZone(null), deviceZoneNotice.firstStart) ?? ''}</Caption>
+          <Text variant="caption" tone="muted">
+            {zoneNotice(displayZone(null), deviceZoneNotice.firstStart) ?? ''}
+          </Text>
         </View>
       ) : null}
     </View>
@@ -88,9 +106,10 @@ function BookingsList() {
         empty={{
           title: 'No rentals or parties yet',
           description:
-            'Rentals and parties you book or request appear here with their status. Find one to book in Discover.',
-          actionLabel: 'Open Discover',
+            'Rentals and parties you book or request appear here with their status. Find one to book in Explore.',
+          actionLabel: 'Explore activities',
           onAction: () => router.push('/discover'),
+          source: illustrations['empty-calendar'],
         }}
         unavailableOffline={['Canceling a booking', 'Booking']}
       >
@@ -141,18 +160,23 @@ function RosterInvitationsLink() {
 
 export function MyBookingsScreen() {
   const styles = useStyles();
+  const queryClient = useQueryClient();
+  const [refreshing, setRefreshing] = useState(false);
+  // Pull to refresh: the bookings and the switches again.
+  const refresh = () => {
+    setRefreshing(true);
+    void queryClient.refetchQueries({ type: 'active' }).finally(() => setRefreshing(false));
+  };
   return (
-    <Screen>
+    <Screen onRefresh={refresh} refreshing={refreshing}>
       <View testID="screen-my-bookings">
         <RequireSession what="your bookings">
+          {/* The title bar says "Rentals and parties": the page does not say it again. */}
           <View style={styles.header}>
-            <Text style={styles.title} accessibilityRole="header">
-              Rentals and parties
-            </Text>
-            <Caption>
+            <Text variant="caption" tone="muted">
               A booking is complete only when everything it needs is reserved: the space, any
               equipment and the staff.
-            </Caption>
+            </Text>
           </View>
           <CapabilityGate
             capability={['rentals', 'parties']}
@@ -170,9 +194,9 @@ export function MyBookingsScreen() {
   );
 }
 
-const useStyles = makeStyles(({ colors }) => ({
+const useStyles = makeStyles(() => ({
+  cards: { paddingHorizontal: spacing.lg, gap: spacing.sm },
   header: { paddingHorizontal: spacing.lg, paddingTop: spacing.lg, gap: spacing.xs },
-  title: { ...type.title, color: colors.text },
   note: { paddingHorizontal: spacing.lg, paddingVertical: spacing.sm },
   footer: { padding: spacing.lg },
 }));

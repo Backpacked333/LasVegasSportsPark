@@ -614,14 +614,21 @@ export function optionsHandler(base: Partial<Schema<'RegistrationOptions'>> = {}
   };
 }
 
-/** A blocking eligibility result with the API's reason and alternative (SPK-REG-002). */
-export function ineligible(message: string): Schema<'EligibilityResult'> {
+/**
+ * A blocking eligibility result with the API's reason and alternatives (SPK-REG-002), as the
+ * evaluator sends an age refusal by default: the reason code, its staff-worded message, "choose
+ * another offering" and the staff-only override (which customers never see, PA-11).
+ */
+export function ineligible(
+  message = 'The participant is 13 on 2026-09-01; this offering requires at least 9 and at most 12.',
+  code = 'above_maximum_age',
+): Schema<'EligibilityResult'> {
   return {
     ...eligible(),
     eligible: false,
     reasons: [
       {
-        code: 'age_band',
+        code,
         severity: 'blocking',
         message,
         source: { type: 'policy', id: null },
@@ -629,7 +636,17 @@ export function ineligible(message: string): Schema<'EligibilityResult'> {
       },
     ],
     alternatives: [
-      { kind: 'other_offering', message: 'Choose an activity for this age.', offeringId: null },
+      {
+        kind: 'other_offering',
+        message:
+          'Choose an offering whose age band includes the participant on its reference date.',
+        offeringId: null,
+      },
+      {
+        kind: 'contact_staff',
+        message: 'Staff with program authority may override eligibility with a recorded reason.',
+        offeringId: null,
+      },
     ],
   };
 }

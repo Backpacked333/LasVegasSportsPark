@@ -181,7 +181,7 @@ describe('SCR-C-09 camp weeks and live total', () => {
     fireEvent.press(screen.getByRole('checkbox', { name: /^Winter Camp Week 2/ }));
     const total = await within(bar).findByTestId('camp-total');
     expect(total.props.accessibilityLabel).toBe(
-      'Estimated total $498.00. Early bird applied, $40.00 off. Your quote gives the binding price',
+      'Estimated total $498.00. Early bird applied, $40.00 off. The review gives the final price',
     );
     expect(within(bar).getByRole('header', { name: '2 of 3 weeks · Ada' })).toBeOnTheScreen();
     const sent = app.fake.requests.filter((r) => r.route === '/discounts/evaluate').at(-1);
@@ -192,7 +192,7 @@ describe('SCR-C-09 camp weeks and live total', () => {
     });
     // Choosing a full week says the basket offers its waitlist.
     expect(
-      screen.getByText('A full week can still be added: your basket offers its waitlist.'),
+      screen.getByText('A full week can still be added: your cart offers its waitlist.'),
     ).toBeOnTheScreen();
     await app.settle();
   });
@@ -203,8 +203,8 @@ describe('SCR-C-09 camp weeks and live total', () => {
     fireEvent.press(await screen.findByRole('checkbox', { name: 'Ada. Eligible' }));
     fireEvent.press(await screen.findByRole('checkbox', { name: /^Winter Camp Week 2/ }));
     await basketButtonReady();
-    fireEvent.press(screen.getByRole('button', { name: 'Add to your basket' }));
-    await screen.findByRole('checkbox', { name: 'Ada. Added to your basket' });
+    fireEvent.press(screen.getByRole('button', { name: 'Add to cart' }));
+    await screen.findByRole('checkbox', { name: 'Ada. Added to your cart' });
 
     const lines = app.fake.requests.filter((r) => r.route === '/baskets/{id}/lines');
     expect(lines.map((r) => (r.body as { offeringId: string }).offeringId)).toEqual([
@@ -238,7 +238,7 @@ describe('SCR-C-09 camp weeks and live total', () => {
     const bar = screen.getByTestId('camp-price-bar');
     expect(
       await within(bar).findByText(
-        'The total could not be worked out. Your quote gives the price.',
+        'The total could not be worked out. The review gives the price.',
       ),
     ).toBeOnTheScreen();
     await openSupportDetails(within(bar));

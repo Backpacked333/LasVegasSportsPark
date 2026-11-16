@@ -7,6 +7,7 @@
 import { fakeResponse } from '@sportspark/api-client/testing';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
 import { createTestApp, mePermissions } from '../../../testing/test-app';
+import { pullToRefresh } from '../../../testing/ui-surfaces';
 import { FormsScreen } from '../FormsScreen';
 import { CHILD, CHILD_TWO, me, namesRoute, ok, OTHER_ADULT, person, SELF } from './fixtures';
 
@@ -138,7 +139,8 @@ describe('SCR-C-30 FormsScreen: liability waivers', () => {
     const mine = await screen.findByLabelText('Waivers for You, Alex Morgan');
     expect(await within(mine).findByLabelText('Waiver accepted')).toBeOnTheScreen();
     expect(within(mine).getByText('Accepted on 1 Oct 2026 by you')).toBeOnTheScreen();
-    const sams = await screen.findByLabelText('Waivers for Sam Morgan');
+    // Sam's waiver waits under "To sign"; Alex's, in force, is under "Signed"
+    const sams = await screen.findByLabelText('To sign for Sam Morgan');
     expect(await within(sams).findByLabelText('Waiver not accepted yet')).toBeOnTheScreen();
     expect(within(sams).getByText('It has not been accepted yet.')).toBeOnTheScreen();
     // the wording of the version in force is shown before accepting
@@ -254,12 +256,47 @@ describe('SCR-C-30 FormsScreen: liability waivers', () => {
       ],
     });
     render(<FormsScreen />, { wrapper: app.wrapper });
-    const mine = await screen.findByLabelText('Waivers for You, Alex Morgan');
+    const mine = await screen.findByLabelText('To sign for You, Alex Morgan');
     expect(await within(mine).findByLabelText('Waiver needs accepting again')).toBeOnTheScreen();
     expect(within(mine).getByText('It was due for renewal on 1 Oct 2026.')).toBeOnTheScreen();
     expect(
       await within(mine).findByRole('button', { name: 'Accept "Liability waiver"' }),
     ).toBeOnTheScreen();
+  });
+
+  it('PA-11 SCR-C-30: "To sign" comes before "Signed", each person under their name, and pull to refresh reads again', async () => {
+    const stored: Record<string, unknown[]> = {
+      [SELF]: [
+        waiver({
+          status: 'current',
+          reason: null,
+          acceptance: acceptance({ subjectPersonId: SELF, basis: 'self' }),
+        }),
+      ],
+      [CHILD]: [waiver()],
+    };
+    const app = waiversApp(stored);
+    render(<FormsScreen />, { wrapper: app.wrapper });
+    expect(await screen.findByLabelText('To sign for Sam Morgan')).toBeOnTheScreen();
+    expect(await screen.findByLabelText('Waivers for You, Alex Morgan')).toBeOnTheScreen();
+    const headers = screen.getAllByRole('header').map((h) => h.props.children as unknown);
+    const toSign = headers.indexOf('To sign');
+    const signed = headers.indexOf('Signed');
+    expect(toSign).toBeGreaterThanOrEqual(0);
+    expect(signed).toBeGreaterThan(toSign);
+    // the person headings: Sam under "To sign", then everyone under "Signed"
+    expect(headers.slice(toSign, signed)).toContain('Sam Morgan');
+    expect(headers.slice(signed)).toEqual(
+      expect.arrayContaining(['You, Alex Morgan', 'Sam Morgan']),
+    );
+    expect(screen.queryByText('Nothing to sign right now.')).toBeNull();
+    // one read of each person's waivers serves both sections
+    const reads = () =>
+      app.fake.requests.filter((r) => r.route === '/people/{id}/waivers' && r.params.id === CHILD)
+        .length;
+    expect(reads()).toBe(1);
+    await pullToRefresh(screen);
+    await waitFor(() => expect(reads()).toBe(2));
   });
 
   it('SPK-REG-011 with liability waivers turned off: no waiver is shown and the API is not asked', async () => {
@@ -270,6 +307,8 @@ describe('SCR-C-30 FormsScreen: liability waivers', () => {
       expect(app.fake.requests.some((r) => r.route === '/acknowledgments')).toBe(true),
     );
     expect(screen.queryByLabelText(/^Waivers for/)).toBeNull();
+    expect(screen.queryByLabelText(/^To sign for/)).toBeNull();
+    expect(screen.getByText('Nothing to sign right now.')).toBeOnTheScreen();
     expect(app.fake.requests.some((r) => r.route === '/people/{id}/waivers')).toBe(false);
     expect(app.fake.requests.some((r) => r.route === '/waiver-acceptances')).toBe(false);
   });

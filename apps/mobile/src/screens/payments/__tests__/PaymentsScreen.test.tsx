@@ -6,6 +6,8 @@
  */
 import { apiErrorBody, fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
+import { AccessibilityInfo } from 'react-native';
+import { illustrations } from '../../../artwork/manifest';
 import {
   IDS,
   accountRoutes,
@@ -31,7 +33,8 @@ import {
   settleApps,
 } from '../../../features/money/testing/money-test-app';
 import { PaymentsScreen } from '../PaymentsScreen';
-import { openSupportDetails } from '../../../testing/ui-surfaces';
+import { openSupportDetails, pullToRefresh } from '../../../testing/ui-surfaces';
+import { Artwork } from '../../../ui/Artwork';
 
 const mockRouter = createRouterMock();
 jest.mock('expo-router', () => ({
@@ -70,8 +73,9 @@ function routes(overrides: Record<string, FakeHandler> = {}): Record<string, Fak
   };
 }
 
+/** Chooses a view with the "Show" chips (PA-11, ADR-008: chips, not a radio list). */
 async function show(view: string) {
-  fireEvent.press(await screen.findByRole('radio', { name: view }));
+  fireEvent.press(within(await screen.findByLabelText('Show')).getByRole('button', { name: view }));
 }
 
 describe('SCR-C-34 PaymentsScreen', () => {
@@ -81,7 +85,7 @@ describe('SCR-C-34 PaymentsScreen', () => {
     const app = createTestApp({ routes: routes() });
     render(<PaymentsScreen />, { wrapper: app.wrapper });
 
-    expect(await screen.findByRole('header', { name: 'Balances due' })).toBeOnTheScreen();
+    expect(await screen.findByRole('header', { name: "What's due" })).toBeOnTheScreen();
     expect(screen.getByRole('header', { name: 'History' })).toBeOnTheScreen();
     expect(
       screen.getByRole('button', {
@@ -118,6 +122,72 @@ describe('SCR-C-34 PaymentsScreen', () => {
     const app = createTestApp({ routes: routes({ 'GET /obligations': page([]) }) });
     render(<PaymentsScreen />, { wrapper: app.wrapper });
     expect(await screen.findByRole('header', { name: 'No payments' })).toBeOnTheScreen();
+  });
+
+  it('ADR-008 SPK-UX-008: the empty state shows the payments illustration and says what would appear, announced', async () => {
+    const app = createTestApp({ routes: routes({ 'GET /obligations': page([]) }) });
+    render(<PaymentsScreen />, { wrapper: app.wrapper });
+    expect(await screen.findByRole('header', { name: 'No payments' })).toBeOnTheScreen();
+    const message =
+      'Anything you owe for registrations, and the installments of a plan, will appear here.';
+    expect(screen.getByText(message)).toBeOnTheScreen();
+    const art = screen
+      .UNSAFE_getAllByType(Artwork)
+      .filter((a) => a.props.source === illustrations['empty-payments']);
+    expect(art).toHaveLength(1);
+    expect(AccessibilityInfo.announceForAccessibilityWithOptions).toHaveBeenCalledWith(
+      `No payments. ${message}`,
+      { queue: true },
+    );
+    expect(screen.queryByRole('header', { name: "What's due" })).toBeNull();
+  });
+
+  it('ADR-008 PA-11: opens with the amount due as a stat tile, then what is due, then history', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /people/{id}/money-summary': {
+          status: 200,
+          body: {
+            personId: IDS.self,
+            accountBalance: [{ currency: 'USD', amountMinor: 8000 }],
+            openObligations: 2,
+            pastDueObligations: 1,
+            creditsAvailable: [],
+            creditsPendingApproval: [],
+            paidThisYear: [],
+            refundedThisYear: [],
+            paidSince: '2026-01-01T08:00:00.000Z',
+            yearTimeZone: 'America/Los_Angeles',
+            asOf: '2026-10-24T12:00:00.000Z',
+          },
+        },
+      }),
+    });
+    render(<PaymentsScreen />, { wrapper: app.wrapper });
+    const tile = await screen.findByLabelText('Amount due, $80.00, 2 to pay, 1 past due');
+    expect(screen.getByLabelText('Credits, None, Ready to use')).toBeOnTheScreen();
+    const due = await screen.findByRole('header', { name: "What's due" });
+    const history = screen.getByRole('header', { name: 'History' });
+    // Reading order: the tile, then what is due, then history (SPK-UX-009 focus order).
+    const flat = screen.UNSAFE_root.findAll(
+      (node) => node === tile || node === due || node === history,
+      { deep: true },
+    );
+    expect(flat).toEqual([tile, due, history]);
+    // No internal word: "Amount due", never "obligation".
+    expect(screen.queryByText(/obligation/i)).toBeNull();
+  });
+
+  it('pull to refresh reads the amounts due and what needs attention again', async () => {
+    const app = createTestApp({ routes: routes() });
+    render(<PaymentsScreen />, { wrapper: app.wrapper });
+    await screen.findByRole('header', { name: "What's due" });
+    const count = (route: string) => app.fake.requests.filter((r) => r.route === route).length;
+    const before = count('/obligations');
+    const attention = count('/me/payments');
+    await pullToRefresh(screen);
+    await waitFor(() => expect(count('/obligations')).toBeGreaterThan(before));
+    expect(count('/me/payments')).toBeGreaterThan(attention);
   });
 
   it('shows the API error code, reference and recovery action', async () => {
@@ -160,21 +230,26 @@ describe('SCR-C-34 PaymentsScreen', () => {
     let now = new Date('2026-10-24T12:00:00.000Z');
     const app = createTestApp({ routes: routes(), now: () => now });
     render(<PaymentsScreen />, { wrapper: app.wrapper });
-    expect(await screen.findByRole('header', { name: 'Balances due' })).toBeOnTheScreen();
+    expect(await screen.findByRole('header', { name: "What's due" })).toBeOnTheScreen();
     now = new Date('2026-10-24T13:00:00.000Z');
     act(() => app.sources.setReachable(false));
-    expect(screen.getByText('Showing information from 1 hour ago.')).toBeOnTheScreen();
-    expect(screen.getByText('Needs a connection: paying a balance.')).toBeOnTheScreen();
+    // ADR-008: under the app's offline banner the section says its own age and needs on one quiet line.
+    expect(
+      screen.getByText(
+        'Showing information from 1 hour ago. Needs a connection: paying a balance.',
+      ),
+    ).toBeOnTheScreen();
   });
-  it('offers the views as an accessible radio group, balances first', async () => {
+  it('offers the views as "Show" chips with their selected state, what is due first', async () => {
     const app = createTestApp({ routes: routes() });
     render(<PaymentsScreen />, { wrapper: app.wrapper });
     const group = await screen.findByLabelText('Show');
-    expect(group).toHaveProp('accessibilityRole', 'radiogroup');
-    for (const name of ['Balances due', 'Payments', 'Receipts', 'Orders', 'Team contributions']) {
-      expect(within(group).getByRole('radio', { name })).toBeOnTheScreen();
+    expect(group).toHaveProp('accessibilityRole', 'toolbar');
+    for (const name of ["What's due", 'Payments', 'Receipts', 'Orders', 'Your share']) {
+      expect(within(group).getByRole('button', { name })).toBeOnTheScreen();
     }
-    expect(within(group).getByRole('radio', { name: 'Balances due' })).toBeChecked();
+    expect(within(group).getByRole('button', { name: "What's due" })).toBeSelected();
+    expect(within(group).getByRole('button', { name: 'Payments' })).not.toBeSelected();
     // Only the chosen view is read.
     expect(app.fake.requests.filter((r) => r.route === '/me/receipts')).toHaveLength(0);
   });
@@ -201,7 +276,7 @@ describe('SCR-C-34 PaymentsScreen', () => {
       }),
     });
     render(<PaymentsScreen />, { wrapper: app.wrapper });
-    await screen.findByRole('header', { name: 'Balances due' });
+    await screen.findByRole('header', { name: "What's due" });
     expect(screen.queryByRole('header', { name: 'History' })).toBeNull();
     fireEvent.press(screen.getByRole('button', { name: 'Load more balances' }));
     expect(await screen.findByRole('header', { name: 'History' })).toBeOnTheScreen();
@@ -260,7 +335,7 @@ describe('SCR-C-34 PaymentsScreen', () => {
     await openSupportDetails(screen);
     expect(await screen.findByText('Error code: INTERNAL_ERROR')).toBeOnTheScreen();
     expect(await screen.findByText('Reference: corr-att')).toBeOnTheScreen();
-    expect(await screen.findByRole('header', { name: 'Balances due' })).toBeOnTheScreen();
+    expect(await screen.findByRole('header', { name: "What's due" })).toBeOnTheScreen();
   });
 
   it('SPK-PAY-007: the payments view lists each attempt by state; unknown is never success or failure', async () => {
@@ -297,7 +372,7 @@ describe('SCR-C-34 PaymentsScreen', () => {
     ).toBeOnTheScreen();
     expect(
       within(list).getByRole('button', {
-        name: /^Team contribution: \$75\.00, Payer: Sam\. .*, Payment processing$/,
+        name: /^Team share payment: \$75\.00, Payer: Sam\. .*, Payment processing$/,
       }),
     ).toBeOnTheScreen();
     expect(
@@ -635,10 +710,10 @@ describe('SCR-C-34 PaymentsScreen', () => {
       routes: routes({ 'GET /me/contribution-requests': pageOf([contributionRequest()]) }),
     });
     render(<PaymentsScreen />, { wrapper: app.wrapper });
-    await show('Team contributions');
+    await show('Your share');
     expect(
       await screen.findByRole('button', {
-        name: 'Fall 2026 team fee, Your contribution: $75.00, Requested',
+        name: 'Fall 2026 team fee, Your share: $75.00, Requested',
       }),
     ).toBeOnTheScreen();
   });

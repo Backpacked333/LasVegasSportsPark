@@ -17,6 +17,7 @@ import {
   upcomingFixtureDetail,
   workspace,
 } from '../../../features/teams/testing/fixtures';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 import { createTeamsTestApp } from '../../../features/teams/testing/teams-test-app';
 import { AvailabilityScreen } from '../AvailabilityScreen';
 
@@ -113,10 +114,10 @@ describe('SCR-C-24 AvailabilityScreen', () => {
     expect(await screen.findByText('Your answer: Tentative')).toBeOnTheScreen();
     expect(screen.queryByRole('button', { name: 'Tentative' })).toBeNull();
     expect(
-      screen.getByLabelText(
-        'Tentative is not offered yet: whether it is used is still being decided (DEC-064).',
-      ),
+      screen.getByText('"Tentative" isn\'t offered yet. Answer Available or Unavailable for now.'),
     ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(screen.getByText('Decision: DEC-064')).toBeOnTheScreen();
   });
 
   it('SPK-IAM-003: a guardian answers for their child with the child’s current answer shown', async () => {
@@ -159,6 +160,7 @@ describe('SCR-C-24 AvailabilityScreen', () => {
     });
     fireEvent.press(await screen.findByRole('button', { name: 'Unavailable' }));
     expect(await screen.findByLabelText('This changed since you opened it')).toBeOnTheScreen();
+    await openSupportDetails(screen);
     expect(screen.getByText(/Error code: STALE_REVISION/)).toBeOnTheScreen();
     const reads = app.requestsTo('GET', '/fixtures/{id}').length;
     fireEvent.press(screen.getByRole('button', { name: 'Reload' }));
@@ -175,6 +177,7 @@ describe('SCR-C-24 AvailabilityScreen', () => {
     expect(
       screen.getByText(/^Answers closed at kickoff, Sat, Oct 31, 10:00\sAM PDT\.$/),
     ).toBeOnTheScreen();
+    await openSupportDetails(screen);
     expect(screen.getByText('Error code: INVALID_TRANSITION')).toBeOnTheScreen();
   });
 
@@ -318,6 +321,9 @@ describe('SCR-C-24 AvailabilityScreen', () => {
       fireEvent.press(
         await screen.findByRole('button', { name: 'Send a reminder to players without an answer' }),
       );
+      // The answer arrives after the press: wait for it before opening its support fold.
+      await screen.findByRole('button', { name: 'Check again' });
+      await openSupportDetails(screen);
       expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
       expect(screen.queryByLabelText(/^Asked /)).toBeNull();
       fireEvent.press(screen.getByRole('button', { name: 'Check again' }));

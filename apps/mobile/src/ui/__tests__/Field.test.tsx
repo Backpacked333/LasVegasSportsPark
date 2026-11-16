@@ -74,6 +74,34 @@ describe('TextField (ADR-008)', () => {
     expect(input).toHaveProp('accessibilityHint', 'Error: Enter an email address.');
   });
 
+  it('SPK-UX-008: error options keep a form\'s own words: "▲", the bare message, no alert role', async () => {
+    const announce = jest.spyOn(AccessibilityInfo, 'announceForAccessibilityWithOptions');
+    const os = Platform.OS;
+    Platform.OS = 'ios';
+    try {
+      await renderUi(
+        <TextField
+          label="Amount"
+          value="2x"
+          onChangeText={() => undefined}
+          error="Enter an amount in USD."
+          errorGlyph="▲"
+          errorAnnouncement="message"
+          errorAlert={false}
+        />,
+      );
+    } finally {
+      Platform.OS = os;
+    }
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByText('▲ Enter an amount in USD.')).toBeOnTheScreen();
+    expect(announce).toHaveBeenCalledWith('Enter an amount in USD.', { queue: true });
+    expect(screen.getByLabelText('Amount')).toHaveProp(
+      'accessibilityHint',
+      'Error: Enter an amount in USD.',
+    );
+  });
+
   it('passes typing through and shows disabled state', async () => {
     const onChangeText = jest.fn();
     const { rerender } = await renderUi(

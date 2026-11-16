@@ -103,6 +103,47 @@ describe('ChoiceList (ADR-008)', () => {
     );
   });
 
+  it('notifyReselect calls onChange again for the chosen option; by default it does not', async () => {
+    const onChange = jest.fn();
+    const { rerender } = await renderUi(
+      <ChoiceList label="Day" mode="single" options={DAYS} value="sat" onChange={onChange} />,
+    );
+    fireEvent.press(screen.getByRole('radio', { name: 'Saturday, $40.00, Morning session' }));
+    expect(onChange).not.toHaveBeenCalled();
+    rerender(
+      <ChoiceList
+        label="Day"
+        mode="single"
+        options={DAYS}
+        value="sat"
+        onChange={onChange}
+        notifyReselect
+      />,
+    );
+    fireEvent.press(screen.getByRole('radio', { name: 'Saturday, $40.00, Morning session' }));
+    expect(onChange).toHaveBeenCalledWith('sat');
+  });
+
+  it('layout tile draws the options as tiles side by side', async () => {
+    await renderUi(
+      <ChoiceList
+        label="Start time"
+        mode="single"
+        layout="tile"
+        options={[
+          { value: '09', label: '9:00 to 10:00', shortLabel: '9:00' },
+          { value: '10', label: '10:00 to 11:00', shortLabel: '10:00' },
+        ]}
+        value="10"
+        onChange={() => undefined}
+      />,
+    );
+    expect(drawnStyle(screen.getByLabelText('Start time')).flexDirection).toBe('row');
+    expect(screen.getByRole('radio', { name: '10:00 to 11:00' })).toBeChecked();
+    expect(screen.getByText('✓ 10:00')).toBeOnTheScreen();
+    expect(screen.getByText('9:00')).toBeOnTheScreen();
+  });
+
   it('every card is at least 44 pt', async () => {
     await renderUi(<Single />);
     for (const card of screen.getAllByRole('radio')) {

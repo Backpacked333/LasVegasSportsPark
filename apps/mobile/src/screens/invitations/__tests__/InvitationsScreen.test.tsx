@@ -23,7 +23,7 @@ import {
   person,
 } from '../../account/__tests__/fixtures';
 import { InvitationsScreen } from '../InvitationsScreen';
-import { openSupportDetails } from '../../../testing/ui-surfaces';
+import { openSupportDetails, illustrationsOnScreen } from '../../../testing/ui-surfaces';
 
 const FAMILY_ID = '0192f1a0-0000-7000-8000-00000000c001';
 const FAMILY_TWO = '0192f1a0-0000-7000-8000-00000000c002';
@@ -99,6 +99,39 @@ describe('SCR-C-17 InvitationsScreen', () => {
     expect(teamRead?.query).toEqual({ status: 'pending', limit: '20' });
   });
 
+  it('PA-11 ADR-008: each open invitation is a card with Accept and Decline, which open it to answer there; nothing is sent from the list', async () => {
+    const app = createTestApp({
+      routes: {
+        'GET /me': ok(me({})),
+        'GET /me/invitations': page([familyView()]),
+        'GET /me/team-invitations': page([]),
+        'GET /me/invitations/{id}': ok(familyView()),
+        'GET /person-names': namesRoute([person(CHILD, 'Sam', 'Morgan', 'child')]),
+      },
+    });
+    const TestRootLayout = () => (
+      <app.wrapper>
+        <RootNavigator />
+      </app.wrapper>
+    );
+    const router = renderRouter(
+      { appDir: 'app', overrides: { _layout: TestRootLayout } },
+      { initialUrl: '/invitations' },
+    );
+    const accept = await routerScreen.findByRole('button', { name: 'Accept' });
+    expect(accept).toHaveProp('accessibilityHint', 'Opens the invitation to accept it');
+    const decline = routerScreen.getByRole('button', { name: 'Decline' });
+    expect(decline).toHaveProp('accessibilityHint', 'Opens the invitation to confirm declining it');
+    routerFire.press(decline);
+    await waitFor(() => expect(router.getPathname()).toBe(`/invitations/${FAMILY_ID}`));
+    const params = router.getSearchParams() as Record<string, string>;
+    expect(params).toEqual(expect.objectContaining({ type: 'family', answer: 'decline' }));
+    expect(params).not.toHaveProperty('token');
+    // The page opens; without the link's token it says how to answer, and nothing was sent.
+    expect(await routerScreen.findByLabelText('Invitation details')).toBeOnTheScreen();
+    expect(app.fake.requests.some((r) => r.method === 'POST')).toBe(false);
+  });
+
   it('empty: says there are no open invitations', async () => {
     const app = listApp({
       'GET /me/invitations': page([]),
@@ -106,6 +139,11 @@ describe('SCR-C-17 InvitationsScreen', () => {
     });
     render(<InvitationsScreen />, { wrapper: app.wrapper });
     expect(await screen.findByRole('header', { name: 'No open invitations' })).toBeOnTheScreen();
+    // ADR-008: one empty state for the page, not an empty card for each list as well.
+    // ADR-008: an illustrated empty state.
+    expect(illustrationsOnScreen(screen)).toEqual(['empty-inbox']);
+    expect(screen.queryByRole('header', { name: 'No family access invitations' })).toBeNull();
+    expect(screen.queryByRole('header', { name: 'No team invitations' })).toBeNull();
   });
 
   it('loads older invitations with "Load more", sending the API cursor', async () => {
@@ -151,7 +189,8 @@ describe('SCR-C-17 InvitationsScreen', () => {
     });
     render(<InvitationsScreen />, { wrapper: app.wrapper });
     expect(await screen.findByRole('header', { name: 'No open invitations' })).toBeOnTheScreen();
-    expect(screen.getByRole('header', { name: 'No team invitations' })).toBeOnTheScreen();
+    // The one empty state stands for both lists (no "No team invitations" card beside it).
+    expect(screen.queryByRole('header', { name: 'No team invitations' })).toBeNull();
     expect(screen.queryByTestId(`invitation-team-${TEAM_ID}`)).toBeNull();
     expect(screen.queryByLabelText(/Expired/)).toBeNull();
   });

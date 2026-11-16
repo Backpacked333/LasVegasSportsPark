@@ -1,5 +1,5 @@
 /**
- * SCR-C-32 Enrollments and participation (SPK-REG-001, SPK-REG-003, SPK-REG-010, SPK-YOUTH-003,
+ * SCR-C-32 Registrations (the API's enrollments and participation; SPK-REG-001, SPK-REG-003, SPK-REG-010, SPK-YOUTH-003,
  * SPK-AT-019, SPK-UX-004, SPK-UX-008, SPK-UX-009; journeys C5, C8, C11).
  *
  * For the person chosen (themselves or someone the API lets the account act for), each record
@@ -29,10 +29,16 @@
  * (cached with age; cancel and transfer need a connection); processing, success: not applicable;
  * partial completion: not permitted; recovery required: labelled on the row and the record. Each
  * section has its own loading and error state.
+ *
+ * Customer words (PA-11, ADR-008): the screen is "Registrations"; a record is a registration,
+ * never an enrollment, a class pack never a session package. Each registration is a card with
+ * its activity's picture (`RegistrationCard`, `artworkFor`); the status keeps the journeys.md
+ * section 3 phrase word for word. Pull to refresh reads every list again.
  */
 import { presentationForError, type ApiError, type Schema } from '@sportspark/api-client';
+import { useQueryClient } from '@tanstack/react-query';
 import { Stack, useRouter } from 'expo-router';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { View } from 'react-native';
 import { useApiPages, type ApiPagesResult } from '../../api/useApiPages';
 import { useApiQuery } from '../../api/useApiQuery';
@@ -42,7 +48,6 @@ import type { AccountPerson } from '../../features/money/people';
 import { useApiRecords, type Records } from '../../features/money/records';
 import { moneyRoutes } from '../../features/money/routes';
 import { bookingStatus, enrollmentStatus, type Enrollment } from '../../features/money/status';
-import { Caption, Section } from '../../features/money/ui';
 import { formatInstant } from '../../features/registration/format';
 import { useRecoveryCheckouts } from '../../features/registration/in-progress';
 import { RequireSession } from '../../session/RequireSession';
@@ -50,6 +55,9 @@ import { ListRow } from '../../ui/ListRow';
 import { LoadMore } from '../../ui/LoadMore';
 import { QueryBoundary, QueryErrorView } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
+import { Section } from '../../ui/Section';
+import { Text } from '../../ui/Text';
+import { spacing } from '../../ui/theme';
 import {
   applicationStatus,
   enrollmentOffering,
@@ -64,6 +72,8 @@ import {
   type OperationRead,
   type RecoveryIndex,
 } from './recovery';
+import { RegistrationCard, registrationArt } from './RegistrationCard';
+import { illustrations } from '../../artwork/manifest';
 
 type Offering = Schema<'Offering'>;
 
@@ -76,12 +86,12 @@ export const INTENT_LABELS: Record<Enrollment['intent'], string> = {
   join_team: 'Team member',
   create_team_entry: 'Team entry',
   youth: 'Youth program',
-  trial: 'Trial (not a paid enrollment)',
+  trial: 'Trial (not a paid registration)',
   makeup: 'Makeup session',
   pickup: 'Pickup session',
   rental_request: 'Rental request',
   membership: 'Membership',
-  package_purchase: 'Session package',
+  package_purchase: 'Class pack',
   party_request: 'Party booking',
 };
 
@@ -120,7 +130,7 @@ function EnrollmentRows({
 }) {
   const router = useRouter();
   return (
-    <View accessibilityRole="list">
+    <View accessibilityRole="list" style={styles.cards}>
       {items.map((enrollment) => {
         const record = offerings[enrollment.offeringId];
         const about = enrollmentOffering(enrollment, record?.data);
@@ -150,13 +160,14 @@ function EnrollmentRows({
         });
         const dates = about ? formatDateRange(about.startsOn, about.endsOn) : undefined;
         return (
-          <ListRow
+          <RegistrationCard
             key={enrollment.id}
             title={name}
             detail={[INTENT_LABELS[enrollment.intent], dates].filter(Boolean).join('. ')}
             status={status}
+            art={registrationArt(enrollment.intent, name, record?.data)}
             onPress={() => router.push(moneyRoutes.enrollment(enrollment.id))}
-            accessibilityHint="Opens the enrollment, with cancellation and transfer"
+            accessibilityHint="Opens the registration, with cancellation and transfer"
             testID={`enrollment-${enrollment.id}`}
           />
         );
@@ -214,25 +225,26 @@ function EnrollmentList({ person }: { person: AccountPerson }) {
       {unknown.length > 0 && recoveryReadFailed(checkouts, unknownOperations) ? (
         // A failed read is shown, not read as "payment not finished" (§4.11, SPK-UX-008).
         <Section title="Payment status" testID="enrollments-recovery-unknown">
-          <Caption>
+          <Text variant="caption" tone="muted">
             {`Whether the payment was received for ${
               unknown.length === 1
                 ? 'a pending registration'
                 : `${unknown.length} pending registrations`
             } could not be checked.`}
-          </Caption>
+          </Text>
           <RecoveryReadState checkouts={checkouts} operations={unknownOperations} />
         </Section>
       ) : null}
       <QueryBoundary
         query={enrollments}
-        label={`${whose} enrollments`}
+        label={`${whose} registrations`}
         isEmpty={(list) => list.length === 0}
         empty={{
-          title: 'No enrollments yet',
-          description: `${person.self ? 'Your' : `${person.displayName}’s`} registrations, placements and completed seasons will appear here. Leagues, programs and camps are in Discover.`,
-          actionLabel: 'Open Discover',
+          title: 'No registrations yet',
+          description: `${person.self ? 'Your' : `${person.displayName}’s`} registrations, placements and completed seasons will appear here. Leagues, programs and camps are in Explore.`,
+          actionLabel: 'Explore activities',
           onAction: () => router.push('/discover'),
+          source: illustrations['empty-family'],
         }}
         unavailableOffline={['canceling a registration', 'transferring a registration']}
       >
@@ -242,7 +254,7 @@ function EnrollmentList({ person }: { person: AccountPerson }) {
           return (
             <View>
               {current.length > 0 ? (
-                <Section title="Current">
+                <Section title="Current" variant="plain">
                   <EnrollmentRows
                     items={current}
                     all={list}
@@ -254,7 +266,7 @@ function EnrollmentList({ person }: { person: AccountPerson }) {
                 </Section>
               ) : null}
               {history.length > 0 ? (
-                <Section title="History">
+                <Section title="History" variant="plain">
                   <EnrollmentRows
                     items={history}
                     all={list}
@@ -269,7 +281,7 @@ function EnrollmentList({ person }: { person: AccountPerson }) {
           );
         }}
       </QueryBoundary>
-      <LoadMore pages={enrollments} label="enrollments" />
+      <LoadMore pages={enrollments} label="registrations" />
     </View>
   );
 }
@@ -281,7 +293,7 @@ function isVisibleFailure(error: ApiError | null): error is ApiError {
   return presentation !== 'unavailable' && presentation !== 'offline';
 }
 
-/** One household list shown for one person: its own loading, error and "Load more". */
+/** One family-wide list shown for one person: its own loading, error and "Load more". */
 function HouseholdSection({
   title,
   label,
@@ -321,7 +333,13 @@ function HouseholdSection({
   if (count === 0 && !pages.hasNextPage) return null;
   return (
     <Section title={title} testID={testID}>
-      {count === 0 ? <Caption>None among those loaded so far.</Caption> : children}
+      {count === 0 ? (
+        <Text variant="caption" tone="muted">
+          None among those loaded so far.
+        </Text>
+      ) : (
+        children
+      )}
       <LoadMore pages={pages} label={label} />
     </Section>
   );
@@ -390,11 +408,11 @@ function TrialsSection({ person }: { person: AccountPerson }) {
             <ListRow
               key={trial.id}
               title={offeringLabel(offerings[trial.offeringId])}
-              detail={`${when}. A trial is not an enrollment.`}
+              detail={`${when}. A trial is not a registration.`}
               status={trialStatus(trial)}
               onPress={converted ? () => router.push(moneyRoutes.enrollment(converted)) : undefined}
               accessibilityHint={
-                converted ? 'Opens the enrollment made after the trial' : undefined
+                converted ? 'Opens the registration made after the trial' : undefined
               }
               testID={`trial-${trial.id}`}
             />
@@ -465,10 +483,17 @@ function Participation({ person }: { person: AccountPerson }) {
 }
 
 export function EnrollmentsScreen() {
+  const queryClient = useQueryClient();
+  const [refreshing, setRefreshing] = useState(false);
+  // Pull to refresh: every list on the screen again.
+  const refresh = () => {
+    setRefreshing(true);
+    void queryClient.refetchQueries({ type: 'active' }).finally(() => setRefreshing(false));
+  };
   return (
-    <Screen>
-      <RequireSession what="enrollments">
-        <PeopleGate pickerLabel="Show enrollments for">
+    <Screen onRefresh={refresh} refreshing={refreshing}>
+      <RequireSession what="your registrations">
+        <PeopleGate pickerLabel="Show registrations for">
           {(person) => <Participation key={person.personId} person={person} />}
         </PeopleGate>
       </RequireSession>
@@ -480,8 +505,10 @@ export function EnrollmentsScreen() {
 export function EnrollmentsRoute() {
   return (
     <>
-      <Stack.Screen options={{ title: 'Enrollments and participation' }} />
+      <Stack.Screen options={{ title: 'Registrations' }} />
       <EnrollmentsScreen />
     </>
   );
 }
+
+const styles = { cards: { gap: spacing.sm } } as const;

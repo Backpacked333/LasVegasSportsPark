@@ -138,8 +138,8 @@ describe('Package G routes from You (SPK-UX-002)', () => {
   it.each([
     ['/bookings', 'screen-my-bookings', 'Rentals and parties turned off'],
     ['/memberships', 'screen-my-memberships', 'Memberships turned off'],
-    ['/session-packages', 'screen-my-session-packages', 'Session packages turned off'],
-    ['/pos-receipts', 'screen-pos-receipts', 'Point-of-sale receipts turned off'],
+    ['/session-packages', 'screen-my-session-packages', 'Class packs turned off'],
+    ['/pos-receipts', 'screen-pos-receipts', 'In-person receipts turned off'],
   ])(
     '%s stays behind its switch at its own link, turned off by default',
     async (path, testID, label) => {

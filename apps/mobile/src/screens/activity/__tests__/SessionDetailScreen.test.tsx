@@ -121,7 +121,7 @@ describe('SCR-C-20 SessionDetailScreen', () => {
     expect(screen.getByText('Ball skills for younger players.')).toBeOnTheScreen();
     expect(
       screen.getByLabelText(
-        "Arrival guidance for this activity. This isn't available in the app yet.",
+        'Arrival guidance for this activity. Check in at the front desk when you arrive.',
       ),
     ).toBeOnTheScreen();
     await openSupportDetails(screen);

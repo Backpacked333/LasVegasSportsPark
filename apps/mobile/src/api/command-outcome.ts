@@ -1,7 +1,6 @@
 /**
  * What a command's failure says about its effect, in one place for every customer screen (§4.9,
- * §4.10, §4.14, SPK-PAY-007, SPK-UX-008, SPK-AT-028). The shared failure views (account
- * `CommandError`, teams `CommandFailure`, money `CommandFailure`, registration `CommandError`,
+ * §4.10, §4.14, SPK-PAY-007, SPK-UX-008, SPK-AT-028). The shared failure views (`ui/CommandError`,
  * `ui/SecretWithheld`) and the payment screens (SCR-C-14, SCR-C-15, SCR-C-25, SCR-C-34) decide
  * with these predicates only.
  *

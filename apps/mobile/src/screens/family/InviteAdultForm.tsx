@@ -27,6 +27,10 @@
  * and points there to revoke it; "Start a new one" ends the intent once the sender has looked.
  * "Create invitation" is held back meanwhile, so a second pending invitation is never created
  * beside one nobody has a link for.
+ *
+ * The form opens in a `Sheet` titled "Invite an adult" from the person's card (FamilyScreen; PA-11,
+ * ADR-008); "Cancel" and "Done" close it. The pending pickup and expiry states say what to do now
+ * (`src/copy/pending.ts`), with their codes in "Details for support".
  */
 import type { Schema } from '@sportspark/api-client';
 import { useState } from 'react';
@@ -35,11 +39,15 @@ import { mustNotCreateAgain, tookEffectOutcomeLost } from '../../api/command-out
 import { useApiCommand } from '../../api/useApiCommand';
 import { buildAppLink } from '../../links/link-targets';
 import { useApp, useConnectivity } from '../../providers/AppProviders';
-import { LiveText } from '../../ui/announce';
+import { LiveText, sentences } from '../../ui/announce';
+import { pendingMessage, pendingMessageFor } from '../../copy/pending';
 import { Button } from '../../ui/Button';
+import { ChoiceCard, ChoiceList } from '../../ui/ChoiceList';
+import { TextField } from '../../ui/Field';
 import { SecretWithheld } from '../../ui/SecretWithheld';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
+import { Text } from '../../ui/Text';
 import { makeStyles, spacing, type } from '../../ui/theme';
 import {
   formatDateTime,
@@ -47,10 +55,11 @@ import {
   listPermissions,
   type GrantPermission,
 } from '../account/components/account-data';
-import { CommandError } from '../account/components/CommandError';
-import { CheckboxRow, ChoiceGroup, Paragraph, TextField } from '../account/components/forms';
+import { CommandError } from '../../ui/CommandError';
+
 import { INVITATION_KEYS, invitationStateLabel } from '../invitations/InvitationScreen';
 import { contactFormatError } from '../onboarding/ContactPointStep';
+import { SupportDetails } from '../../ui/SupportDetails';
 
 type RelationshipKind = 'guardian' | 'delegate';
 type ContactKind = 'email' | 'phone';
@@ -147,28 +156,30 @@ export function InviteAdultForm({
 
   return (
     <View style={styles.form} testID="invite-form">
-      <Paragraph>Invite another adult for {subjectName}.</Paragraph>
-      <ChoiceGroup<RelationshipKind>
+      <Text variant="body">For {subjectName}.</Text>
+      <ChoiceList<RelationshipKind>
+        mode="single"
         label="Invite as"
         value={kind}
         onChange={setKind}
         disabled={invite.isProcessing}
         options={[
-          { value: 'guardian', label: 'Guardian', detail: 'Another parent or guardian' },
+          { value: 'guardian', label: 'Guardian', description: 'Another parent or guardian' },
           ...(pickup === false
             ? []
             : [
                 {
                   value: 'delegate' as const,
                   label: pickup ? 'Pickup delegate' : 'Delegate',
-                  detail: pickup
+                  description: pickup
                     ? 'Someone who collects but is not a guardian'
                     : 'Another adult who is not a guardian, with only the permissions you choose',
                 },
               ]),
         ]}
       />
-      <ChoiceGroup<ContactKind>
+      <ChoiceList<ContactKind>
+        mode="single"
         label="Send to"
         value={contactKind}
         onChange={setContactKind}
@@ -184,6 +195,7 @@ export function InviteAdultForm({
         value={contactValue}
         onChangeText={setContactValue}
         keyboardType={contactKind === 'email' ? 'email-address' : 'phone-pad'}
+        autoCapitalize="none"
         error={attempted ? contactError : null}
         editable={!invite.isProcessing}
         testID="invite-contact"
@@ -195,13 +207,13 @@ export function InviteAdultForm({
         accessibilityLabel="Permissions"
         accessibilityHint={shownPermissionsError ? `Error: ${shownPermissionsError}` : undefined}
       >
-        <Paragraph inset={false}>Permissions to pass on. Each one is separate.</Paragraph>
+        <Text variant="body">Permissions to pass on. Each one is separate.</Text>
         {permissions.map((g) => {
           const held = heldPermissions.includes(g.permission);
           const detail =
             g.permission === 'collect' && pickup === null ? 'Collect a child in person' : g.detail;
           return (
-            <CheckboxRow
+            <PermissionChoice
               key={g.permission}
               label={g.label}
               detail={held ? detail : `${detail}. You do not hold this, so you cannot pass it on.`}
@@ -231,6 +243,7 @@ export function InviteAdultForm({
           subject="Supervised pickup"
           decisions={['DEC-075', 'DEC-005']}
           owner="Product owner (DEC-075); Operations (DEC-005)"
+          message={pendingMessageFor(['DEC-075', 'DEC-005'])}
         />
       ) : null}
       <StateView
@@ -238,11 +251,12 @@ export function InviteAdultForm({
         subject="Choosing how long an invitation stays open"
         decisions={['POL-044']}
         owner="Operator/privacy owner (DEC-004)"
+        message={pendingMessage('POL-044')}
       />
-      <Paragraph muted>
+      <Text variant="body" tone="muted">
         The app does not set an expiry. After you create the invitation, it shows the date the
         facility's system gives it.
-      </Paragraph>
+      </Text>
       <View style={styles.actions}>
         <Button
           label="Create invitation"
@@ -262,7 +276,9 @@ export function InviteAdultForm({
         <Button label="Cancel" variant="secondary" onPress={onClose} />
       </View>
       {offline ? (
-        <Paragraph muted>Inviting needs a connection. Your choices are kept.</Paragraph>
+        <Text variant="body" tone="muted">
+          Inviting needs a connection. Your choices are kept.
+        </Text>
       ) : null}
       {invite.error && withheld ? (
         <SecretWithheld
@@ -279,6 +295,43 @@ export function InviteAdultForm({
         <CommandError error={invite.error} onRetry={() => void submit()} />
       ) : null}
     </View>
+  );
+}
+
+/**
+ * One permission to pass on, a checkbox card: its name is the permission, its hint the detail and,
+ * once the form was sent without one, the error of the required choice (SPK-IAM-003: no choice
+ * implies another; SPK-UX-009).
+ */
+function PermissionChoice({
+  label,
+  detail,
+  checked,
+  onChange,
+  disabled,
+  error,
+  testID,
+}: {
+  label: string;
+  detail: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  disabled: boolean;
+  error: string | null;
+  testID: string;
+}) {
+  return (
+    <ChoiceCard
+      option={{ value: label, label, description: detail }}
+      mode="multiple"
+      checked={checked}
+      disabled={disabled}
+      error={error}
+      onPress={() => onChange(!checked)}
+      accessibilityLabel={label}
+      accessibilityHint={error ? sentences(detail, `Error: ${error}`) : detail}
+      testID={testID}
+    />
   );
 }
 
@@ -335,27 +388,25 @@ function IssuedInvitation({
       <View style={styles.actions}>
         <StatusBadge tone={status.tone} label={status.label} />
       </View>
-      <Paragraph>
+      <Text variant="body">
         Invitation for {contact} with: {listPermissions(invitation.requestedPermissions)}.
-      </Paragraph>
+      </Text>
       {revoke.data ? (
-        <Paragraph>The invitation was withdrawn and can no longer be accepted.</Paragraph>
+        <Text variant="body">The invitation was withdrawn and can no longer be accepted.</Text>
       ) : closed && revoke.error ? (
         <>
-          <Paragraph>
+          <Text variant="body">
             This invitation changed since you created it: it may have been accepted, or withdrawn on
             another device. It can no longer be withdrawn here.
-          </Paragraph>
-          <Paragraph muted>
-            {`Error code: ${revoke.error.code}${revoke.error.correlationId ? `. Reference: ${revoke.error.correlationId}` : ''}`}
-          </Paragraph>
+          </Text>
+          <SupportDetails errorCode={revoke.error.code} reference={revoke.error.correlationId} />
         </>
       ) : (
         <>
-          <Paragraph>
+          <Text variant="body">
             Share the link now: it cannot be shown again later, and the app does not send
             invitations by email or text yet.
-          </Paragraph>
+          </Text>
           <View style={styles.actions}>
             <Button
               label="Share invitation link"
@@ -393,8 +444,8 @@ function IssuedInvitation({
 }
 
 const useStyles = makeStyles(({ colors }) => ({
-  form: { gap: spacing.md, paddingTop: spacing.md },
-  permissions: { paddingHorizontal: spacing.lg, gap: spacing.xs },
-  actions: { paddingHorizontal: spacing.lg, gap: spacing.sm },
+  form: { gap: spacing.md },
+  permissions: { gap: spacing.xs },
+  actions: { gap: spacing.sm },
   error: { ...type.caption, color: colors.danger },
 }));

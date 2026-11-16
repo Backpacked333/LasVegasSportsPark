@@ -39,17 +39,14 @@ import {
 import { idParam } from '../../features/teams/routes';
 import { isCurrentPlayer, rosterMemberStatus } from '../../features/teams/status';
 import { CaptainOnly, TeamFrame } from '../../features/teams/TeamFrame';
-import {
-  Body,
-  CommandFailure,
-  OfflineNotice,
-  RadioGroup,
-  RadioRow,
-  ReasonList,
-  Section,
-  TextField,
-  Title,
-} from '../../features/teams/ui';
+import { TextField } from '../../ui/Field';
+import { ChoiceList } from '../../ui/ChoiceList';
+import { CommandError } from '../../ui/CommandError';
+import { AppHeader } from '../../ui/AppHeader';
+import { OfflineNotice } from '../../ui/OfflineNotice';
+import { ReasonList } from '../../ui/ReasonList';
+import { Section } from '../../ui/Section';
+import { Text } from '../../ui/Text';
 import { useConnectivity, useNow } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { StateView } from '../../ui/StateView';
@@ -84,7 +81,8 @@ function EligibilityCheck({
   if (check.data === undefined) {
     if (check.error)
       return (
-        <CommandFailure
+        <CommandError
+          wording="team"
           error={check.error}
           onRetry={() => void check.refetch()}
           unavailableText="Checking eligibility is not available to you for this team."
@@ -144,47 +142,47 @@ function AddPlayer({
   );
   if (candidates.length === 0) {
     return (
-      <Body>
+      <Text variant="body">
         No former players to add back. To add someone new, invite them from Roster and invitations:
         they join once they accept.
-      </Body>
+      </Text>
     );
   }
   return (
     <View style={styles.group}>
-      <RadioGroup label="Former player">
-        {candidates.map((m) => (
-          <RadioRow
-            key={m.id}
-            label={m.displayName}
-            detail={rosterMemberStatus(m, now).label}
-            checked={personId === m.personId}
-            onSelect={() => {
-              setPersonId(m.personId);
-              setChecking(false);
-              change.reset();
-            }}
-          />
-        ))}
-      </RadioGroup>
-      <RadioGroup label="Add as">
-        {(['active', 'substitute', 'guest'] as const).map((s) => (
-          <RadioRow
-            key={s}
-            label={PLAYING_STATUS_LABELS[s]}
-            checked={status === s}
-            onSelect={() => {
-              setStatus(s);
-              setChecking(false);
-              change.reset();
-            }}
-          />
-        ))}
-      </RadioGroup>
-      <Body muted>
+      <ChoiceList
+        mode="single"
+        label="Former player"
+        options={candidates.map((m) => ({
+          value: m.personId,
+          label: m.displayName,
+          description: rosterMemberStatus(m, now).label,
+        }))}
+        value={personId}
+        onChange={(next) => {
+          setPersonId(next);
+          setChecking(false);
+          change.reset();
+        }}
+      />
+      <ChoiceList
+        mode="single"
+        label="Add as"
+        options={(['active', 'substitute', 'guest'] as const).map((s) => ({
+          value: s,
+          label: PLAYING_STATUS_LABELS[s],
+        }))}
+        value={status}
+        onChange={(next) => {
+          setStatus(next);
+          setChecking(false);
+          change.reset();
+        }}
+      />
+      <Text variant="caption" tone="muted">
         A guest or substitute label bypasses nothing: eligibility, roster limits, conflicting games,
         suspensions and required approvals are all checked. The change takes effect now.
-      </Body>
+      </Text>
       {offline ? <OfflineNotice what="Changing the roster" /> : null}
       <Button
         label="Check eligibility"
@@ -209,7 +207,8 @@ function AddPlayer({
         />
       ) : null}
       {change.error ? (
-        <CommandFailure
+        <CommandError
+          wording="team"
           error={change.error}
           onRetry={submit}
           onReload={() => {
@@ -269,17 +268,17 @@ function RemovePlayer({
   );
   return (
     <View style={styles.group}>
-      <RadioGroup label="Current player">
-        {current.map((m) => (
-          <RadioRow
-            key={m.id}
-            label={m.displayName}
-            detail={rosterMemberStatus(m, now).label}
-            checked={personId === m.personId}
-            onSelect={() => setPersonId(m.personId)}
-          />
-        ))}
-      </RadioGroup>
+      <ChoiceList
+        mode="single"
+        label="Current player"
+        options={current.map((m) => ({
+          value: m.personId,
+          label: m.displayName,
+          description: rosterMemberStatus(m, now).label,
+        }))}
+        value={personId}
+        onChange={setPersonId}
+      />
       <TextField
         label="Reason for the removal"
         value={reason}
@@ -289,9 +288,9 @@ function RemovePlayer({
           attempted && !reason.trim() ? 'Give a reason; it is kept with the roster history.' : null
         }
       />
-      <Body muted>
+      <Text variant="caption" tone="muted">
         The removal takes effect now. Games already played keep this player in their history.
-      </Body>
+      </Text>
       {offline ? <OfflineNotice what="Changing the roster" /> : null}
       <Button
         label="Remove from the roster"
@@ -310,13 +309,14 @@ function RemovePlayer({
           testID="change-success"
         />
       ) : change.data && submitted ? (
-        <Body muted>
+        <Text variant="caption" tone="muted">
           The roster the facility returned does not show this removal yet. Reload to see the current
           roster.
-        </Body>
+        </Text>
       ) : null}
       {change.error ? (
-        <CommandFailure
+        <CommandError
+          wording="team"
           error={change.error}
           onRetry={submit}
           onReload={() => {
@@ -349,20 +349,18 @@ function RosterChangeContent({ workspace, reload }: { workspace: Workspace; relo
   });
   return (
     <View>
-      <Title>{`${workspace.team.name}: roster change`}</Title>
+      <AppHeader title={`${workspace.team.name}: roster change`} />
       <Section title="Change">
-        <RadioGroup label="What to change">
-          <RadioRow
-            label="Add a player or substitute"
-            checked={mode === 'add'}
-            onSelect={() => setMode('add')}
-          />
-          <RadioRow
-            label="Remove a player"
-            checked={mode === 'remove'}
-            onSelect={() => setMode('remove')}
-          />
-        </RadioGroup>
+        <ChoiceList
+          mode="single"
+          label="What to change"
+          options={[
+            { value: 'add' as const, label: 'Add a player or substitute' },
+            { value: 'remove' as const, label: 'Remove a player' },
+          ]}
+          value={mode}
+          onChange={setMode}
+        />
       </Section>
       <Section title={mode === 'add' ? 'Add a player or substitute' : 'Remove a player'}>
         {mode === 'add' ? (

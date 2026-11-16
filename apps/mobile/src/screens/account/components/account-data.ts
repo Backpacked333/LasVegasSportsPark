@@ -48,7 +48,7 @@ export const GRANT_PERMISSIONS: readonly {
   {
     permission: 'complete_forms',
     label: 'Complete forms',
-    detail: 'Sign forms and acknowledgments',
+    detail: 'Sign forms and waivers',
   },
   { permission: 'collect', label: 'Collect', detail: 'Collect from supervised sessions (pickup)' },
 ];
@@ -115,18 +115,28 @@ export function personNameText(state: PersonNameState): string {
 }
 
 /**
- * A date and time with its time zone, e.g. "Oct 27, 2026, 12:00 PM UTC". Invitations, claims and
- * feeds belong to the organization, not to one facility, so the device time zone is used and named.
+ * A date and time with its time zone, e.g. "Oct 27, 2026, 12:00 PM PDT". Invitations, claims,
+ * grants and feeds belong to the organization, not to one facility: a screen passes the facility
+ * zone the app knows (`useKnownFacilityZone`, SPK-SCHED-008), else the device's zone is used. The
+ * zone is always named.
  */
-export function formatDateTime(iso: string): string {
+export function formatDateTime(iso: string, zone?: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
-  return new Intl.DateTimeFormat(undefined, {
+  const options: Intl.DateTimeFormatOptions = {
     year: 'numeric',
     month: 'short',
     day: 'numeric',
     hour: 'numeric',
     minute: '2-digit',
     timeZoneName: 'short',
-  }).format(date);
+  };
+  if (zone) {
+    try {
+      return new Intl.DateTimeFormat(undefined, { ...options, timeZone: zone }).format(date);
+    } catch {
+      // RangeError for a zone the platform does not know: the device's zone, named, below.
+    }
+  }
+  return new Intl.DateTimeFormat(undefined, options).format(date);
 }

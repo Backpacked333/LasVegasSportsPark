@@ -5,7 +5,7 @@
  * A rule that needs league approval (`approval_required`) is shown as a pending approval, never as
  * a denial (SCR-C-26). The list is announced as a list.
  *
- * Moved here from `features/teams/ui.tsx`; the teams kit re-exports it. The role and severity
+ * Moved here from the teams feature folder (ADR-008). The role and severity
  * words are the team screens' (`features/teams/format`, `features/teams/status`), the only words
  * the app has for them.
  */

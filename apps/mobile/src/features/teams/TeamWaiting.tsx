@@ -17,7 +17,7 @@
  * answered meanwhile: reload); offline (disabled, nothing queued); processing; success.
  */
 import { useState } from 'react';
-import { View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useConnectivity } from '../../providers/AppProviders';
 import { LiveRegion } from '../../ui/announce';
@@ -26,7 +26,11 @@ import { StatusBadge } from '../../ui/StatusBadge';
 import { makeStyles, spacing } from '../../ui/theme';
 import { formatInstant, ordinal } from './format';
 import type { Workspace } from './queries';
-import { Body, ButtonRow, CommandFailure, Detail, OfflineNotice, Section, TextField } from './ui';
+import { CommandError } from '../../ui/CommandError';
+import { FieldValue, TextField } from '../../ui/Field';
+import { OfflineNotice } from '../../ui/OfflineNotice';
+import { Section } from '../../ui/Section';
+import { Text } from '../../ui/Text';
 
 /** The waiting list actions of `viewer.availableActions` (competition.actions.ts). */
 export const WAITING_ACTIONS = {
@@ -41,7 +45,7 @@ const INVALIDATE = [
 ] as const;
 
 const ACCEPTED =
-  'You accepted the place. The league reviews the entry as usual; payment follows approval.';
+  'You accepted the place. The league reviews the team as usual; payment follows approval.';
 const DECLINED = 'You declined the offer. Your team keeps its place in the order.';
 const WITHDRAWN = 'Your team was withdrawn from the waiting list.';
 
@@ -83,14 +87,14 @@ function OfferAnswer({
   if (accept.data) {
     return (
       <LiveRegion announcement={ACCEPTED} testID="waiting-offer-accepted">
-        <Body>{ACCEPTED}</Body>
+        <Text variant="body">{ACCEPTED}</Text>
       </LiveRegion>
     );
   }
   if (decline.data) {
     return (
       <LiveRegion announcement={DECLINED} testID="waiting-offer-declined">
-        <Body>{DECLINED}</Body>
+        <Text variant="body">{DECLINED}</Text>
       </LiveRegion>
     );
   }
@@ -98,15 +102,15 @@ function OfferAnswer({
   return (
     <View style={styles.group} testID="waiting-offer">
       <StatusBadge tone="info" label={`A place is offered in ${offer.divisionName}`} />
-      <Detail label="Answer by" value={formatInstant(offer.expiresAt)} />
-      <Body muted>
-        The place is held for your team until then. Accepting sends the entry to the league for
+      <FieldValue layout="inline" label="Answer by" value={formatInstant(offer.expiresAt)} />
+      <Text variant="caption" tone="muted">
+        The place is held for your team until then. Accepting sends the team to the league for
         approval; nothing is charged by accepting.
-      </Body>
+      </Text>
       {canAccept || canDecline ? (
         <>
           {offline ? <OfflineNotice what="Answering the offer" /> : null}
-          <ButtonRow>
+          <View style={buttonRowStyles.row}>
             {canAccept ? (
               <Button
                 label="Accept the place"
@@ -125,13 +129,16 @@ function OfferAnswer({
                 accessibilityHint="Your team keeps its place in the order"
               />
             ) : null}
-          </ButtonRow>
+          </View>
         </>
       ) : (
-        <Body muted>The team&apos;s captain answers the offer.</Body>
+        <Text variant="caption" tone="muted">
+          The team&apos;s captain answers the offer.
+        </Text>
       )}
       {error ? (
-        <CommandFailure
+        <CommandError
+          wording="team"
           error={error}
           onRetry={accept.error ? doAccept : doDecline}
           onReload={() => {
@@ -170,7 +177,7 @@ function WithdrawFromList({ workspace, onReload }: { workspace: Workspace; onRel
   if (withdraw.data) {
     return (
       <LiveRegion announcement={WITHDRAWN} testID="waiting-withdrawn">
-        <Body>{WITHDRAWN}</Body>
+        <Text variant="body">{WITHDRAWN}</Text>
       </LiveRegion>
     );
   }
@@ -194,12 +201,12 @@ function WithdrawFromList({ workspace, onReload }: { workspace: Workspace; onRel
         multiline
         error={reasonError}
       />
-      <Body muted>
+      <Text variant="caption" tone="muted">
         A withdrawn team leaves the list and loses its place in the order. An open offer is closed
         with it.
-      </Body>
+      </Text>
       {offline ? <OfflineNotice what="Withdrawing the team" /> : null}
-      <ButtonRow>
+      <View style={buttonRowStyles.row}>
         <Button
           label="Withdraw the team"
           onPress={submit}
@@ -215,9 +222,10 @@ function WithdrawFromList({ workspace, onReload }: { workspace: Workspace; onRel
             setAttempted(false);
           }}
         />
-      </ButtonRow>
+      </View>
       {withdraw.error ? (
-        <CommandFailure
+        <CommandError
+          wording="team"
           error={withdraw.error}
           onRetry={submit}
           onReload={() => {
@@ -245,17 +253,17 @@ export function TeamWaiting({
   const actions = workspace.viewer.availableActions;
   return (
     <Section title="Waiting list" testID="team-waiting">
-      <Body>
+      <Text variant="body">
         {waiting.division
           ? `Your team is waiting for a place in ${waiting.division.name}.`
           : 'Your team is waiting for a place in this season.'}
-      </Body>
-      <Detail label="Place in the order" value={waitingPlaceText(waiting)} />
-      <Detail label="Waiting since" value={formatInstant(waiting.since)} />
-      <Body muted>
+      </Text>
+      <FieldValue layout="inline" label="Place in the order" value={waitingPlaceText(waiting)} />
+      <FieldValue layout="inline" label="Waiting since" value={formatInstant(waiting.since)} />
+      <Text variant="caption" tone="muted">
         A waiting team holds no place and owes nothing. The league offers a place when one opens and
         chooses which waiting team it goes to.
-      </Body>
+      </Text>
       {waiting.openOffer ? (
         <OfferAnswer
           offer={waiting.openOffer}
@@ -264,7 +272,9 @@ export function TeamWaiting({
           onReload={onReload}
         />
       ) : (
-        <Body muted>No place has been offered yet.</Body>
+        <Text variant="caption" tone="muted">
+          No place has been offered yet.
+        </Text>
       )}
       {actions.includes(WAITING_ACTIONS.withdrawEntry) ? (
         <WithdrawFromList workspace={workspace} onReload={onReload} />
@@ -276,3 +286,8 @@ export function TeamWaiting({
 const useStyles = makeStyles(() => ({
   group: { gap: spacing.sm },
 }));
+
+/** A row of buttons under a form or a choice. */
+const buttonRowStyles = StyleSheet.create({
+  row: { gap: spacing.sm, paddingTop: spacing.xs },
+});

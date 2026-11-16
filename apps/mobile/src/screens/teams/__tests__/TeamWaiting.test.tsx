@@ -123,7 +123,9 @@ describe('SPK-COMP-006 team waiting list (customer app)', () => {
     fireEvent.press(screen.getByRole('button', { name: 'Accept the place' }));
     expect(await screen.findByTestId('waiting-offer-accepted')).toBeOnTheScreen();
     expect(
-      screen.getByText(/You accepted the place\. The league reviews the entry/),
+      screen.getByText(
+        'You accepted the place. The league reviews the team as usual; payment follows approval.',
+      ),
     ).toBeOnTheScreen();
     expect(app.bodiesOf('POST', '/team-entry-place-offers/{id}/accept')).toEqual([
       { expectedRevision: 1 },
@@ -170,12 +172,13 @@ describe('SPK-COMP-006 team waiting list (customer app)', () => {
 
     fireEvent.press(await screen.findByRole('button', { name: 'Withdraw from the waiting list' }));
     fireEvent.press(screen.getByRole('button', { name: 'Withdraw the team' }));
-    expect(
-      await screen.findByLabelText('Reason for withdrawing. Give the reason for withdrawing.'),
-    ).toBeOnTheScreen();
+    expect(await screen.findByLabelText('Reason for withdrawing')).toHaveProp(
+      'accessibilityHint',
+      'Error: Give the reason for withdrawing.',
+    );
     expect(app.requestsTo('POST', '/team-entries/{id}/withdraw')).toHaveLength(0);
     fireEvent.changeText(
-      screen.getByLabelText('Reason for withdrawing. Give the reason for withdrawing.'),
+      screen.getByLabelText('Reason for withdrawing'),
       'We joined another league',
     );
     fireEvent.press(screen.getByRole('button', { name: 'Withdraw the team' }));
