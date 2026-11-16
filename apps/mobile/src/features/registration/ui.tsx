@@ -1,16 +1,19 @@
 /**
- * Layout pieces shared by the registration screens (SCR-C-07 to SCR-C-16), built on the
- * foundation theme. Accessibility (SPK-UX-009): every control has a role, a label and its state
- * (checked, disabled); every value row reads as one element "label, value"; text scales.
+ * Layout pieces shared by the registration screens (SCR-C-07 to SCR-C-16): a thin adapter over the
+ * visual system v2 in `src/ui` (ADR-008, Phase 3), kept so existing imports compile while screens
+ * move to `src/ui` directly. Every export keeps its props and its accessible output: role, name,
+ * state and visible words (SPK-UX-009). Every control has a role, a label and its state (checked,
+ * disabled); every value row reads as one element "label: value"; text scales.
  */
 import type { ReactNode } from 'react';
-import { Pressable, Text, TextInput, View } from 'react-native';
-import { SectionCard } from '../../ui/Card';
-import { LiveText } from '../../ui/announce';
-import { useInputChrome } from '../../ui/input';
-import { fonts, makeStyles, MIN_TOUCH_SIZE, radius, spacing, type } from '../../ui/theme';
+import { View } from 'react-native';
+import { ChoiceCard } from '../../ui/ChoiceList';
+import { Field, FieldErrorText, FieldInput, FieldValue } from '../../ui/Field';
+import { Section as UiSection } from '../../ui/Section';
+import { Text } from '../../ui/Text';
+import { layout, makeStyles, spacing } from '../../ui/theme';
 
-/** A titled card (`ui/Card` `SectionCard`): uppercase title announced as a header. */
+/** A titled card (`ui/Section`): the title is announced as a header. */
 export function Section({
   title,
   children,
@@ -21,24 +24,28 @@ export function Section({
   testID?: string;
 }) {
   return (
-    <SectionCard title={title} testID={testID}>
+    <UiSection title={title} testID={testID}>
       {children}
-    </SectionCard>
+    </UiSection>
   );
 }
 
 export function Title({ children }: { children: string }) {
-  const styles = useStyles();
   return (
-    <Text style={styles.title} accessibilityRole="header">
+    <Text variant="title1" heading>
       {children}
     </Text>
   );
 }
 
 export function Body({ children, muted = false }: { children: ReactNode; muted?: boolean }) {
-  const styles = useStyles();
-  return <Text style={muted ? styles.caption : styles.body}>{children}</Text>;
+  return muted ? (
+    <Text variant="caption" tone="muted">
+      {children}
+    </Text>
+  ) : (
+    <Text variant="body">{children}</Text>
+  );
 }
 
 /** One "label: value" fact, read as a single element by screen readers. */
@@ -53,21 +60,15 @@ export function Detail({
   emphasis?: boolean;
   testID?: string;
 }) {
-  const styles = useStyles();
   return (
-    <View
-      style={styles.detail}
-      accessible
-      accessibilityLabel={`${label}: ${value}`}
-      testID={testID}
-    >
-      <Text style={[styles.detailLabel, emphasis && styles.emphasis]}>{label}</Text>
-      <Text style={[styles.detailValue, emphasis && styles.emphasis]}>{value}</Text>
-    </View>
+    <FieldValue label={label} value={value} layout="inline" emphasis={emphasis} testID={testID} />
   );
 }
 
-/** A checkbox or radio row: the role and checked state are announced, never shown by colour only. */
+/**
+ * A checkbox or radio row (`ui/ChoiceList` `ChoiceCard`): the role and checked state are
+ * announced, never shown by colour only. Its name is "Label. Detail".
+ */
 export function ChoiceRow({
   label,
   detail,
@@ -85,36 +86,23 @@ export function ChoiceRow({
   disabled?: boolean;
   testID?: string;
 }) {
-  const styles = useStyles();
-  const mark = mode === 'checkbox' ? (checked ? '☑' : '☐') : checked ? '◉' : '○';
   return (
-    <Pressable
-      accessibilityRole={mode}
-      accessibilityLabel={detail ? `${label}. ${detail}` : label}
-      accessibilityState={{ checked, disabled }}
+    <ChoiceCard
+      option={{ value: label, label, description: detail }}
+      mode={mode === 'radio' ? 'single' : 'multiple'}
+      checked={checked}
       disabled={disabled}
       onPress={onToggle}
-      style={({ pressed }) => [styles.choice, pressed && styles.pressed, disabled && styles.off]}
+      accessibilityLabel={detail ? `${label}. ${detail}` : label}
       testID={testID}
-    >
-      <Text
-        style={styles.mark}
-        accessibilityElementsHidden
-        importantForAccessibility="no-hide-descendants"
-      >
-        {mark}
-      </Text>
-      <View style={styles.choiceText}>
-        <Text style={styles.choiceLabel}>{label}</Text>
-        {detail ? <Text style={styles.caption}>{detail}</Text> : null}
-      </View>
-    </Pressable>
+    />
   );
 }
 
 /**
- * A labelled text field; the error is kept next to the field, announced when it appears
- * (`ui/announce`) and part of the input's hint, so it is read with the field (SPK-UX-008, SPK-UX-009).
+ * A labelled text field (`ui/Field`); the error is kept next to the field, announced when it
+ * appears (`ui/announce`) and part of the input's hint, so it is read with the field (SPK-UX-008,
+ * SPK-UX-009).
  */
 export function TextField({
   label,
@@ -133,35 +121,21 @@ export function TextField({
   multiline?: boolean;
   testID?: string;
 }) {
-  const styles = useStyles();
-  const input = useInputChrome();
   const describedBy = [hint, error ? `Error: ${error}` : null].filter(Boolean).join('. ');
   return (
-    <View style={styles.field}>
-      <Text style={styles.fieldLabel}>{label}</Text>
-      {hint ? <Text style={styles.caption}>{hint}</Text> : null}
-      <TextInput
-        {...input.props}
+    <Field label={label} hint={hint}>
+      <FieldInput
         value={value}
         onChangeText={onChangeText}
         accessibilityLabel={label}
         accessibilityHint={describedBy || undefined}
         autoCorrect={false}
         multiline={multiline}
-        style={[
-          styles.input,
-          input.focusStyle,
-          multiline && styles.multiline,
-          error ? styles.inputError : null,
-        ]}
+        invalid={!!error}
         testID={testID}
       />
-      {error ? (
-        <LiveText style={styles.error} announcement={error}>
-          {`✕ ${error}`}
-        </LiveText>
-      ) : null}
-    </View>
+      <FieldErrorText error={error} glyph="✕" alert={false} />
+    </Field>
   );
 }
 
@@ -170,46 +144,6 @@ export function ButtonRow({ children }: { children: ReactNode }) {
   return <View style={styles.buttons}>{children}</View>;
 }
 
-const useStyles = makeStyles(({ colors }) => ({
-  title: { ...type.display, color: colors.text },
-  body: { ...type.body, color: colors.text },
-  caption: { ...type.caption, color: colors.textMuted },
-  detail: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', gap: 8 },
-  detailLabel: { ...type.caption, color: colors.textMuted, flexShrink: 1, paddingTop: 1 },
-  detailValue: {
-    ...type.body,
-    ...fonts.semibold,
-    color: colors.text,
-    flexShrink: 1,
-    textAlign: 'right',
-  },
-  emphasis: { ...fonts.bold, color: colors.text },
-  choice: {
-    minHeight: MIN_TOUCH_SIZE,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.md,
-    paddingVertical: spacing.sm,
-  },
-  pressed: { opacity: 0.8 },
-  off: { opacity: 0.55 },
-  mark: { ...type.heading, fontSize: 22, color: colors.primary },
-  choiceText: { flex: 1, gap: 2 },
-  choiceLabel: { ...type.body, color: colors.text, ...fonts.semibold },
-  field: { gap: spacing.xs },
-  fieldLabel: { ...type.body, color: colors.text, ...fonts.semibold },
-  input: {
-    minHeight: 48,
-    borderWidth: 1,
-    borderColor: colors.control,
-    borderRadius: radius.md,
-    paddingHorizontal: 14,
-    ...type.body,
-    color: colors.text,
-    backgroundColor: colors.background,
-  },
-  multiline: { minHeight: 88, textAlignVertical: 'top', paddingVertical: spacing.sm },
-  inputError: { borderColor: colors.danger, borderWidth: 2 },
-  error: { ...type.caption, color: colors.danger },
-  buttons: { gap: spacing.sm, paddingHorizontal: spacing.lg, paddingVertical: spacing.md },
+const useStyles = makeStyles(() => ({
+  buttons: { gap: spacing.sm, paddingHorizontal: layout.gutter, paddingVertical: spacing.md },
 }));
