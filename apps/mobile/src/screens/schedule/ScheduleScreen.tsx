@@ -47,7 +47,7 @@
 import { presentationForError, type ApiError, type Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
 import { useLocalSearchParams, useRouter, type Href } from 'expo-router';
-import { useState, type ReactNode } from 'react';
+import { useCallback, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { View } from 'react-native';
 import { usePermissions } from '../../api/permissions';
 import { illustrations } from '../../artwork/manifest';
@@ -271,6 +271,7 @@ function EntryRow({
   next,
   selfId,
   onAnswer,
+  registerTrigger,
 }: {
   entry: TodayEntry;
   teams: readonly MyTeamEntry[] | undefined;
@@ -279,6 +280,8 @@ function EntryRow({
   next: boolean;
   selfId: string | null;
   onAnswer: (fixtureId: string) => void;
+  /** Keeps the availability chip of each game, for focus to return to after its sheet. */
+  registerTrigger: (fixtureId: string, view: View | null) => void;
 }) {
   const styles = useStyles();
   const router = useRouter();
@@ -346,7 +349,12 @@ function EntryRow({
         testID={`schedule-fixture-${fixture.id}`}
       />
       {answersFor(entry, teams, selfId) ? (
-        <View style={styles.answer}>
+        <View
+          style={styles.answer}
+          ref={(view) => registerTrigger(fixture.id, view)}
+          collapsable={false}
+          testID={`schedule-answer-${fixture.id}`}
+        >
           <Chip
             label={`Your availability: ${answer.label}`}
             icon="event_available"
@@ -392,6 +400,7 @@ function AnswerSheet({
   selfId,
   onClose,
   onReload,
+  returnFocusTo,
 }: {
   fixture: FixtureDetail | null;
   teams: readonly MyTeamEntry[] | undefined;
@@ -399,6 +408,8 @@ function AnswerSheet({
   selfId: string | null;
   onClose: () => void;
   onReload: () => void;
+  /** The control that opened the sheet: focus goes back to it on close (SPK-UX-009). */
+  returnFocusTo?: RefObject<unknown>;
 }) {
   const styles = useStyles();
   const router = useRouter();
@@ -406,7 +417,12 @@ function AnswerSheet({
   const zone = zoneOf(fixture?.venue?.timezone);
   const own = fixture ? ownResponse(fixture, selfId) : null;
   return (
-    <Sheet open={fixture !== null} onClose={onClose} title={fixture ? fixtureTitle(fixture) : ''}>
+    <Sheet
+      open={fixture !== null}
+      onClose={onClose}
+      title={fixture ? fixtureTitle(fixture) : ''}
+      returnFocusTo={returnFocusTo}
+    >
       {fixture && card ? (
         <>
           <View style={styles.sheetFacts}>
@@ -520,6 +536,26 @@ function CalendarContent() {
   // A day picked on the strip scrolls the list to it (a new object for every pick).
   const [scrollTo, setScrollTo] = useState<{ key: string } | null>(null);
   const [answering, setAnswering] = useState<string | null>(null);
+  // The availability chip of each game: focus goes back to the one that opened the answer sheet
+  // (SPK-UX-009), looked up when the sheet closes, since the row may have been drawn again.
+  const triggers = useRef(new Map<string, View>());
+  const lastAnswered = useRef<string | null>(null);
+  const registerTrigger = useCallback((fixtureId: string, view: View | null) => {
+    if (view) triggers.current.set(fixtureId, view);
+    else triggers.current.delete(fixtureId);
+  }, []);
+  const answerTrigger = useMemo<RefObject<unknown>>(
+    () => ({
+      get current() {
+        return lastAnswered.current ? (triggers.current.get(lastAnswered.current) ?? null) : null;
+      },
+    }),
+    [],
+  );
+  const openAnswer = (fixtureId: string) => {
+    lastAnswered.current = fixtureId;
+    setAnswering(fixtureId);
+  };
   const [refreshing, setRefreshing] = useState(false);
 
   // The week follows the selected day; today on the device's clock until a day is picked, so the
@@ -699,6 +735,7 @@ function CalendarContent() {
         names={names}
         selfId={selfId}
         onClose={() => setAnswering(null)}
+        returnFocusTo={answerTrigger}
         onReload={reloadGames}
       />
     </View>
@@ -742,7 +779,8 @@ function CalendarContent() {
                       overlap={notes.get(entry.id)}
                       next={next?.id === entry.id}
                       selfId={selfId}
-                      onAnswer={setAnswering}
+                      onAnswer={openAnswer}
+                      registerTrigger={registerTrigger}
                     />
                   ))}
                 </View>

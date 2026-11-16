@@ -127,3 +127,47 @@ export function illustrationsOnScreen(
     .map((a) => bySource.get((a.props as { source?: unknown }).source))
     .filter((name): name is IllustrationName => name !== undefined);
 }
+
+/**
+ * SPK-UX-009 large text: makes `useWindowDimensions` report `fontScale` (2 is 200%) at a phone's
+ * size, as a person with the largest accessibility text sizes has it. Returns the spy; restore it
+ * after the test (`spy.mockRestore()`).
+ */
+export function mockFontScale(fontScale: number) {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const reactNative = require('react-native') as { useWindowDimensions: () => unknown };
+  return jest
+    .spyOn(reactNative, 'useWindowDimensions')
+    .mockReturnValue({ width: 390, height: 844, scale: 3, fontScale });
+}
+
+/**
+ * The words on screen that would be cut at a large text size: text drawn with a line limit
+ * (`numberOfLines`) or shrunk to fit. Critical text (names, amounts, times, the pass, what to do)
+ * must never be among them.
+ */
+export function truncatedTexts(scope: Pick<typeof rntlScreen, 'toJSON'>): string[] {
+  const found: string[] = [];
+  const textOf = (node: JsonChild | JsonChild[] | null): string =>
+    node === null
+      ? ''
+      : Array.isArray(node)
+        ? node.map(textOf).join('')
+        : typeof node === 'string'
+          ? node
+          : textOf(node.children);
+  const walk = (node: JsonChild | JsonChild[] | null) => {
+    if (node === null || typeof node === 'string') return;
+    if (Array.isArray(node)) {
+      node.forEach(walk);
+      return;
+    }
+    const limited =
+      (typeof node.props.numberOfLines === 'number' && node.props.numberOfLines > 0) ||
+      node.props.adjustsFontSizeToFit === true;
+    if (node.type === 'Text' && limited) found.push(textOf(node.children));
+    walk(node.children);
+  };
+  walk(scope.toJSON() as JsonChild | JsonChild[] | null);
+  return found;
+}

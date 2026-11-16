@@ -6,12 +6,15 @@
  * API says this build must be updated, the update screen covers everything (SCR-C-39). The
  * connectivity state is announced to VoiceOver once for the app here, not by each screen's banner
  * (SPK-UX-009, src/connectivity/ConnectivityBanner.tsx). Headers and the navigation library's
- * own colours follow the theme in use (classic or Legends mode).
+ * own colours follow the theme in use (classic or Legends mode). Screen transitions follow
+ * `useMotion()` like every other animation (ADR-008): with reduced motion a pushed screen appears
+ * at once (`animation: 'none'`); otherwise the platform's own transition plays.
  */
 import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from 'expo-router';
 import { useMemo } from 'react';
 import { ConnectivityAnnouncer } from '../connectivity/ConnectivityBanner';
 import { DemoOverlay } from '../demo';
+import { useMotion } from '../ui/motion';
 import { fonts, useTheme, type Theme } from '../ui/theme';
 import { UpdateGate } from './UpdateGate';
 
@@ -19,8 +22,9 @@ import { UpdateGate } from './UpdateGate';
  * Stack headers of the park system in the theme in use: a bar in the page colour, the back button
  * in the text colour, a condensed uppercase title.
  */
-function stackHeader({ colors }: Theme) {
+export function stackHeader({ colors }: Theme, reducedMotion: boolean) {
   return {
+    animation: reducedMotion ? ('none' as const) : ('default' as const),
     headerBackTitle: 'Back',
     headerStyle: { backgroundColor: colors.page },
     headerShadowVisible: false,
@@ -53,7 +57,8 @@ function navigationTheme({ dark, colors }: Theme) {
 
 export function RootNavigator() {
   const theme = useTheme();
-  const screenOptions = useMemo(() => stackHeader(theme), [theme]);
+  const motion = useMotion();
+  const screenOptions = useMemo(() => stackHeader(theme, motion.reduced), [theme, motion.reduced]);
   const navigation = useMemo(() => navigationTheme(theme), [theme]);
   return (
     <ThemeProvider value={navigation}>

@@ -15,7 +15,7 @@ import {
 } from '../../../features/registration/testing/fixtures';
 import { createRegistrationTestApp } from '../../../features/registration/testing/registration-test-app';
 import { CheckoutScreen, payAtDeskMessage } from '../CheckoutScreen';
-import { openSupportDetails } from '../../../testing/ui-surfaces';
+import { openSupportDetails, mockFontScale, truncatedTexts } from '../../../testing/ui-surfaces';
 
 jest.mock('../../../features/registration/dev', () => ({ DevPaymentMethodPicker: null }));
 
@@ -53,6 +53,23 @@ describe('SCR-C-14 CheckoutScreen (release build)', () => {
     // The held time is said once by the hold notice (and in the message), not by a second badge.
     expect(screen.getAllByLabelText(/^Place held until /)).toHaveLength(1);
     expect(screen.queryByTestId('checkout-basket-status')).toBeNull();
+    await app.settle();
+  });
+
+  it('SPK-UX-009 200% text: the amount, the price expiry and what to do are whole', async () => {
+    const fontScale = mockFontScale(2);
+    const app = createRegistrationTestApp({
+      routes: {
+        ...familyRoutes(),
+        'GET /registration-quotes/{id}': { status: 200, body: quote() },
+        'GET /baskets/{id}': { status: 200, body: HELD },
+      },
+    });
+    render(<CheckoutScreen quoteId={IDS.quote} />, { wrapper: app.wrapper });
+    expect(await screen.findByLabelText(PAY_AT_DESK)).toBeOnTheScreen();
+    expect(screen.getByLabelText('Due now: $226.00')).toBeOnTheScreen();
+    expect(truncatedTexts(screen)).toEqual([]);
+    fontScale.mockRestore();
     await app.settle();
   });
 

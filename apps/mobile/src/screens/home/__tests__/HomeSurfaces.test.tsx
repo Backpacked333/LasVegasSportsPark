@@ -33,7 +33,7 @@ import {
   session,
 } from '../../../features/today/__tests__/fixtures';
 import { createTestApp } from '../../../testing/test-app';
-import { pullToRefresh } from '../../../testing/ui-surfaces';
+import { pullToRefresh, mockFontScale, truncatedTexts } from '../../../testing/ui-surfaces';
 import { Artwork } from '../../../ui/Artwork';
 import { HomeScreen } from '../HomeScreen';
 import { legendsTheme } from '../../../ui/theme';
@@ -155,6 +155,21 @@ describe('SCR-C-03 Home look (ADR-008)', () => {
       backgroundColor: legendsTheme.colors.scrimEnd,
     });
     Dimensions.set({ window: large, screen: large });
+  });
+
+  it('SPK-UX-009 200% text: the greeting and Up next are whole, with the words below the pictures', async () => {
+    const fontScale = mockFontScale(2);
+    const app = createTestApp({
+      routes: routes({
+        'GET /me/family-calendar': ok(calendar([calendarItem({ timezone: DENVER })])),
+      }),
+    });
+    render(<HomeScreen />, { wrapper: app.wrapper });
+    expect(await screen.findByRole('header', { name: 'Hi, Alex' })).toBeOnTheScreen();
+    // Nothing sits over a picture at this size (no scrim drawn), and no line is cut short.
+    expect(screen.UNSAFE_queryAllByType(LinearGradient)).toHaveLength(0);
+    expect(truncatedTexts(screen)).toEqual([]);
+    fontScale.mockRestore();
   });
 
   it('SPK-UX-009: "Up next" is one hero element with a combined name; the RSVP and the change are their own elements', async () => {

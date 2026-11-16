@@ -13,6 +13,11 @@
  *
  * `source` is what the caller passes: a `require()` result from the artwork manifest or an
  * `ImageSource`. This component never imports the manifest itself.
+ *
+ * Performance (ADR-008): the image is kept in memory once decoded (`cachePolicy` "memory": the
+ * artwork is bundled, so there is nothing to cache on disk), decoded at the size it is drawn
+ * (expo-image's default downscaling, kept on), and keyed by its source (`recyclingKey`) so a row
+ * recycled by a FlatList never shows the previous row's picture while the next one loads.
  */
 import { Image, type ImageContentFit, type ImageSource } from 'expo-image';
 import { View, type StyleProp, type ViewStyle } from 'react-native';
@@ -30,6 +35,12 @@ export interface ArtworkProps {
   rounded?: boolean;
   style?: StyleProp<ViewStyle>;
   testID?: string;
+}
+
+/** A stable key for a source: the bundled asset's number, or the image's address. */
+export function artworkKey(source: ArtworkSource): string {
+  if (typeof source === 'number') return `asset:${source}`;
+  return source.uri ?? '';
 }
 
 export function Artwork({
@@ -56,6 +67,9 @@ export function Artwork({
         style={styles.image}
         contentFit={contentFit}
         transition={fade}
+        cachePolicy="memory"
+        allowDownscaling
+        recyclingKey={artworkKey(source)}
         accessible={false}
       />
     </View>

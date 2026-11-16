@@ -28,7 +28,12 @@ import {
   SCANNABLE_CODE_MESSAGE,
   WITHDRAW_REASON,
 } from '../PassScreen';
-import { openSupportDetails, pullToRefresh } from '../../../testing/ui-surfaces';
+import {
+  openSupportDetails,
+  pullToRefresh,
+  mockFontScale,
+  truncatedTexts,
+} from '../../../testing/ui-surfaces';
 import { classicTheme } from '../../../ui/theme';
 
 jest.mock('../../../features/today/device-time-zone', () => ({
@@ -497,6 +502,18 @@ describe('SCR-C-05 PassScreen', () => {
 });
 
 describe('SCR-C-05 the pass card (ADR-008, PA-11)', () => {
+  it('SPK-UX-009 200% text: the reference, where to show it and the issue time are whole', async () => {
+    const fontScale = mockFontScale(2);
+    setup(
+      { 'GET /me': ok(me()), 'GET /me/passes': myPasses(listed(PASS_ONE)) },
+      { stored: STORED },
+    );
+    expect(await screen.findByText(groupReference(REF_ONE))).toBeOnTheScreen();
+    expect(screen.getByText('Show this at the front desk')).toBeOnTheScreen();
+    expect(truncatedTexts(screen)).toEqual([]);
+    fontScale.mockRestore();
+  });
+
   it('SPK-ENTRY-002 ADR-008: shows the reference in large tabular figures on a night card, with "Show this at the front desk" and "Works offline"', async () => {
     setup(
       { 'GET /me': ok(me()), 'GET /me/passes': myPasses(listed(PASS_ONE)) },

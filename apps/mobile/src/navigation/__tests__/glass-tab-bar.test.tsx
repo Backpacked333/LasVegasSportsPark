@@ -10,7 +10,8 @@ import { createTestApp } from '../../testing/test-app';
 import { GlassProvider, type GlassMode } from '../../ui/GlassSurface';
 import { BottomBarInsetContext, Screen } from '../../ui/Screen';
 import { DESTINATIONS } from '../destinations';
-import { RootNavigator } from '../RootNavigator';
+import { RootNavigator, stackHeader } from '../RootNavigator';
+import { classicTheme } from '../../ui/theme';
 import { TAB_ROW_HEIGHT } from '../TabsNavigator';
 
 const EMPTY_INBOX = { status: 200, body: { items: [], nextCursor: null } };
@@ -96,5 +97,12 @@ describe('Screen under a floating bar (SPK-UX-009)', () => {
     expect(bottomPadding(scrollProps().contentContainerStyle)).toBe(withoutBar + 83);
     expect(scrollProps().scrollIndicatorInsets).toEqual({ bottom: 83 });
     expect(screen.getByText('Last row')).toBeOnTheScreen();
+  });
+});
+
+describe('screen transitions follow reduced motion (ADR-008)', () => {
+  it('a pushed screen appears at once with reduced motion, and with the platform transition otherwise', () => {
+    expect(stackHeader(classicTheme, true).animation).toBe('none');
+    expect(stackHeader(classicTheme, false).animation).toBe('default');
   });
 });

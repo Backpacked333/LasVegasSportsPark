@@ -7,7 +7,7 @@
 import { apiQueryKey } from '@sportspark/api-client';
 import { fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
-import { SectionList } from 'react-native';
+import { AccessibilityInfo, SectionList } from 'react-native';
 import { calendarWindowQuery } from '../../../features/today/calendar';
 import {
   BOOKING,
@@ -450,6 +450,22 @@ describe('SCR-C-18 Schedule: fixtures and facility clocks (CMP-02, SPK-SCHED-008
         reads,
       ),
     );
+    // SPK-UX-009: closing the sheet puts focus back on the availability chip that opened it.
+    const focus = jest.spyOn(AccessibilityInfo, 'sendAccessibilityEvent');
+    fireEvent.press(within(sheet).getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(screen.queryByTestId('sheet')).toBeNull());
+    const chip = `schedule-answer-${fixtureDetail().id}`;
+    expect(screen.getByTestId(chip)).toBeOnTheScreen();
+    await waitFor(() =>
+      expect(
+        focus.mock.calls.some(
+          ([node, event]) =>
+            (node as { props?: { testID?: string } } | null)?.props?.testID === chip &&
+            event === 'focus',
+        ),
+      ).toBe(true),
+    );
+    focus.mockRestore();
   });
 
   it('SCR-C-04: on Calendar, an RSVP refused with ACCESS_DENIED is "not available", not an error', async () => {

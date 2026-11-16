@@ -27,7 +27,12 @@ import {
 import { illustrations } from '../../../artwork/manifest';
 import { mePermissions } from '../../../testing/test-app';
 import { openSheet, pickDate } from '../../../testing/ui';
-import { openSupportDetails, pullToRefresh } from '../../../testing/ui-surfaces';
+import {
+  openSupportDetails,
+  pullToRefresh,
+  mockFontScale,
+  truncatedTexts,
+} from '../../../testing/ui-surfaces';
 import { Artwork } from '../../../ui/Artwork';
 import {
   DiscoverScreen,
@@ -668,6 +673,17 @@ describe('SCR-C-07 DiscoverScreen', () => {
     fireEvent.press(within(empty).getByRole('button', { name: 'Show all activities' }));
     expect(await screen.findByText('Autumn Youth Program')).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: 'Basketball' })).not.toBeSelected();
+    await app.settle();
+  });
+
+  it('SPK-UX-009 200% text: the activities, search and filters are whole, nothing cut short', async () => {
+    const fontScale = mockFontScale(2);
+    const app = createRegistrationTestApp({ routes: { 'GET /offerings': page([offering()]) } });
+    render(<DiscoverScreen />, { wrapper: app.wrapper });
+    expect(await screen.findByText('Autumn Youth Program')).toBeOnTheScreen();
+    expect(screen.getByRole('button', { name: 'Basketball' })).toBeOnTheScreen();
+    expect(truncatedTexts(screen)).toEqual([]);
+    fontScale.mockRestore();
     await app.settle();
   });
 
