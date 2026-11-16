@@ -9,9 +9,17 @@
  * always say what they mean. A row that opens something shows a chevron and answers a touch at
  * once: the soft surface fill while pressed (and the platform ripple on Android), no animation.
  * Colours follow the theme.
+ *
+ * v2 (ADR-008) adds, all optional and all read in the row's one label: a decorative initials
+ * `avatar` (the name is the title), a `subtitle` (`detail` stays as its alias), a trailing `value`
+ * in tabular figures ("$40.00", "6:30 pm"), a `badge` count with its words ("3 new"), and
+ * `chevron` to show or hide the chevron explicitly. The label reads title, subtitle, value,
+ * status, badges, count.
  */
 import { createContext, useContext, type ReactNode } from 'react';
 import { Pressable, Text, View } from 'react-native';
+import { Avatar, type AvatarPerson } from './Avatar';
+import { CountBadge } from './CountBadge';
 import { Icon } from './Icon';
 import { StatusBadge, type StatusBadgeProps } from './StatusBadge';
 import {
@@ -21,6 +29,7 @@ import {
   MIN_TOUCH_SIZE,
   radius,
   spacing,
+  tabular,
   type,
   useTheme,
 } from './theme';
@@ -41,7 +50,20 @@ export function ListRowLayout({ layout, children }: { layout: RowLayout; childre
 
 export interface ListRowProps {
   title: string;
+  /** The line under the title. */
+  subtitle?: string;
+  /** Alias of `subtitle` (kept for existing rows); `subtitle` wins when both are given. */
   detail?: string;
+  /** A short value on the right ("$40.00", "6:30 pm"), in tabular figures. */
+  value?: string;
+  /** A count on the right (unread, waiting); nothing for 0. */
+  badge?: number;
+  /** The count's words in the label; "{badge} new" by default. */
+  badgeLabel?: string;
+  /** A decorative initials avatar before the text (the title names the person). */
+  avatar?: AvatarPerson;
+  /** Show or hide the chevron; by default shown on a row that opens something without `trailing`. */
+  chevron?: boolean;
   status?: StatusBadgeProps;
   /** Further labelled pills after the status (e.g. a promotion), read after it. */
   badges?: readonly StatusBadgeProps[];
@@ -61,7 +83,13 @@ export interface ListRowProps {
 
 export function ListRow({
   title,
-  detail,
+  subtitle,
+  detail: detailAlias,
+  value,
+  badge,
+  badgeLabel,
+  avatar,
+  chevron,
   status,
   badges = [],
   onPress,
@@ -77,13 +105,24 @@ export function ListRow({
   const styles = useStyles();
   const layout = useContext(RowLayoutContext);
   const [tileColor, tileIconColor] = iconTone ?? [colors.surface, colors.text];
-  const label = [title, detail, status?.label, ...badges.map((b) => b.label)]
+  const detail = subtitle ?? detailAlias;
+  const count = badge !== undefined && badge > 0 ? badge : null;
+  const label = [
+    title,
+    detail,
+    value,
+    status?.label,
+    ...badges.map((b) => b.label),
+    count !== null ? (badgeLabel ?? `${count} new`) : null,
+  ]
     .filter(Boolean)
     .join(', ');
+  const showChevron = chevron ?? Boolean(onPress && !trailing);
   const content = (
     <>
       {accent ? <View style={[styles.accent, { backgroundColor: accent }]} /> : null}
       {leading}
+      {avatar ? <Avatar name={avatar.name} id={avatar.id} decorative /> : null}
       {icon ? (
         <View style={[styles.tile, { backgroundColor: tileColor }]}>
           <Icon name={icon} size={20} color={tileIconColor} />
@@ -97,8 +136,10 @@ export function ListRow({
           <StatusBadge key={badge.label} {...badge} />
         ))}
       </View>
+      {value ? <Text style={styles.value}>{value}</Text> : null}
+      {count !== null ? <CountBadge count={count} style={styles.count} /> : null}
       {trailing}
-      {onPress && !trailing ? <Icon name="chevron_right" size={22} color={colors.primary} /> : null}
+      {showChevron ? <Icon name="chevron_right" size={22} color={colors.primary} /> : null}
     </>
   );
   const frame = layout === 'card' ? styles.card : styles.flat;
@@ -163,4 +204,6 @@ const useStyles = makeStyles(({ colors }) => ({
   text: { flex: 1, gap: spacing.xs },
   title: { ...type.body, ...fonts.bold, color: colors.text },
   detail: { ...type.caption, color: colors.textMuted },
+  value: { ...tabular(type.callout), color: colors.textMuted, flexShrink: 0, maxWidth: '40%' },
+  count: { alignSelf: 'center' },
 }));
