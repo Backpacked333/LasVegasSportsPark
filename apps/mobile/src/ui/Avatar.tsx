@@ -21,9 +21,18 @@ export interface AvatarPerson {
   id?: string;
 }
 
-/** Up to two initials: the first letters of the first and last words of the name. */
+/**
+ * Up to two initials: the first letters of the first and last words of the name. Brackets and
+ * punctuation are not letters: "Mary-Jane O'Neil" is "MO". A name in brackets is the person's
+ * own name beside a role word, so it wins: "You (Dev)" is "D", not "Y(".
+ */
 export function initialsFor(name: string): string {
-  const words = name.trim().split(/\s+/).filter(Boolean);
+  const inner = /\(([^)]*)\)/u.exec(name)?.[1];
+  const source = inner && /[\p{L}\p{N}]/u.test(inner) ? inner : name;
+  const words = source
+    .split(/\s+/u)
+    .map((word) => word.replace(/[^\p{L}\p{N}]/gu, ''))
+    .filter(Boolean);
   if (words.length === 0) return '?';
   const first = Array.from(words[0] ?? '')[0] ?? '';
   const last = words.length > 1 ? (Array.from(words[words.length - 1] ?? '')[0] ?? '') : '';

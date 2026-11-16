@@ -105,6 +105,7 @@ import { SessionBookingFlow } from '../../features/registration/SessionBooking';
 import { param, registrationRoutes } from '../../features/registration/routes';
 import { registrationWindowStatus } from '../../features/registration/status';
 import { RegistrationSteps } from '../../features/registration/steps';
+import { eligibilitySupportLines } from '../../features/registration/eligibility-words';
 import { PersonCard, RegistrationTypePicker } from '../../features/registration/WhoCards';
 import { pendingMessageFor } from '../../copy/pending';
 import { useApp, useConnectivity } from '../../providers/AppProviders';
@@ -409,7 +410,7 @@ function IntentChooser({ offering }: { offering: Offering }) {
               const allowed = mayRegister(registrationOptions, p.personId);
               const personAdded = isAdded(p.personId);
               const result = intent ? eligibilityOf(registrationOptions, p.personId, intent) : null;
-              const messages = result ? eligibilityMessages(result) : null;
+              const messages = result ? eligibilityMessages(result, p.displayName) : null;
               const summary = personAdded
                 ? 'Added to your cart'
                 : !allowed
@@ -435,6 +436,14 @@ function IntentChooser({ offering }: { offering: Offering }) {
                 />
               );
             })}
+            <SupportDetails
+              lines={participants.flatMap((p) => {
+                if (!intent || isAdded(p.personId)) return [];
+                const result = eligibilityOf(registrationOptions, p.personId, intent);
+                return result ? eligibilitySupportLines(result, p.displayName) : [];
+              })}
+              testID="eligibility-support"
+            />
           </View>
         ) : null}
       </UiSection>

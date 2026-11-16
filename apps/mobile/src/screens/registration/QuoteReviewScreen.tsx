@@ -14,8 +14,9 @@
  * `request_new_quote`). A quote reserves nothing: places are held at checkout (SCR-C-14).
  *
  * Prices, taxes, discounts and rounding are Finance decisions (DEC-007, DEC-057): the app shows
- * what the API priced, and lists verbatim the engineering defaults the API says it applied where
- * no approved policy exists.
+ * what the API priced. Where no approved policy exists, the engineering defaults the API says it
+ * applied read as plain sentences (`policy-words.ts`); their text, with its policy and decision
+ * codes, is kept verbatim in "Details for support" (PA-11).
  *
  * States: loading; "no quote" reads not available; ready; validation failure (code or credit not
  * applicable); permission restriction (a credit of another person is not found); stale (expired:
@@ -36,6 +37,10 @@ import {
   hasPassed,
 } from '../../features/registration/format';
 import { useMe, useParticipantNames } from '../../features/registration/participants';
+import {
+  customerPolicyDefaults,
+  policyDefaultSupportLines,
+} from '../../features/registration/policy-words';
 import { lineKindLabel, quoteLineBasisLines } from '../../features/registration/price-basis';
 import { useApiRecords } from '../../features/registration/queries';
 import { param, registrationRoutes } from '../../features/registration/routes';
@@ -51,6 +56,7 @@ import { Text } from '../../ui/Text';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StatusBadge } from '../../ui/StatusBadge';
+import { SupportDetails } from '../../ui/SupportDetails';
 import { layout, makeStyles, spacing } from '../../ui/theme';
 
 type Quote = Schema<'Quote'>;
@@ -342,11 +348,15 @@ function QuoteContent({ quote, refetch }: { quote: Quote; refetch: () => void })
         {quote.policies.defaults.length > 0 ? (
           <>
             <Text variant="caption" tone="muted">
-              Where no policy is approved yet, the facility&apos;s system applies:
+              Where the facility has not set its own terms yet:
             </Text>
-            {quote.policies.defaults.map((d) => (
+            {customerPolicyDefaults(quote.policies.defaults).map((d) => (
               <Text key={d} variant="caption" tone="muted">{`• ${d}`}</Text>
             ))}
+            <SupportDetails
+              lines={policyDefaultSupportLines(quote.policies.defaults)}
+              testID="quote-policy-support"
+            />
           </>
         ) : null}
       </Section>

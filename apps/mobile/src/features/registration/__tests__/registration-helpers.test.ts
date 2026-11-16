@@ -218,10 +218,14 @@ describe('session bookings (SPK-PLACE-004, SPK-YOUTH-003, ENR-11)', () => {
 describe('eligibility preview (SPK-REG-002)', () => {
   it('reads eligible, not eligible, forms outstanding and unknown evidence apart, never unknown as a pass', () => {
     expect(eligibilityStatus(eligible())).toEqual({ tone: 'success', label: 'Eligible' });
-    const blocked = ineligible('Too old for this age band.');
+    const blocked = ineligible('Too old for this age band.', 'age_band');
     expect(eligibilityStatus(blocked).label).toBe('Not eligible');
     expect(blockingEligibilityReasons(blocked)).toEqual(['Too old for this age band.']);
-    expect(eligibilityMessages(blocked).alternatives).toEqual(['Choose an activity for this age.']);
+    // PA-11: customers read plain words; the staff-only override is not one of them.
+    expect(eligibilityMessages(blocked, 'Ben')).toEqual({
+      reasons: ["This activity isn't open to this person. The front desk can tell you why."],
+      alternatives: ['Look for another activity that fits.'],
+    });
     const unknown = {
       ...blocked,
       reasons: [
@@ -260,9 +264,10 @@ describe('eligibility preview (SPK-REG-002)', () => {
       label: 'Eligible once the required forms are signed',
     });
     expect(blockingEligibilityReasons(forms)).toEqual([]);
-    expect(eligibilityMessages(forms).alternatives).toEqual([
-      'Complete the required acknowledgments.',
-    ]);
+    expect(eligibilityMessages(forms)).toEqual({
+      reasons: ['Sign “Medical form” before registering.'],
+      alternatives: ['Sign the required forms to continue.'],
+    });
     // A passing result never lists the alternatives to a refusal.
     expect(
       eligibilityMessages({

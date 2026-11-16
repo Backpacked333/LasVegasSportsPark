@@ -217,9 +217,7 @@ describe('SCR-C-08 OfferingDetailScreen', () => {
               },
               {
                 personId: IDS.childB,
-                intents: [
-                  { intent: 'youth', eligibility: ineligible('Ben is older than this age band.') },
-                ],
+                intents: [{ intent: 'youth', eligibility: ineligible() }],
               },
             ],
           }),
@@ -231,7 +229,7 @@ describe('SCR-C-08 OfferingDetailScreen', () => {
     expect(await screen.findByLabelText('Ada, Register a child: Eligible')).toBeOnTheScreen();
     expect(
       screen.getByLabelText(
-        'Ben, Register a child: Not eligible. Ben is older than this age band.. Choose an activity for this age.',
+        'Ben, Register a child: Not eligible. Ages 9 to 12. Ben is 13.. Look for another activity that fits.',
       ),
     ).toBeOnTheScreen();
     expect(
@@ -457,7 +455,7 @@ describe('SCR-C-08 OfferingDetailScreen', () => {
 
   it('Activity page SPK-REG-008: when the API offers everyone only the waitlist, the bar offers "Join waitlist"', async () => {
     const full = {
-      ...ineligible('This activity is full.'),
+      ...ineligible('This activity is full.', 'offering_full'),
       alternatives: [
         { kind: 'join_waitlist' as const, message: 'Join the waitlist.', offeringId: null },
       ],

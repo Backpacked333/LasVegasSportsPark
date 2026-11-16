@@ -60,6 +60,7 @@ import {
   useRegistrationOptions,
   type RegistrationOptionsState,
 } from '../../features/registration/options';
+import { eligibilitySupportLines } from '../../features/registration/eligibility-words';
 import { useParticipants } from '../../features/registration/participants';
 import { listedPerSessionLine } from '../../features/registration/price-basis';
 import { useApiRecords } from '../../features/registration/queries';
@@ -76,6 +77,7 @@ import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { StickyActionBar, type StickyAction } from '../../ui/StickyActionBar';
+import { SupportDetails } from '../../ui/SupportDetails';
 import { Tag } from '../../ui/Tag';
 import { Text } from '../../ui/Text';
 import { fonts, layout, makeStyles, MIN_TOUCH_SIZE, spacing } from '../../ui/theme';
@@ -443,7 +445,7 @@ function EligibilityDetails({
                   const result = eligibilityOf(options.data, p.personId, intent);
                   if (!result) return null;
                   const status = eligibilityStatus(result);
-                  const { reasons, alternatives } = eligibilityMessages(result);
+                  const { reasons, alternatives } = eligibilityMessages(result, p.displayName);
                   return (
                     <View
                       key={intent}
@@ -469,6 +471,20 @@ function EligibilityDetails({
               </View>
             );
           })}
+          <SupportDetails
+            lines={participants.flatMap((p) =>
+              (options.data?.availableIntents ?? []).flatMap((intent) => {
+                const result = eligibilityOf(options.data, p.personId, intent);
+                return result
+                  ? eligibilitySupportLines(
+                      result,
+                      `${p.displayName}, ${INTENT_LABELS[intent].title}`,
+                    )
+                  : [];
+              }),
+            )}
+            testID="eligibility-preview-support"
+          />
         </View>
       )}
       <Body muted>

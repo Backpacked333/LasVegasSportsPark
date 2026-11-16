@@ -171,9 +171,7 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
               },
               {
                 personId: IDS.childB,
-                intents: [
-                  { intent: 'youth', eligibility: ineligible('Ben is older than this age band.') },
-                ],
+                intents: [{ intent: 'youth', eligibility: ineligible() }],
               },
             ],
           }),
@@ -184,7 +182,7 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
     const ada = await screen.findByRole('checkbox', { name: 'Ada. Eligible' });
     expect(ada).not.toBeDisabled();
     const ben = screen.getByRole('checkbox', {
-      name: 'Ben. Not eligible. Ben is older than this age band.. Choose an activity for this age.',
+      name: 'Ben. Not eligible. Ages 9 to 12. Ben is 13.. Look for another activity that fits.',
     });
     expect(ben).toBeDisabled();
   });
@@ -554,8 +552,14 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
   });
 
   it('SPK-REG-002: choosing another intent starts from nobody, so a person blocked there is never sent', async () => {
-    const adultOnly = ineligible('Youth enrollment is for children.');
-    const childOnly = ineligible('Individual league entry is for adults.');
+    const adultOnly = ineligible(
+      'Youth enrollment is for child participants.',
+      'youth_requires_child',
+    );
+    const childOnly = ineligible(
+      'This offering accepts adult participants only.',
+      'participant_kind_not_permitted',
+    );
     const app = createRegistrationTestApp({
       routes: routes({
         'GET /offerings/{id}': { status: 200, body: offering({ kind: 'season' }) },
@@ -592,7 +596,7 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
 
     await chooseType(YOUTH);
     const self = await screen.findByRole('checkbox', {
-      name: 'You (Robin). Not eligible. Youth enrollment is for children.. Choose an activity for this age.',
+      name: 'You (Robin). Not eligible. This registration type is for children.. Look for another activity that fits.',
     });
     // Blocked under youth: not ticked, cannot be ticked, and nothing to add yet.
     expect(self).toBeDisabled();
@@ -775,9 +779,7 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
             { personId: IDS.childA, intents: [{ intent: 'youth', eligibility: eligible() }] },
             {
               personId: IDS.childB,
-              intents: [
-                { intent: 'youth', eligibility: ineligible('Ben is older than this age band.') },
-              ],
+              intents: [{ intent: 'youth', eligibility: ineligible() }],
             },
           ],
         }),
@@ -788,14 +790,29 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
     expect(screen.getByLabelText('Step 1 of 5, Who')).toBeOnTheScreen();
     const ben = screen.getByTestId(`participant-${IDS.childB}`);
     // The reasons and the alternative are written inside Ben's card, under his name.
+    // PA-11: in customer words, by the reason's code; the staff-only override is not offered.
     for (const text of [
       'Ben',
       'Not eligible',
-      'Ben is older than this age band.',
-      'Choose an activity for this age.',
+      'Ages 9 to 12. Ben is 13.',
+      'Look for another activity that fits.',
     ]) {
       expect(within(ben).getByText(text)).toBeOnTheScreen();
     }
+    expect(screen.queryByText(/override eligibility/)).toBeNull();
+    expect(screen.queryByText(/The participant is 13/)).toBeNull();
+    // The API's own words stay available in "Details for support".
+    await openSupportDetails(screen);
+    expect(
+      screen.getByText(
+        'Ben, above_maximum_age: The participant is 13 on 2026-09-01; this offering requires at least 9 and at most 12.',
+      ),
+    ).toBeOnTheScreen();
+    expect(
+      screen.getByText(
+        'Ben, option 2 (contact_staff): Staff with program authority may override eligibility with a recorded reason.',
+      ),
+    ).toBeOnTheScreen();
     // Initials only, and hidden from screen readers: the card's name says who it is.
     expect(within(ben).getByText('B', { includeHiddenElements: true })).toBeOnTheScreen();
     expect(within(ben).queryByText('B')).toBeNull();

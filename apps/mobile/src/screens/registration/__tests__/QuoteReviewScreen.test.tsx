@@ -15,7 +15,7 @@ import {
 } from '../../../features/registration/testing/fixtures';
 import { createRegistrationTestApp } from '../../../features/registration/testing/registration-test-app';
 import { QuoteReviewScreen, byPerson } from '../QuoteReviewScreen';
-import { openSupportDetails } from '../../../testing/ui-surfaces';
+import { codesOutsideSupport, openSupportDetails } from '../../../testing/ui-surfaces';
 
 const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), navigate: jest.fn() };
 jest.mock('expo-router', () => ({
@@ -92,7 +92,60 @@ describe('SCR-C-12 QuoteReviewScreen', () => {
       ),
     ).toBeOnTheScreen();
     expect(await screen.findByText('Cancellation: Program cancellation')).toBeOnTheScreen();
-    expect(screen.getByText('• refund/compensation: refund (POL-009, DEC-009)')).toBeOnTheScreen();
+    // PA-11: the default the API applied reads in plain words; its codes are in the fold only.
+    expect(
+      screen.getByText('• If the facility cancels, you get your money back.'),
+    ).toBeOnTheScreen();
+    expect(screen.queryByText(/POL-009/)).toBeNull();
+    expect(codesOutsideSupport(screen)).toEqual([]);
+    await openSupportDetails(screen);
+    expect(
+      screen.getByText('Standard term: refund/compensation: refund (POL-009, DEC-009)'),
+    ).toBeOnTheScreen();
+  });
+
+  it('PA-11 SPK-UX-011: no policy or decision code shows outside "Details for support" on Review', async () => {
+    renderQuote({
+      routes: routes({
+        'GET /registration-quotes/{id}': {
+          status: 200,
+          body: quote({
+            policies: {
+              overpaymentPolicyVersionId: null,
+              installmentPolicyVersionId: null,
+              refundPolicyVersionId: null,
+              defaults: [
+                'installment: engineering default (POL-016, DEC-008)',
+                'installment.maxInstallments: engineering default 4 (POL-016, DEC-008)',
+                'overpayment: hold as credit pending approval (POL-015, DEC-008)',
+                'refund/compensation: credit (POL-009, DEC-009)',
+                'surcharge: engineering default (POL-099, DEC-099)',
+              ],
+            },
+          }),
+        },
+      }),
+    });
+    expect(await screen.findByText('Cancellation: Program cancellation')).toBeOnTheScreen();
+    expect(
+      screen.getByText("• Paying in parts follows the facility's standard terms."),
+    ).toBeOnTheScreen();
+    expect(
+      screen.getByText(
+        '• If you pay more than you owe, the extra is kept as credit until the facility checks it.',
+      ),
+    ).toBeOnTheScreen();
+    expect(
+      screen.getByText('• If the facility cancels, you get account credit.'),
+    ).toBeOnTheScreen();
+    expect(
+      screen.getByText("• Any other terms follow the facility's standard rules."),
+    ).toBeOnTheScreen();
+    expect(codesOutsideSupport(screen)).toEqual([]);
+    await openSupportDetails(screen);
+    expect(
+      screen.getByText('Standard term 5: surcharge: engineering default (POL-099, DEC-099)'),
+    ).toBeOnTheScreen();
   });
 
   it('SPK-PAY-013, SPK-PAY-015: shows the per-class price, the count and the product, and which price applied and why', async () => {

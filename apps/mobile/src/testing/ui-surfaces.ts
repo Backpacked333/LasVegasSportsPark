@@ -11,10 +11,13 @@
  * - `renderSurface(ui, { theme })`: renders a component inside the test app (`createTestApp`) in
  *   the classic or the Legends theme, once its providers have settled. No `MotionProvider`, so
  *   motion is reduced unless the test adds one.
+ * - `codesOutsideSupport(screen)`: the rendered text that shows an internal code outside the
+ *   "Details for support" fold (PA-11); a screen test expects it to be empty.
  */
 import { act, fireEvent, render, type screen as rntlScreen } from '@testing-library/react-native';
 import type { ReactElement } from 'react';
 import { RefreshControl, StyleSheet, type StyleProp, type ViewStyle } from 'react-native';
+import { BANNED_CUSTOMER_CODES } from '../copy/vocabulary';
 import { SUPPORT_DETAILS_TITLE } from '../ui/SupportDetails';
 import type { ThemeName } from '../ui/theme';
 import { createTestApp, type TestAppOptions } from './test-app';
@@ -71,4 +74,38 @@ export function pressedStyle(
     .find((instance) => typeof instance.props.style === 'function');
   if (!pressable) throw new Error(`No pressable named "${name}" with a pressed style.`);
   return StyleSheet.flatten((pressable.props.style as PressableStyle)({ pressed })) ?? {};
+}
+
+type JsonNode = { type: string; props: Record<string, unknown>; children: JsonChild[] | null };
+type JsonChild = JsonNode | string;
+
+/**
+ * PA-11, SPK-UX-011 (**Proposed**): every piece of text the rendered screen shows or speaks (text,
+ * accessibility labels and values) that carries an internal code (`SCR-`, `SPK-`, `DEC-`, `POL-`,
+ * `PA-` with a digit, `§`), while the "Details for support" folds are closed. A closed fold renders
+ * nothing inside it, so whatever this finds is outside the fold. The copy guard reads the source;
+ * this catches text built at run time from the API's answers (policy defaults, reasons).
+ */
+export function codesOutsideSupport(scope: Pick<typeof rntlScreen, 'toJSON'>): string[] {
+  const found: string[] = [];
+  const check = (text: unknown) => {
+    if (typeof text !== 'string' || text === '') return;
+    if (BANNED_CUSTOMER_CODES.some((banned) => banned.pattern.test(text))) found.push(text);
+  };
+  const walk = (node: JsonChild | JsonChild[] | null) => {
+    if (node === null) return;
+    if (Array.isArray(node)) {
+      node.forEach(walk);
+      return;
+    }
+    if (typeof node === 'string') {
+      check(node);
+      return;
+    }
+    check(node.props.accessibilityLabel);
+    check((node.props.accessibilityValue as { text?: unknown } | undefined)?.text);
+    walk(node.children);
+  };
+  walk(scope.toJSON() as JsonChild | JsonChild[] | null);
+  return found;
 }

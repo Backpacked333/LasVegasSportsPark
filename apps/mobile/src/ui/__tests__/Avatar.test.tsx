@@ -24,6 +24,16 @@ describe('Avatar (ADR-008)', () => {
     expect(initialsFor('')).toBe('?');
   });
 
+  it('SPK-UX-009: initials ignore brackets and punctuation; a bracketed name is the person', () => {
+    expect(initialsFor('You (Dev)')).toBe('D');
+    expect(initialsFor('You (Robin Lee)')).toBe('RL');
+    expect(initialsFor("Mary-Jane O'Neil")).toBe('MO');
+    expect(initialsFor('(Ava) ')).toBe('A');
+    expect(initialsFor('Ben ()')).toBe('B');
+    expect(initialsFor('"Coach" Sam!')).toBe('CS');
+    expect(initialsFor('-- ?')).toBe('?');
+  });
+
   it("SPK-UX-009: is an image named by the person's name, and not a control", async () => {
     await renderSurface(<Avatar name="Ava Lee" id="p-1" />);
     expect(screen.getByRole('image', { name: 'Ava Lee' })).toBeOnTheScreen();

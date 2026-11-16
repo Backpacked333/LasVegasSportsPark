@@ -15,6 +15,7 @@ import { useQueries } from '@tanstack/react-query';
 import { useCallback, useMemo } from 'react';
 import { useApi, useApp } from '../../providers/AppProviders';
 import type { StatusBadgeProps } from '../../ui/StatusBadge';
+import { customerEligibilityLines, subjectOf } from './eligibility-words';
 import type { RegistrationIntent } from './format';
 
 export type RegistrationOptions = Schema<'RegistrationOptions'>;
@@ -180,19 +181,18 @@ export function eligibilityStatus(result: EligibilityResult): StatusBadgeProps {
 }
 
 /**
- * Every message the API gave with the result (reasons, then permitted alternatives). A passing
- * result keeps only the "complete the required acknowledgments" alternative, which is what is left
- * to do; the alternatives to a refusal are shown only when the result does not pass.
+ * What a customer reads with the result, in plain words (`eligibility-words.ts`, PA-11): one
+ * sentence per reason, then the alternatives they can act on. A passing result keeps only the
+ * "sign the forms" alternative, which is what is left to do; the alternatives to a refusal are
+ * shown only when the result does not pass. The API's own messages are for "Details for support"
+ * (`eligibilitySupportLines`).
  */
-export function eligibilityMessages(result: EligibilityResult): {
+export function eligibilityMessages(
+  result: EligibilityResult,
+  displayName = '',
+): {
   reasons: string[];
   alternatives: string[];
 } {
-  const passes = result.eligible || result.overridden;
-  return {
-    reasons: result.reasons.map((r) => r.message),
-    alternatives: result.alternatives
-      .filter((a) => !passes || a.kind === 'complete_acknowledgment')
-      .map((a) => a.message),
-  };
+  return customerEligibilityLines(result, subjectOf(displayName));
 }

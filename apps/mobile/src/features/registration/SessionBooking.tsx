@@ -52,8 +52,10 @@ import {
 import type { Participant } from './participants';
 import { ChoiceCard } from '../../ui/ChoiceList';
 import { Section } from '../../ui/Section';
+import { SupportDetails } from '../../ui/SupportDetails';
 import { Text } from '../../ui/Text';
 import { layout, makeStyles, spacing } from '../../ui/theme';
+import { eligibilitySupportLines } from './eligibility-words';
 import { PersonCard } from './WhoCards';
 
 type Offering = Schema<'Offering'>;
@@ -334,7 +336,7 @@ export function SessionBookingFlow({
             const allowed = mayRegister(options, p.personId);
             const result = eligibilityOf(options, p.personId, intent);
             const blocked = result ? blockingEligibilityReasons(result).length > 0 : false;
-            const messages = result ? eligibilityMessages(result) : null;
+            const messages = result ? eligibilityMessages(result, p.displayName) : null;
             return (
               <PersonCard
                 key={p.personId}
@@ -365,6 +367,14 @@ export function SessionBookingFlow({
             );
           })}
         </View>
+        <SupportDetails
+          lines={participants.flatMap((p) => {
+            if (!mayRegister(options, p.personId)) return [];
+            const result = eligibilityOf(options, p.personId, intent);
+            return result ? eligibilitySupportLines(result, p.displayName) : [];
+          })}
+          testID="session-eligibility-support"
+        />
       </Section>
 
       <Section title="Which session?">
