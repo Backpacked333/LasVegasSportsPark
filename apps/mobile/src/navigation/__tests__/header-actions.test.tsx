@@ -6,6 +6,7 @@
 import type { FakeHandler } from '@sportspark/api-client/testing';
 import { fireEvent, renderRouter, screen, waitFor } from 'expo-router/testing-library';
 import { basket, IDS, line } from '../../features/registration/testing/fixtures';
+import { me, ok } from '../../screens/account/__tests__/fixtures';
 import { createTestApp } from '../../testing/test-app';
 import { DESTINATIONS } from '../destinations';
 import { RootNavigator } from '../RootNavigator';
@@ -13,6 +14,7 @@ import { RootNavigator } from '../RootNavigator';
 function renderApp(initialUrl: string, baskets: FakeHandler) {
   const app = createTestApp({
     routes: {
+      'GET /me': ok(me({})),
       'GET /me/inbox': { status: 200, body: { items: [], nextCursor: null } },
       'GET /me/baskets': baskets,
     },
@@ -36,7 +38,9 @@ describe('Cart in the header (PA-11 SPK-UX-002)', () => {
     'from the %s header (%s), "Cart" opens the cart in progress',
     async (_title, path) => {
       const { router } = renderApp(path, page([basket({ lines: [line()] })]));
-      fireEvent.press(await screen.findByRole('button', { name: 'Cart' }));
+      const cart = await screen.findByTestId('header-cart');
+      expect(cart).toHaveProp('accessibilityLabel', 'Cart');
+      fireEvent.press(cart);
       expect(router.getPathname()).toBe(`/registration/basket/${IDS.basket}`);
     },
   );

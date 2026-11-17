@@ -19,6 +19,7 @@ import {
   type Principal,
   type RemoveContactPointInput,
   type SearchPeopleQueryInput,
+  type SelfRegistrationInput,
   type UpdatePersonInput,
   type UpdatePersonResponse,
 } from '@sportspark/contracts';
@@ -30,6 +31,7 @@ import {
   CLOCK,
   DATABASE,
   Outbox,
+  RECORD_AUTHORITY_PORT,
   UnitOfWork,
   assertExpectedRevision,
   assertImportPrincipal,
@@ -38,6 +40,7 @@ import {
   snapshotActor,
   executorFor,
   type Clock,
+  type RecordAuthorityPort,
   type Trx,
 } from '../../../kernel';
 import { IdentityActions } from '../identity.actions';
@@ -86,9 +89,10 @@ const DUPLICATE_SCORE_NAME_DOB = 80;
 const DUPLICATE_SCORE_VERIFIED_CONTACT = 70;
 
 /**
- * Persons and contact points (SPK-IAM-001/002/007). A person is never an account, a household or
- * a relationship; this service only records who exists. Reads are object-level authorized against
- * the real subject so a stranger receives NOT_FOUND, never confirmation (§4.10).
+ * Persons and contact points (SPK-IAM-001/002/007). `registerSelf` is the only account-linking
+ * bootstrap here and derives its target from the authenticated account; ordinary person commands
+ * remain separate from accounts, households and relationships. Reads are object-level authorized
+ * against the real subject so a stranger receives NOT_FOUND, never confirmation (§4.10).
  */
 @Injectable()
 export class PeopleService implements PersonDirectoryPort {
@@ -99,7 +103,85 @@ export class PeopleService implements PersonDirectoryPort {
     private readonly authorization: AuthorizationService,
     private readonly audit: AuditWriter,
     private readonly outbox: Outbox,
+    @Inject(RECORD_AUTHORITY_PORT) private readonly recordAuthority: RecordAuthorityPort,
   ) {}
+
+  /**
+   * SCR-C-01, SPK-IAM-001/002/007, §4.9. This account-owner bootstrap verifies the real account
+   * bound to the authenticated principal rather than authorizing a caller-selected person: it
+   * locks that organization/account row and requires it to be active and unlinked.
+   */
+  async registerSelf(
+    principal: Principal,
+    input: SelfRegistrationInput,
+    correlationId: string | null,
+  ): Promise<PersonDetail> {
+    const organizationId = principal.organizationId;
+    const accountId = principal.accountId;
+    if (!organizationId || !accountId) throw errors.authenticationRequired();
+    if (principal.kind !== 'customer') {
+      throw errors.accessDenied('Only an unlinked customer account can create an adult record.');
+    }
+
+    return runInTransaction(this.uow, async ({ trx }) => {
+      const account = await trx
+        .selectFrom('accounts')
+        .selectAll()
+        .where('organization_id', '=', organizationId)
+        .where('id', '=', accountId)
+        .forUpdate()
+        .executeTakeFirst();
+      if (!account || account.status !== 'active') {
+        throw errors.authenticationRequired('No active account matches this token.');
+      }
+      if (account.person_id !== null) {
+        throw errors.resourceConflict('This account is already linked to a person.');
+      }
+      assertExpectedRevision(input.expectedRevision, account.revision);
+
+      await this.recordAuthority.assertNoLegacyAuthority(organizationId, 'person', {}, trx);
+      await this.recordAuthority.assertNoLegacyAuthority(organizationId, 'account', {}, trx);
+
+      const person = await this.createSelfRegisteredAdult(trx, principal, input, correlationId);
+      const linked = await trx
+        .updateTable('accounts')
+        .set({ person_id: person.id, revision: account.revision + 1 })
+        .where('organization_id', '=', organizationId)
+        .where('id', '=', accountId)
+        .where('status', '=', 'active')
+        .where('person_id', 'is', null)
+        .where('revision', '=', account.revision)
+        .executeTakeFirst();
+      ensureUpdated(linked.numUpdatedRows, () =>
+        errors.staleRevision(account.revision, account.revision + 1),
+      );
+      await this.audit.record(trx, {
+        organizationId,
+        actor: principal,
+        action: IdentityActions.selfRegister.id,
+        targetType: 'account',
+        targetId: accountId,
+        beforeRevision: account.revision,
+        afterRevision: account.revision + 1,
+        reason: input.reason,
+        correlationId,
+        details: {
+          operation: 'link',
+          personId: person.id,
+          via: 'self_service',
+          policyReferences: input.policyReferences ?? [],
+        },
+      });
+      await this.outbox.enqueue(trx, IdentityEvents.accountLinked, {
+        organizationId,
+        aggregateType: 'account',
+        aggregateId: accountId,
+        payload: { accountId, personId: person.id, via: 'self_service' },
+        correlationId,
+      });
+      return person;
+    });
+  }
 
   /**
    * IF-40's name for `createPerson` (the migration import calls it with `{ importProvenance }`).
@@ -238,6 +320,59 @@ export class PeopleService implements PersonDirectoryPort {
       await this.detectDuplicates(trx, principal, organizationId, id, correlationId);
       return this.detail(trx, organizationId, id);
     });
+  }
+
+  /** SCR-C-01: create the adult self-registration person inside the account-linking transaction. */
+  private async createSelfRegisteredAdult(
+    trx: Trx,
+    principal: Principal,
+    input: SelfRegistrationInput,
+    correlationId: string | null,
+  ): Promise<PersonDetail> {
+    const organizationId = principal.organizationId;
+    if (!organizationId) throw errors.authenticationRequired();
+    assertKindMatchesDateOfBirth('adult', input.dateOfBirth, this.clock.now());
+
+    const id = newId();
+    await trx
+      .insertInto('persons')
+      .values({
+        id,
+        organization_id: organizationId,
+        kind: 'adult',
+        given_name: input.givenName,
+        family_name: input.familyName,
+        date_of_birth: input.dateOfBirth,
+        source: 'self_service',
+        created_by: json(snapshotActor(principal)),
+        created_by_person_id: null,
+        merged_into_person_id: null,
+      })
+      .execute();
+    await this.audit.record(trx, {
+      organizationId,
+      actor: principal,
+      action: IdentityActions.selfRegister.id,
+      targetType: 'person',
+      targetId: id,
+      afterRevision: 1,
+      reason: input.reason,
+      correlationId,
+      details: {
+        kind: 'adult',
+        source: 'self_service',
+        policyReferences: input.policyReferences ?? [],
+      },
+    });
+    await this.outbox.enqueue(trx, IdentityEvents.personCreated, {
+      organizationId,
+      aggregateType: 'person',
+      aggregateId: id,
+      payload: { personId: id, kind: 'adult', source: 'self_service' },
+      correlationId,
+    });
+    await this.detectDuplicates(trx, principal, organizationId, id, correlationId);
+    return this.detail(trx, organizationId, id);
   }
 
   async getPerson(principal: Principal, id: string): Promise<PersonDetail> {

@@ -7,6 +7,7 @@ import {
   PersonNamesQuery,
   RemoveContactPointBody,
   SearchPeopleQuery,
+  SelfRegistrationBody,
   UpdatePersonBody,
   z,
   type Claim,
@@ -20,6 +21,7 @@ import {
   type PersonName,
   type PersonSearchResult,
   type Principal,
+  type SelfRegistrationInput,
   type UpdatePersonResponse,
 } from '@sportspark/contracts';
 import {
@@ -87,6 +89,17 @@ export class PeopleController {
       staffMemberships,
       authorities,
     };
+  }
+
+  @Post('me/registration')
+  @Idempotent()
+  @RecordAuthority('person', 'organization')
+  registerSelf(
+    @CurrentPrincipal() principal: Principal,
+    @ZodBody(SelfRegistrationBody) body: SelfRegistrationInput,
+    @CorrelationId() correlationId: string | null,
+  ): Promise<PersonDetail> {
+    return this.people.registerSelf(principal, body, correlationId);
   }
 
   @Post('people')

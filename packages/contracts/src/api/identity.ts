@@ -121,6 +121,15 @@ export const CreatePersonBody = z
   .openapi('CreatePersonRequest');
 export type CreatePersonInput = z.infer<typeof CreatePersonBody>;
 
+export const SelfRegistrationBody = withCommandMeta({
+  givenName: PersonName,
+  familyName: PersonName,
+  dateOfBirth: DateOnly,
+})
+  .strict()
+  .openapi('SelfRegistrationRequest');
+export type SelfRegistrationInput = z.infer<typeof SelfRegistrationBody>;
+
 export const UpdatePersonBody = withCommandMeta({
   givenName: PersonName.optional(),
   familyName: PersonName.optional(),
@@ -1056,6 +1065,15 @@ register({
   summary: 'Describe the authenticated principal and its current authorities',
   requirements: 'SPK-IAM-001, SPK-IAM-003',
   response: MeResponse,
+});
+register({
+  method: 'post',
+  path: '/me/registration',
+  summary: 'Create and link an adult person record to the authenticated unlinked customer account',
+  requirements: 'SCR-C-01, SPK-IAM-001, SPK-IAM-002, SPK-IAM-007, §4.9',
+  body: SelfRegistrationBody,
+  response: PersonDetailSchema,
+  idempotent: true,
 });
 register({
   method: 'post',

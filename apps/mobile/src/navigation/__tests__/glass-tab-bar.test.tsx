@@ -3,9 +3,10 @@
  * floats over the page as one glass surface and screens leave room for it; without glass the bar
  * is the solid bar in the layout. The five tabs and their labels are the same either way.
  */
-import { render, waitFor } from '@testing-library/react-native';
+import { render, waitFor, within } from '@testing-library/react-native';
 import { renderRouter, screen } from 'expo-router/testing-library';
 import { ScrollView, StyleSheet, Text, type TextStyle } from 'react-native';
+import { me, ok } from '../../screens/account/__tests__/fixtures';
 import { createTestApp } from '../../testing/test-app';
 import { GlassProvider, type GlassMode } from '../../ui/GlassSurface';
 import { BottomBarInsetContext, Screen } from '../../ui/Screen';
@@ -17,7 +18,7 @@ import { TAB_ROW_HEIGHT } from '../TabsNavigator';
 const EMPTY_INBOX = { status: 200, body: { items: [], nextCursor: null } };
 
 function renderApp(mode?: GlassMode) {
-  const app = createTestApp({ routes: { 'GET /me/inbox': EMPTY_INBOX } });
+  const app = createTestApp({ routes: { 'GET /me': ok(me({})), 'GET /me/inbox': EMPTY_INBOX } });
   const TestRootLayout = () => (
     <app.wrapper>
       {mode ? (
@@ -58,7 +59,8 @@ describe('tab bar on glass (ADR-001)', () => {
 
   it('SPK-UX-009: the labels have a line of their own, so "Explore" is never cut at the bottom', async () => {
     renderApp();
-    const label = await screen.findByText('Explore');
+    const tab = await screen.findByTestId('tab-discover');
+    const label = within(tab).getByText('Explore');
     const style = StyleSheet.flatten(label.props.style) as TextStyle;
     expect(style.lineHeight).toBeGreaterThanOrEqual(15);
     // The row holds the item's padding, the 30 pt icon pill, the gap and the label line.
