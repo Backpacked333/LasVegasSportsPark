@@ -4,6 +4,7 @@
  * count (failed read, nothing unread) is the plain name and no badge.
  */
 import { renderRouter, screen, waitFor } from 'expo-router/testing-library';
+import { me, ok } from '../../screens/account/__tests__/fixtures';
 import { createTestApp } from '../../testing/test-app';
 import { inboxButtonLabel, unreadBadgeText } from '../../api/inbox-unread';
 import { RootNavigator } from '../RootNavigator';
@@ -11,6 +12,7 @@ import { RootNavigator } from '../RootNavigator';
 function renderApp(unread: { status: number; body: unknown } | null) {
   const app = createTestApp({
     routes: {
+      'GET /me': ok(me({})),
       'GET /me/inbox': { status: 200, body: { items: [], nextCursor: null } },
       ...(unread ? { 'GET /me/inbox/unread-count': unread } : {}),
     },
