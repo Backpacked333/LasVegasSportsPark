@@ -6,14 +6,17 @@
  */
 import type { FakeHandler } from '@sportspark/api-client/testing';
 import { fireEvent, renderRouter, screen } from 'expo-router/testing-library';
-import { createTestApp } from '../../testing/test-app';
+import { apiError, me, ok } from '../../screens/account/__tests__/fixtures';
+import { createTestApp, TEST_SESSION } from '../../testing/test-app';
 import { DESTINATIONS } from '../destinations';
 import { RootNavigator } from '../RootNavigator';
 
 const EMPTY_INBOX = { status: 200, body: { items: [], nextCursor: null } };
 
 function renderApp(initialUrl = '/', routes: Record<string, FakeHandler> = {}) {
-  const app = createTestApp({ routes: { 'GET /me/inbox': EMPTY_INBOX, ...routes } });
+  const app = createTestApp({
+    routes: { 'GET /me': ok(me({})), 'GET /me/inbox': EMPTY_INBOX, ...routes },
+  });
   const TestRootLayout = () => (
     <app.wrapper>
       <RootNavigator />
@@ -27,6 +30,31 @@ function renderApp(initialUrl = '/', routes: Record<string, FakeHandler> = {}) {
 }
 
 describe('primary navigation (SPK-UX-002)', () => {
+  it('SCR-C-01 §4.13: routes an unlinked customer to onboarding before person-scoped queries', async () => {
+    const { app, router } = renderApp('/', {
+      'GET /me': ok(me({ person: null })),
+      'GET /me/family-calendar': () =>
+        apiError(401, 'AUTHENTICATION_REQUIRED', { nextAction: 'authenticate' }),
+    });
+    const personScopedRoutes = new Set([
+      '/me/family-calendar',
+      '/me/fixtures',
+      '/me/team-entries',
+      '/me/inbox',
+    ]);
+
+    expect(
+      await screen.findByRole('button', { name: 'Create a new adult record' }),
+    ).toBeOnTheScreen();
+    expect(router.getPathname()).toBe('/onboarding');
+    expect(await app.sessionStore.load()).toEqual(TEST_SESSION);
+    expect(
+      app.fake.requests.filter(
+        (request) => request.route !== null && personScopedRoutes.has(request.route),
+      ),
+    ).toHaveLength(0);
+  });
+
   it('PA-11 SPK-UX-002: has exactly five tabs, in order, with accessible labels: Home, Explore, Calendar, Teams, You', async () => {
     renderApp();
     expect(DESTINATIONS.map((d) => d.title)).toEqual([

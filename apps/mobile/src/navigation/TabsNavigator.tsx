@@ -15,14 +15,18 @@
  * surface and the content scrolls beneath it; screens leave room for it through
  * `BottomBarInsetContext`. Everywhere else the bar is the solid bar in the layout it always was.
  */
-import { Tabs } from 'expo-router';
+import { Redirect, Tabs } from 'expo-router';
 import { StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useMe } from '../features/today/queries';
+import { useApp } from '../providers/AppProviders';
 import { AppHeader } from '../ui/AppHeader';
 import { GlassSurface, useGlassMode } from '../ui/GlassSurface';
 import { Icon } from '../ui/Icon';
 import { useHaptics } from '../ui/PressableScale';
+import { QueryBoundary } from '../ui/QueryBoundary';
 import { BottomBarInsetContext } from '../ui/Screen';
+import { StateView } from '../ui/StateView';
 import { fonts, layout, makeStyles, radius, spacing, useTheme } from '../ui/theme';
 import { DESTINATIONS } from './destinations';
 import { HeaderActions } from './HeaderActions';
@@ -55,6 +59,31 @@ export function TabHeader({ title }: { title?: string }) {
 export const TAB_ROW_HEIGHT = 60;
 
 export function TabsNavigator() {
+  const session = useApp().session;
+  const me = useMe();
+  if (session.status === 'loading') {
+    return <StateView variant="loading" label="your account" />;
+  }
+  if (session.status === 'signed_in' && me.data === undefined) {
+    return (
+      <QueryBoundary
+        query={me}
+        label="your account"
+        empty={{ title: 'No account details', description: '' }}
+        unavailableOffline={['opening your account']}
+      >
+        {() => null}
+      </QueryBoundary>
+    );
+  }
+  if (session.status === 'signed_in' && me.data?.person === null) {
+    return <Redirect href="/onboarding" />;
+  }
+  return <PrimaryTabs />;
+}
+
+/** An unlinked customer must finish SCR-C-01 before person-scoped tab queries mount (§4.13, SPK-IAM-001/002/007). */
+function PrimaryTabs() {
   const { colors } = useTheme();
   const styles = useStyles();
   const floating = useGlassMode() !== 'solid';
