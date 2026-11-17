@@ -582,8 +582,8 @@ describe('SCR-C-01 OnboardingScreen', () => {
     fireEvent.changeText(screen.getByLabelText('Date of birth'), '1990-05-12');
     fireEvent.press(screen.getByRole('button', { name: 'Create and link my record' }));
 
-    expect(screen.getByText('Enter your given name.')).toBeOnTheScreen();
-    expect(screen.getByText('Enter your family name.')).toBeOnTheScreen();
+    expect(screen.getByRole('alert', { name: /Enter your given name/ })).toBeOnTheScreen();
+    expect(screen.getByRole('alert', { name: /Enter your family name/ })).toBeOnTheScreen();
     expect(app.fake.requests.filter((request) => request.method === 'POST')).toHaveLength(0);
   });
 
@@ -592,18 +592,19 @@ describe('SCR-C-01 OnboardingScreen', () => {
     const app = createTestApp({
       routes: {
         'GET /me': ok(me({ person: null })),
-        'POST /me/registration': apiError(400, 'VALIDATION_FAILED', {
-          details: { derivedKind: 'child', dateOfBirth: '2010-05-12' },
-        }),
+        'POST /me/registration': () =>
+          apiError(400, 'VALIDATION_FAILED', {
+            details: { derivedKind: 'child', dateOfBirth: '2010-05-12' },
+          }),
       },
     });
     render(<OnboardingScreen />, { wrapper: app.wrapper });
     await screen.findByLabelText('Claim code');
     fireEvent.press(screen.getByRole('button', { name: 'Create a new adult record' }));
     fireEvent.press(screen.getByRole('button', { name: 'Create and link my record' }));
-    expect(screen.getByText('Enter your given name.')).toBeOnTheScreen();
-    expect(screen.getByText('Enter your family name.')).toBeOnTheScreen();
-    expect(screen.getByText('Enter a valid date of birth.')).toBeOnTheScreen();
+    expect(screen.getByRole('alert', { name: /Enter your given name/ })).toBeOnTheScreen();
+    expect(screen.getByRole('alert', { name: /Enter your family name/ })).toBeOnTheScreen();
+    expect(screen.getByRole('alert', { name: /Enter a valid date of birth/ })).toBeOnTheScreen();
     expect(app.fake.requests.filter((request) => request.method === 'POST')).toHaveLength(0);
 
     fireEvent.changeText(screen.getByLabelText('Given name'), 'Taylor');
@@ -612,9 +613,9 @@ describe('SCR-C-01 OnboardingScreen', () => {
     fireEvent.press(screen.getByRole('button', { name: 'Create and link my record' }));
 
     expect(
-      await screen.findByText(
-        'This date of birth is below the adult registration age. Ask the front desk to help you.',
-      ),
+      await screen.findByRole('alert', {
+        name: /This date of birth is below the adult registration age/,
+      }),
     ).toBeOnTheScreen();
     expect(screen.getByLabelText('Given name')).toHaveProp('value', 'Taylor');
     expect(screen.getByLabelText('Family name')).toHaveProp('value', 'Morgan');

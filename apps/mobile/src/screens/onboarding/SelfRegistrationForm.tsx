@@ -3,7 +3,7 @@ import type { ApiError } from '@sportspark/api-client';
 import { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useApiCommand } from '../../api/useApiCommand';
-import { forgetLinkSecretIfUnchanged } from '../../links/link-secrets';
+import { forgetLinkSecretIfUnchanged, readLinkSecret } from '../../links/link-secrets';
 import { useConnectivity } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { CommandError } from '../../ui/CommandError';
@@ -32,14 +32,10 @@ function dateOfBirthError(error: ApiError | null): string | null {
   return null;
 }
 
-export function SelfRegistrationForm({
-  initialClaimToken,
-}: {
-  initialClaimToken: string | null;
-}) {
+export function SelfRegistrationForm({ initialClaimToken }: { initialClaimToken: string | null }) {
   const { reachable } = useConnectivity();
   const offline = reachable === false;
-  const [claimTokenAtEntry] = useState(initialClaimToken);
+  const [claimTokenAtEntry] = useState(() => initialClaimToken ?? readLinkSecret('claim'));
   const [givenName, setGivenName] = useState('');
   const [familyName, setFamilyName] = useState('');
   const [dateOfBirth, setDateOfBirth] = useState<string | null>(null);

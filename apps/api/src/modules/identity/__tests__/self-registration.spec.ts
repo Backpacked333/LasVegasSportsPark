@@ -447,13 +447,18 @@ describe('self-registration legacy record authority (SCR-C-01, §5.6)', () => {
   it.each(['person', 'account'] as const)(
     '§5.6: refuses self-registration while legacy authority owns %s without creating records or events',
     async (recordCategory) => {
+      const organization = await seedOrganization(t.db, {
+        slug: `legacy-refusal-${recordCategory}-${newId()}`,
+      });
+      const organizationId = organization.organizationId;
       const familyName = `LegacyRefusal${recordCategory}`;
-      const account = await createAccountFixture(t, { personId: null });
+      const account = await createAccountFixture(t, { personId: null, organizationId });
       const assignmentId = await createAuthorityAssignmentFixture(t, {
         recordCategory,
         authoritativeSystem: 'legacy',
+        organizationId,
       });
-      const principal = customerPrincipal(t.organizationId, {
+      const principal = customerPrincipal(organizationId, {
         accountId: account.id,
         personId: null,
       });
@@ -478,6 +483,7 @@ describe('self-registration legacy record authority (SCR-C-01, §5.6)', () => {
         await t.db
           .selectFrom('persons')
           .select('id')
+          .where('organization_id', '=', organizationId)
           .where('family_name', '=', familyName)
           .execute(),
       ).toEqual([]);
@@ -486,13 +492,14 @@ describe('self-registration legacy record authority (SCR-C-01, §5.6)', () => {
           .selectFrom('audit_records')
           .select('id')
           .where('action', '=', 'identity.self_register')
-          .where('organization_id', '=', t.organizationId)
+          .where('organization_id', '=', organizationId)
           .execute(),
       ).toEqual([]);
       expect(
         await t.db
           .selectFrom('outbox_events')
           .select(['event_type', 'aggregate_id'])
+          .where('organization_id', '=', organizationId)
           .where('event_type', 'in', ['identity.person_created', 'identity.account_linked'])
           .execute(),
       ).toEqual([]);
