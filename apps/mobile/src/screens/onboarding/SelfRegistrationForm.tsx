@@ -3,6 +3,7 @@ import type { ApiError } from '@sportspark/api-client';
 import { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useApiCommand } from '../../api/useApiCommand';
+import { forgetLinkSecretIfUnchanged } from '../../links/link-secrets';
 import { useConnectivity } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { CommandError } from '../../ui/CommandError';
@@ -31,14 +32,26 @@ function dateOfBirthError(error: ApiError | null): string | null {
   return null;
 }
 
-export function SelfRegistrationForm() {
+export function SelfRegistrationForm({
+  initialClaimToken,
+}: {
+  initialClaimToken: string | null;
+}) {
   const { reachable } = useConnectivity();
   const offline = reachable === false;
+  const [claimTokenAtEntry] = useState(initialClaimToken);
   const [givenName, setGivenName] = useState('');
   const [familyName, setFamilyName] = useState('');
   const [dateOfBirth, setDateOfBirth] = useState<string | null>(null);
   const [attempted, setAttempted] = useState(false);
-  const registration = useApiCommand('post', '/me/registration', { invalidate: [ME_QUERY_KEY] });
+  const registration = useApiCommand('post', '/me/registration', {
+    invalidate: [ME_QUERY_KEY],
+    beforeInvalidate: () => {
+      if (claimTokenAtEntry !== null) {
+        forgetLinkSecretIfUnchanged('claim', claimTokenAtEntry);
+      }
+    },
+  });
 
   const givenNameError = attempted && givenName.trim() === '' ? 'Enter your given name.' : null;
   const familyNameError = attempted && familyName.trim() === '' ? 'Enter your family name.' : null;

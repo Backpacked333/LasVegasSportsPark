@@ -33,6 +33,8 @@ export type CommandRequest<M extends CommandMethod, P extends PathsWithMethod<M>
 export interface UseApiCommandOptions {
   /** Query keys (or prefixes) to refetch after success, e.g. `['api', '/me/inbox']`. */
   invalidate?: readonly (readonly unknown[])[];
+  /** Synchronous cleanup after success and before invalidated queries are read again. */
+  beforeInvalidate?: () => void;
 }
 
 export function useApiCommand<M extends CommandMethod, P extends PathsWithMethod<M>>(
@@ -66,6 +68,7 @@ export function useApiCommand<M extends CommandMethod, P extends PathsWithMethod
     },
     onSuccess: async () => {
       tracker.current.complete();
+      options.beforeInvalidate?.();
       await Promise.all(
         (options.invalidate ?? []).map((queryKey) => queryClient.invalidateQueries({ queryKey })),
       );

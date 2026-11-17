@@ -65,6 +65,14 @@ export function forgetLinkSecret(kind: LinkSecretKind, id?: string): void {
   secrets.delete(keyOf(kind, id));
 }
 
+export function forgetLinkSecretIfUnchanged(
+  kind: LinkSecretKind,
+  expectedToken: string,
+  id?: string,
+): void {
+  if (readLinkSecret(kind, id) === expectedToken) forgetLinkSecret(kind, id);
+}
+
 /**
  * The session changed: `null` when nobody is signed in now (signed out, or no stored session),
  * otherwise the signed-in session. Secrets of any other account are dropped, including those kept

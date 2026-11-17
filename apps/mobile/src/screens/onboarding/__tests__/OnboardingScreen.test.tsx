@@ -518,6 +518,62 @@ describe('SCR-C-01 OnboardingScreen', () => {
     });
   });
 
+  it('SCR-C-01: clears the pending claim link after registration before showing the linked step', async () => {
+    holdLinkSecret('claim', TOKEN);
+    let linked = false;
+    const app = createTestApp({
+      routes: {
+        'GET /me': () => fakeResponse(200, me({ person: linked ? SELF_PERSON : null })),
+        'GET /people/{id}': ok(personDetail(SELF_PERSON)),
+        'POST /me/registration': () => {
+          linked = true;
+          return fakeResponse(201, personDetail(SELF_PERSON));
+        },
+      },
+    });
+    render(<OnboardingScreen />, { wrapper: app.wrapper });
+    await screen.findByLabelText('Claim code');
+    fireEvent.press(screen.getByRole('button', { name: 'Create a new adult record' }));
+    fireEvent.changeText(screen.getByLabelText('Given name'), 'Taylor');
+    fireEvent.changeText(screen.getByLabelText('Family name'), 'Morgan');
+    fireEvent.changeText(screen.getByLabelText('Date of birth'), '1990-05-12');
+    fireEvent.press(screen.getByRole('button', { name: 'Create and link my record' }));
+
+    expect(await screen.findByRole('header', { name: 'Email or phone' })).toBeOnTheScreen();
+    expect(screen.queryByRole('header', { name: 'Claim a record from the front desk' })).toBeNull();
+    expect(readLinkSecret('claim')).toBeNull();
+  });
+
+  it('SCR-C-01: preserves a newer claim link received while registration was pending', async () => {
+    holdLinkSecret('claim', TOKEN);
+    let linked = false;
+    const nextToken = 'later-claim-token';
+    const app = createTestApp({
+      routes: {
+        'GET /me': () => fakeResponse(200, me({ person: linked ? SELF_PERSON : null })),
+        'GET /people/{id}': ok(personDetail(SELF_PERSON)),
+        'POST /me/registration': () => {
+          holdLinkSecret('claim', nextToken);
+          linked = true;
+          return fakeResponse(201, personDetail(SELF_PERSON));
+        },
+      },
+    });
+    render(<OnboardingScreen />, { wrapper: app.wrapper });
+    await screen.findByLabelText('Claim code');
+    fireEvent.press(screen.getByRole('button', { name: 'Create a new adult record' }));
+    fireEvent.changeText(screen.getByLabelText('Given name'), 'Taylor');
+    fireEvent.changeText(screen.getByLabelText('Family name'), 'Morgan');
+    fireEvent.changeText(screen.getByLabelText('Date of birth'), '1990-05-12');
+    fireEvent.press(screen.getByRole('button', { name: 'Create and link my record' }));
+
+    expect(
+      await screen.findByRole('header', { name: 'Claim a record from the front desk' }),
+    ).toBeOnTheScreen();
+    expect(screen.getByLabelText('Claim code')).toHaveProp('value', nextToken);
+    expect(readLinkSecret('claim')).toBe(nextToken);
+  });
+
   it('SCR-C-01: does not submit empty names when a valid date of birth is already entered', async () => {
     const app = createTestApp({ routes: { 'GET /me': ok(me({ person: null })) } });
     render(<OnboardingScreen />, { wrapper: app.wrapper });
@@ -532,6 +588,7 @@ describe('SCR-C-01 OnboardingScreen', () => {
   });
 
   it('validates required fields and shows the API adult-age refusal without clearing input', async () => {
+    holdLinkSecret('claim', TOKEN);
     const app = createTestApp({
       routes: {
         'GET /me': ok(me({ person: null })),
@@ -562,6 +619,7 @@ describe('SCR-C-01 OnboardingScreen', () => {
     expect(screen.getByLabelText('Given name')).toHaveProp('value', 'Taylor');
     expect(screen.getByLabelText('Family name')).toHaveProp('value', 'Morgan');
     expect(screen.getByLabelText('Date of birth')).toHaveProp('value', '2010-05-12');
+    expect(readLinkSecret('claim')).toBe(TOKEN);
   });
 
   it('keeps registration input and disables submission while offline', async () => {
@@ -672,9 +730,7 @@ describe('SCR-C-01 three illustrated steps (ADR-008, PA-11)', () => {
     expect(screen.getByLabelText('Step 1 of 3, Sign in, Done')).toBeOnTheScreen();
     expect(screen.getByRole('header', { name: 'Link your record' })).toBeOnTheScreen();
     expect(
-      screen.getByText(
-        'Already have a record but no claim code? Ask the front desk to help.',
-      ),
+      screen.getByText('Already have a record but no claim code? Ask the front desk to help.'),
     ).toBeOnTheScreen();
     expect(artworkOf(2)).toBe(onboardingArtwork.family);
   });

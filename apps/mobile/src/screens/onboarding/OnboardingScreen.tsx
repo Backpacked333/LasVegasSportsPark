@@ -194,7 +194,7 @@ function UnlinkedOnboarding({ claimToken }: { claimToken: string | null }) {
       <StepHero
         step={1}
         title="Link your record"
-        message="Claim a record the front desk made, or create an adult record for this signed-in account."
+        message="Claim an existing record the front desk made, or create an adult record for this signed-in account."
       />
       <View style={styles.methods}>
         <Button
@@ -217,7 +217,13 @@ function UnlinkedOnboarding({ claimToken }: { claimToken: string | null }) {
         />
       </View>
       <View style={method === 'register' ? undefined : styles.hidden}>
-        <SelfRegistrationForm />
+        {method === 'register' ? (
+          <Text variant="callout" tone="muted" style={styles.note}>
+            Already have a record? Use a claim code instead. Creating a new record discards the
+            pending claim link after registration succeeds.
+          </Text>
+        ) : null}
+        <SelfRegistrationForm initialClaimToken={claimToken} />
       </View>
       <Text variant="callout" tone="muted" style={styles.note}>
         Already have a record but no claim code? Ask the front desk to help.
