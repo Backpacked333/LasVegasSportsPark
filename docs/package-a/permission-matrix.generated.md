@@ -3,7 +3,7 @@
 > Generated from code by `apps/api/scripts/emit-permission-matrix.ts`; do not edit by hand.
 > Regenerate with `pnpm build && pnpm permission-matrix` from the repository root.
 
-Every action registered with `defineActions` in the kernel action registry (`apps/api/src/kernel/authorization/actions.ts`) when the application module is loaded: 355 actions. This file is **Verified** in the sense of §6.7: each row is what `AuthorizationService` evaluates today. Proposed actions that are not registered, and pending decisions about who should hold an action, are in [`permission-matrix.md`](permission-matrix.md).
+Every action registered with `defineActions` in the kernel action registry (`apps/api/src/kernel/authorization/actions.ts`) when the application module is loaded: 356 actions. This file is **Verified** in the sense of §6.7: each row is what `AuthorizationService` evaluates today. Proposed actions that are not registered, and pending decisions about who should hold an action, are in [`permission-matrix.md`](permission-matrix.md).
 
 Columns: **Staff roles** may perform the action within their organization or facility scope; **Self** means a customer may act on themselves as the subject person; **Subject permission** is the grant a customer must hold over every subject person; **Team role** is the role a customer must hold on the target team entry; **Requirements** are the specification ids the action declares.
 
@@ -23,14 +23,14 @@ The namespace is the prefix of the action id: a domain module, or `exceptions` a
 | `exceptions`     | 3       |
 | `facilities`     | 9       |
 | `finance`        | 33      |
-| `identity`       | 45      |
+| `identity`       | 46      |
 | `migration`      | 14      |
 | `operations`     | 2       |
 | `reporting`      | 11      |
 | `scheduling`     | 11      |
 | `support`        | 8       |
 | `workforce`      | 20      |
-| **Total**        | **355** |
+| **Total**        | **356** |
 
 ## Actions
 
@@ -324,6 +324,7 @@ The namespace is the prefix of the action id: a domain module, or `exceptions` a
 | `identity.revoke_access`                      | Revoke a grant (staff, the grant holder, or the creator-guardian for a delegate they invited)                                                                                       | `program_manager`, `league_manager`, `general_manager`, `system_administrator`, `support_operator`                                                                                            | yes  | —                  | —            | SPK-IAM-006                                                        |
 | `identity.revoke_claim`                       | Revoke a pending claim token (leaked, misdelivered or issued in error)                                                                                                              | `front_desk`, `program_manager`, `league_manager`, `system_administrator`, `support_operator`                                                                                                 | no   | —                  | —            | SPK-IAM-002, SPK-IAM-006                                           |
 | `identity.revoke_invitation`                  | Revoke a pending invitation (staff or the inviter)                                                                                                                                  | `front_desk`, `program_manager`, `league_manager`, `system_administrator`, `support_operator`                                                                                                 | yes  | —                  | —            | SPK-IAM-004                                                        |
+| `identity.self_register`                      | Create and link an adult record for the authenticated unlinked customer account                                                                                                     | —                                                                                                                                                                                             | no   | —                  | —            | SPK-IAM-001, SPK-IAM-002, SPK-IAM-007, §4.9                        |
 | `identity.update_person`                      | Update a person record (self, guardians holding register, staff)                                                                                                                    | `front_desk`, `program_manager`, `league_manager`, `system_administrator`, `support_operator`                                                                                                 | yes  | `register`         | —            | SPK-IAM-001, §4.9                                                  |
 | `migration.abort_batch`                       | Abort a batch before any apply started (prelaunch abort)                                                                                                                            | `general_manager`, `system_administrator`                                                                                                                                                     | no   | —                  | —            | §5.8                                                               |
 | `migration.apply_batch`                       | Apply a reviewed batch through the owning modules (idempotent per external id; no charges, no notices)                                                                              | `general_manager`, `system_administrator`                                                                                                                                                     | no   | —                  | —            | §5.4, §4.7.5, §4.7.11, SPK-AT-024                                  |
