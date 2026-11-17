@@ -10,9 +10,10 @@
  *
  * 1. Sign in. Managed sign-in is DEC-018 (pending); development builds use the development
  *    sign-in behind the same entry.
- * 2. Your record: `GET /v1/me` `person`. Not linked yet: claim the record the front desk
- *    created (`POST /v1/claims/{token}/accept`). Creating one's own adult record is not offered by
- *    the API (customers may create only child records), so the desk does it.
+ * 2. Your record: `GET /v1/me` `person`. Not linked yet: claim the record the front desk created
+ *    (`POST /v1/claims/{token}/accept`) or create an adult record for this authenticated account
+ *    (`POST /v1/me/registration`). This does not create login credentials; identity-provider
+ *    selection and contact verification remain pending DEC-018.
  * 3. Email or phone: added, made primary or removed here (ContactPointStep); verified by the
  *    identity provider (DEC-018, pending).
  *    With it, the notification and camera permission explanations: their wording is DEC-061
@@ -26,6 +27,7 @@
  * not permitted (each step is one server fact); recovery required (resumes from server state).
  */
 import { useRouter } from 'expo-router';
+import { useState } from 'react';
 import { View } from 'react-native';
 import { onboardingArtwork, type OnboardingArt } from '../../artwork/manifest';
 import { pendingMessage } from '../../copy/pending';
@@ -44,6 +46,7 @@ import { continuousCorners, layout, makeStyles, radius, spacing } from '../../ui
 import { useMe } from '../account/components/account-data';
 import { ClaimForm } from '../account/components/ClaimForm';
 import { contactState, ContactPointStep, type ContactState } from './ContactPointStep';
+import { SelfRegistrationForm } from './SelfRegistrationForm';
 
 const NOT_STARTED: StatusBadgeProps = { tone: 'neutral', label: 'Not started' };
 const DONE: StatusBadgeProps = { tone: 'success', label: 'Done' };
@@ -166,7 +169,7 @@ function SignedInOnboarding({ claimToken }: { claimToken: string | null }) {
       query={me}
       label="your account"
       empty={{ title: 'No account details', description: '' }}
-      unavailableOffline={['claiming a record', 'adding an email or phone']}
+      unavailableOffline={['claiming or creating a record', 'adding an email or phone']}
     >
       {(data) =>
         data.person ? (
@@ -181,6 +184,7 @@ function SignedInOnboarding({ claimToken }: { claimToken: string | null }) {
 
 function UnlinkedOnboarding({ claimToken }: { claimToken: string | null }) {
   const styles = useStyles();
+  const [method, setMethod] = useState<'claim' | 'register'>('claim');
   return (
     <View>
       <Steps
@@ -190,16 +194,33 @@ function UnlinkedOnboarding({ claimToken }: { claimToken: string | null }) {
       <StepHero
         step={1}
         title="Link your record"
-        message="The front desk keeps a record for you and your family. Link it to this account with the claim code they gave you."
+        message="Claim a record the front desk made, or create an adult record for this signed-in account."
       />
+      <View style={styles.methods}>
+        <Button
+          label="Use a claim code"
+          variant={method === 'claim' ? 'primary' : 'secondary'}
+          onPress={() => setMethod('claim')}
+        />
+        <Button
+          label="Create a new adult record"
+          variant={method === 'register' ? 'primary' : 'secondary'}
+          onPress={() => setMethod('register')}
+        />
+      </View>
       {/* A code from another account's link is never kept in the field (R3-SECURITY-07). */}
-      <ClaimForm
-        key={claimToken ?? 'typed'}
-        initialToken={claimToken}
-        intro="Enter the claim code from the front desk. It links this account to the record they made, so no second record is made."
-      />
+      <View style={method === 'claim' ? undefined : styles.hidden}>
+        <ClaimForm
+          key={claimToken ?? 'typed'}
+          initialToken={claimToken}
+          intro="Enter the claim code from the front desk. It links this account to the record they made, so no second record is made."
+        />
+      </View>
+      <View style={method === 'register' ? undefined : styles.hidden}>
+        <SelfRegistrationForm />
+      </View>
       <Text variant="callout" tone="muted" style={styles.note}>
-        No claim code? Ask the front desk to make your record and link it to this account.
+        Already have a record but no claim code? Ask the front desk to help.
       </Text>
     </View>
   );
@@ -288,6 +309,8 @@ const useStyles = makeStyles(({ colors }) => ({
   },
   heading: { paddingHorizontal: layout.gutter, paddingTop: spacing.xl, paddingBottom: spacing.xs },
   note: { paddingHorizontal: layout.gutter, paddingTop: spacing.sm },
+  methods: { paddingHorizontal: layout.gutter, paddingTop: spacing.md, gap: spacing.sm },
+  hidden: { display: 'none' },
   actions: { paddingHorizontal: layout.gutter, paddingTop: spacing.lg, gap: spacing.sm },
   done: { paddingHorizontal: layout.gutter, paddingVertical: spacing.xl, gap: spacing.sm },
 }));

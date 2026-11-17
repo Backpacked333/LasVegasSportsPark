@@ -15,7 +15,11 @@ export const IdentityEvents = {
   ),
   accountLinked: defineEvent(
     'identity.account_linked',
-    z.object({ accountId: z.uuid(), personId: z.uuid(), via: z.enum(['staff', 'claim', 'merge']) }),
+    z.object({
+      accountId: z.uuid(),
+      personId: z.uuid(),
+      via: z.enum(['staff', 'claim', 'merge', 'self_service']),
+    }),
   ),
   accountRelinked: defineEvent(
     'identity.account_relinked',

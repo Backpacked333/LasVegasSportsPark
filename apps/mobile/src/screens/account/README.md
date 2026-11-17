@@ -55,7 +55,7 @@ the six permissions and date wording; `PersonAccess`, `ClaimForm`, `CommandError
 
 | What                                                                                        | Decision (owner)                                                                              | Where              |
 | ------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ------------------ |
-| Managed sign-in, verification codes, self-service recovery, creating one's own adult record | DEC-018 (Technical lead/account owners); adult self-registration also DEC-004                 | SCR-C-01, SCR-C-02 |
+| Managed sign-in, verification codes, self-service recovery, login credential creation and identity-provider selection | DEC-018 (Technical lead/account owners); adult-person self-registration for an authenticated unlinked account is implemented, while its age threshold remains the DEC-004 policy placeholder | SCR-C-01, SCR-C-02 |
 | Notification and camera permission explanations; registering this device for push           | DEC-061 (Technical lead/operator); messaging provider DEC-020 (Technical lead/account owners) | SCR-C-01, SCR-C-36 |
 | Channels the facility uses                                                                  | DEC-062 (Operator/privacy owner)                                                              | SCR-C-36           |
 | Adding a child; seeing other adults' permissions over the people one manages                | DEC-004 (Operator/privacy owner)                                                              | SCR-C-31           |

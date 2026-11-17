@@ -8,7 +8,7 @@ import { Image } from 'expo-image';
 import { onboardingArtwork } from '../../../artwork/manifest';
 import { clearLinkSecrets, holdLinkSecret, readLinkSecret } from '../../../links/link-secrets';
 import { useApp, type AppContextValue } from '../../../providers/AppProviders';
-import { createTestApp, TEST_SESSION } from '../../../testing/test-app';
+import { createTestApp, dropAnswers, TEST_SESSION } from '../../../testing/test-app';
 import { holdSecretOf } from '../../link/LinkLandingScreen';
 import {
   apiError,
@@ -485,6 +485,140 @@ describe('SCR-C-01 OnboardingScreen', () => {
     expect(screen.getByRole('button', { name: 'Go to Home' })).toBeOnTheScreen();
   });
 
+  it('SCR-C-01: creates an adult record, refreshes /me and continues to email or phone', async () => {
+    let linked = false;
+    let meReads = 0;
+    const app = createTestApp({
+      routes: {
+        'GET /me': () => {
+          meReads += 1;
+          return fakeResponse(200, me({ person: linked ? SELF_PERSON : null }));
+        },
+        'GET /people/{id}': ok(personDetail(SELF_PERSON)),
+        'POST /me/registration': () => {
+          linked = true;
+          return fakeResponse(201, personDetail(SELF_PERSON));
+        },
+      },
+    });
+    render(<OnboardingScreen />, { wrapper: app.wrapper });
+    await screen.findByLabelText('Claim code');
+    fireEvent.press(screen.getByRole('button', { name: 'Create a new adult record' }));
+    fireEvent.changeText(screen.getByLabelText('Given name'), ' Taylor ');
+    fireEvent.changeText(screen.getByLabelText('Family name'), ' Morgan ');
+    fireEvent.changeText(screen.getByLabelText('Date of birth'), '1990-05-12');
+    fireEvent.press(screen.getByRole('button', { name: 'Create and link my record' }));
+
+    expect(await screen.findByRole('header', { name: 'Email or phone' })).toBeOnTheScreen();
+    expect(meReads).toBeGreaterThanOrEqual(2);
+    expect(app.fake.requests.find((request) => request.method === 'POST')?.body).toEqual({
+      givenName: 'Taylor',
+      familyName: 'Morgan',
+      dateOfBirth: '1990-05-12',
+    });
+  });
+
+  it('SCR-C-01: does not submit empty names when a valid date of birth is already entered', async () => {
+    const app = createTestApp({ routes: { 'GET /me': ok(me({ person: null })) } });
+    render(<OnboardingScreen />, { wrapper: app.wrapper });
+    await screen.findByLabelText('Claim code');
+    fireEvent.press(screen.getByRole('button', { name: 'Create a new adult record' }));
+    fireEvent.changeText(screen.getByLabelText('Date of birth'), '1990-05-12');
+    fireEvent.press(screen.getByRole('button', { name: 'Create and link my record' }));
+
+    expect(screen.getByText('Enter your given name.')).toBeOnTheScreen();
+    expect(screen.getByText('Enter your family name.')).toBeOnTheScreen();
+    expect(app.fake.requests.filter((request) => request.method === 'POST')).toHaveLength(0);
+  });
+
+  it('validates required fields and shows the API adult-age refusal without clearing input', async () => {
+    const app = createTestApp({
+      routes: {
+        'GET /me': ok(me({ person: null })),
+        'POST /me/registration': apiError(400, 'VALIDATION_FAILED', {
+          details: { derivedKind: 'child', dateOfBirth: '2010-05-12' },
+        }),
+      },
+    });
+    render(<OnboardingScreen />, { wrapper: app.wrapper });
+    await screen.findByLabelText('Claim code');
+    fireEvent.press(screen.getByRole('button', { name: 'Create a new adult record' }));
+    fireEvent.press(screen.getByRole('button', { name: 'Create and link my record' }));
+    expect(screen.getByText('Enter your given name.')).toBeOnTheScreen();
+    expect(screen.getByText('Enter your family name.')).toBeOnTheScreen();
+    expect(screen.getByText('Enter a valid date of birth.')).toBeOnTheScreen();
+    expect(app.fake.requests.filter((request) => request.method === 'POST')).toHaveLength(0);
+
+    fireEvent.changeText(screen.getByLabelText('Given name'), 'Taylor');
+    fireEvent.changeText(screen.getByLabelText('Family name'), 'Morgan');
+    fireEvent.changeText(screen.getByLabelText('Date of birth'), '2010-05-12');
+    fireEvent.press(screen.getByRole('button', { name: 'Create and link my record' }));
+
+    expect(
+      await screen.findByText(
+        'This date of birth is below the adult registration age. Ask the front desk to help you.',
+      ),
+    ).toBeOnTheScreen();
+    expect(screen.getByLabelText('Given name')).toHaveProp('value', 'Taylor');
+    expect(screen.getByLabelText('Family name')).toHaveProp('value', 'Morgan');
+    expect(screen.getByLabelText('Date of birth')).toHaveProp('value', '2010-05-12');
+  });
+
+  it('keeps registration input and disables submission while offline', async () => {
+    const app = createTestApp({ routes: { 'GET /me': ok(me({ person: null })) } });
+    render(<OnboardingScreen />, { wrapper: app.wrapper });
+    await screen.findByLabelText('Claim code');
+    fireEvent.press(screen.getByRole('button', { name: 'Create a new adult record' }));
+    fireEvent.changeText(screen.getByLabelText('Given name'), 'Taylor');
+    fireEvent.changeText(screen.getByLabelText('Family name'), 'Morgan');
+    fireEvent.changeText(screen.getByLabelText('Date of birth'), '1990-05-12');
+    act(() => app.sources.setReachable(false));
+
+    expect(
+      screen.getByText('Creating your record needs a connection. Your details are kept.'),
+    ).toBeOnTheScreen();
+    expect(screen.getByRole('button', { name: 'Create and link my record' })).toBeDisabled();
+    expect(screen.getByLabelText('Given name')).toHaveProp('value', 'Taylor');
+    expect(screen.getByLabelText('Family name')).toHaveProp('value', 'Morgan');
+    expect(screen.getByLabelText('Date of birth')).toHaveProp('value', '1990-05-12');
+    expect(app.fake.requests.filter((request) => request.method === 'POST')).toHaveLength(0);
+  });
+
+  it('§4.9: retries an unknown registration outcome with the same body and key', async () => {
+    let linked = false;
+    const app = createTestApp({
+      routes: {
+        'GET /me': () => fakeResponse(200, me({ person: linked ? SELF_PERSON : null })),
+        'GET /people/{id}': ok(personDetail(SELF_PERSON)),
+        'POST /me/registration': () => {
+          linked = true;
+          return fakeResponse(201, personDetail(SELF_PERSON));
+        },
+      },
+    });
+    dropAnswers(app, 'POST', /\/me\/registration/, 1);
+    render(<OnboardingScreen />, { wrapper: app.wrapper });
+    await screen.findByLabelText('Claim code');
+    fireEvent.press(screen.getByRole('button', { name: 'Create a new adult record' }));
+    fireEvent.changeText(screen.getByLabelText('Given name'), 'Taylor');
+    fireEvent.changeText(screen.getByLabelText('Family name'), 'Morgan');
+    fireEvent.changeText(screen.getByLabelText('Date of birth'), '1990-05-12');
+    fireEvent.press(screen.getByRole('button', { name: 'Create and link my record' }));
+
+    expect(await screen.findByRole('button', { name: 'Check again' })).toBeOnTheScreen();
+    expect(screen.getByLabelText('Given name')).toHaveProp('value', 'Taylor');
+    expect(screen.getByLabelText('Family name')).toHaveProp('value', 'Morgan');
+    expect(screen.getByLabelText('Date of birth')).toHaveProp('value', '1990-05-12');
+    fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
+    expect(await screen.findByRole('header', { name: 'Email or phone' })).toBeOnTheScreen();
+    const registrations = app.fake.requests.filter((request) => request.method === 'POST');
+    expect(registrations.map((request) => request.headers['idempotency-key'])).toEqual([
+      'key-00000001',
+      'key-00000001',
+    ]);
+    expect(registrations[0]?.body).toEqual(registrations[1]?.body);
+  });
+
   it('shows the participant record step as linked once the API links the account (interrupted onboarding resumes)', async () => {
     const app = createTestApp({
       routes: {
@@ -539,7 +673,7 @@ describe('SCR-C-01 three illustrated steps (ADR-008, PA-11)', () => {
     expect(screen.getByRole('header', { name: 'Link your record' })).toBeOnTheScreen();
     expect(
       screen.getByText(
-        'No claim code? Ask the front desk to make your record and link it to this account.',
+        'Already have a record but no claim code? Ask the front desk to help.',
       ),
     ).toBeOnTheScreen();
     expect(artworkOf(2)).toBe(onboardingArtwork.family);

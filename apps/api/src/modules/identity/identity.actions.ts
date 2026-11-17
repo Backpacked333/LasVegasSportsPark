@@ -79,6 +79,13 @@ export const IdentityActions = defineActions({
     allowSelf: true,
     requirements: ['SPK-IAM-001'],
   },
+  /** Account ownership is checked against the principal's real account row in PeopleService. */
+  selfRegister: {
+    id: 'identity.self_register',
+    description: 'Create and link an adult record for the authenticated unlinked customer account',
+    staffRoles: [],
+    requirements: ['SPK-IAM-001', 'SPK-IAM-002', 'SPK-IAM-007', '§4.9'],
+  },
   readPerson: {
     id: 'identity.read_person',
     description: 'Read a person (self, guardians holding view, staff)',
