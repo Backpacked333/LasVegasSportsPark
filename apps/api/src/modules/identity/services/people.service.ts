@@ -31,6 +31,7 @@ import {
   CLOCK,
   DATABASE,
   Outbox,
+  RECORD_AUTHORITY_PORT,
   UnitOfWork,
   assertExpectedRevision,
   assertImportPrincipal,
@@ -39,6 +40,7 @@ import {
   snapshotActor,
   executorFor,
   type Clock,
+  type RecordAuthorityPort,
   type Trx,
 } from '../../../kernel';
 import { IdentityActions } from '../identity.actions';
@@ -101,6 +103,7 @@ export class PeopleService implements PersonDirectoryPort {
     private readonly authorization: AuthorizationService,
     private readonly audit: AuditWriter,
     private readonly outbox: Outbox,
+    @Inject(RECORD_AUTHORITY_PORT) private readonly recordAuthority: RecordAuthorityPort,
   ) {}
 
   /**
@@ -134,6 +137,9 @@ export class PeopleService implements PersonDirectoryPort {
       if (account.person_id !== null) {
         throw errors.resourceConflict('This account is already linked to a person.');
       }
+
+      await this.recordAuthority.assertNoLegacyAuthority(organizationId, 'person', {}, trx);
+      await this.recordAuthority.assertNoLegacyAuthority(organizationId, 'account', {}, trx);
 
       const person = await this.createSelfRegisteredAdult(trx, principal, input, correlationId);
       const linked = await trx

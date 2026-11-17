@@ -1,8 +1,10 @@
 import { newId } from '@sportspark/contracts';
 import { seedOrganization } from '@sportspark/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { customerPrincipal } from '../../../testing';
 import { createTestApp, type TestApp } from '../../../testing/test-app';
 import { IdentityModule } from '../identity.module';
+import { PeopleService } from '../services/people.service';
 import {
   authHeaderForAccount,
   authHeaderForPerson,
@@ -10,6 +12,8 @@ import {
   createPersonFixture,
   createStaffMemberFixture,
 } from '../testing/identity-fixtures';
+import { MigrationModule } from '../../migration/migration.module';
+import { createAuthorityAssignmentFixture } from '../../migration/testing/migration-fixtures';
 
 const key = () => `k-${newId()}`;
 const validBody = {
@@ -164,7 +168,10 @@ describe('customer self-registration (SCR-C-01, SPK-IAM-001/002/007, §4.9)', ()
       .where('event_type', '=', 'identity.account_linked')
       .where('aggregate_id', '=', account.id)
       .executeTakeFirstOrThrow();
-    expect(personEvent.payload).toMatchObject({ personId: response.body.id, source: 'self_service' });
+    expect(personEvent.payload).toMatchObject({
+      personId: response.body.id,
+      source: 'self_service',
+    });
     expect(accountEvent.payload).toMatchObject({
       accountId: account.id,
       personId: response.body.id,
@@ -203,9 +210,11 @@ describe('customer self-registration (SCR-C-01, SPK-IAM-001/002/007, §4.9)', ()
           .selectFrom('staff_memberships')
           .select('person_id')
           .where('person_id', '=', response.body.id)
-        .execute(),
+          .execute(),
       ]);
-    expect(householdsAfter.filter((household) => !householdsBefore.has(household.id))).toHaveLength(0);
+    expect(householdsAfter.filter((household) => !householdsBefore.has(household.id))).toHaveLength(
+      0,
+    );
     expect(relationships).toHaveLength(0);
     expect(grants).toHaveLength(0);
     expect(householdMemberships).toHaveLength(0);
@@ -294,11 +303,7 @@ describe('customer self-registration (SCR-C-01, SPK-IAM-001/002/007, §4.9)', ()
     const body = { ...validBody, familyName: 'RaceRegistration' };
     const customer = await authHeaderForAccount(t, account.id);
     const [registration, acceptedClaim] = await Promise.all([
-      t.http
-        .post('/v1/me/registration')
-        .set(customer)
-        .set('Idempotency-Key', key())
-        .send(body),
+      t.http.post('/v1/me/registration').set(customer).set('Idempotency-Key', key()).send(body),
       t.http
         .post('/v1/claims/accept')
         .set(customer)
@@ -351,10 +356,7 @@ describe('customer self-registration (SCR-C-01, SPK-IAM-001/002/007, §4.9)', ()
       .selectFrom('duplicate_candidates')
       .select(['person_a_id', 'person_b_id', 'status'])
       .where((eb) =>
-        eb.or([
-          eb('person_a_id', '=', response.body.id),
-          eb('person_b_id', '=', response.body.id),
-        ]),
+        eb.or([eb('person_a_id', '=', response.body.id), eb('person_b_id', '=', response.body.id)]),
       )
       .execute();
     expect(candidates).toHaveLength(1);
@@ -380,4 +382,74 @@ describe('customer self-registration (SCR-C-01, SPK-IAM-001/002/007, §4.9)', ()
         .execute(),
     ).toHaveLength(0);
   });
+});
+
+describe('self-registration legacy record authority (SCR-C-01, §5.6)', () => {
+  let t: TestApp;
+
+  beforeAll(async () => {
+    t = await createTestApp({
+      imports: [MigrationModule],
+      principalResolver: 'module',
+      clockStart: '2027-01-16T20:00:00.000Z',
+    });
+  });
+  afterAll(async () => {
+    await t.close();
+  });
+
+  it.each(['person', 'account'] as const)(
+    '§5.6: refuses self-registration while legacy authority owns %s without creating records or events',
+    async (recordCategory) => {
+      const familyName = `LegacyRefusal${recordCategory}`;
+      const account = await createAccountFixture(t, { personId: null });
+      const assignmentId = await createAuthorityAssignmentFixture(t, {
+        recordCategory,
+        authoritativeSystem: 'legacy',
+      });
+      const principal = customerPrincipal(t.organizationId, {
+        accountId: account.id,
+        personId: null,
+      });
+
+      await expect(
+        t.app
+          .get(PeopleService, { strict: false })
+          .registerSelf(principal, { ...validBody, familyName }, null),
+      ).rejects.toMatchObject({
+        code: 'ACCESS_DENIED',
+        nextAction: 'write_in_authoritative_system',
+        details: { code: 'LEGACY_AUTHORITY', recordCategory, assignmentId },
+      });
+
+      const storedAccount = await t.db
+        .selectFrom('accounts')
+        .select(['person_id', 'revision'])
+        .where('id', '=', account.id)
+        .executeTakeFirstOrThrow();
+      expect(storedAccount).toEqual({ person_id: null, revision: 1 });
+      expect(
+        await t.db
+          .selectFrom('persons')
+          .select('id')
+          .where('family_name', '=', familyName)
+          .execute(),
+      ).toEqual([]);
+      expect(
+        await t.db
+          .selectFrom('audit_records')
+          .select('id')
+          .where('action', '=', 'identity.self_register')
+          .where('organization_id', '=', t.organizationId)
+          .execute(),
+      ).toEqual([]);
+      expect(
+        await t.db
+          .selectFrom('outbox_events')
+          .select(['event_type', 'aggregate_id'])
+          .where('event_type', 'in', ['identity.person_created', 'identity.account_linked'])
+          .execute(),
+      ).toEqual([]);
+    },
+  );
 });

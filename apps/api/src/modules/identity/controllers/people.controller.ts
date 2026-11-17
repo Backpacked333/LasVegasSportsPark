@@ -93,6 +93,7 @@ export class PeopleController {
 
   @Post('me/registration')
   @Idempotent()
+  @RecordAuthority('person', 'organization')
   registerSelf(
     @CurrentPrincipal() principal: Principal,
     @ZodBody(SelfRegistrationBody) body: SelfRegistrationInput,
