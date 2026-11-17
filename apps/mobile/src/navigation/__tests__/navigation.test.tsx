@@ -55,6 +55,17 @@ describe('primary navigation (SPK-UX-002)', () => {
     ).toHaveLength(0);
   });
 
+  it('SPK-IAM-001/002/007 §4.13: an unlinked customer can sign out before linking a record', async () => {
+    const { app, router } = renderApp('/', { 'GET /me': ok(me({ person: null })) });
+
+    fireEvent.press(await screen.findByRole('button', { name: 'Sign out' }));
+
+    expect(await screen.findByRole('button', { name: 'Sign in' })).toBeOnTheScreen();
+    expect(router.getPathname()).toBe('/onboarding');
+    expect(await app.sessionStore.load()).toBeNull();
+    expect(app.fake.requests.filter((request) => request.method === 'POST')).toHaveLength(0);
+  });
+
   it('PA-11 SPK-UX-002: has exactly five tabs, in order, with accessible labels: Home, Explore, Calendar, Teams, You', async () => {
     renderApp();
     expect(DESTINATIONS.map((d) => d.title)).toEqual([

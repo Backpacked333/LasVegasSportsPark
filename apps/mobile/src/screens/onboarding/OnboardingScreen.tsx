@@ -183,6 +183,7 @@ function SignedInOnboarding({ claimToken }: { claimToken: string | null }) {
 }
 
 function UnlinkedOnboarding({ claimToken }: { claimToken: string | null }) {
+  const { signOut } = useApp();
   const styles = useStyles();
   const [method, setMethod] = useState<'claim' | 'register'>('claim');
   return (
@@ -228,6 +229,9 @@ function UnlinkedOnboarding({ claimToken }: { claimToken: string | null }) {
       <Text variant="callout" tone="muted" style={styles.note}>
         Already have a record but no claim code? Ask the front desk to help.
       </Text>
+      <View style={styles.actions}>
+        <Button label="Sign out" variant="secondary" onPress={() => void signOut()} />
+      </View>
     </View>
   );
 }
