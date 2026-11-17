@@ -115,6 +115,8 @@ describe('customer self-registration (SCR-C-01, SPK-IAM-001/002/007, §4.9)', ()
 
   it('SPK-IAM-002/007: links one self-service adult and records audit and domain events atomically', async () => {
     const account = await createAccountFixture(t, { personId: null });
+    const reason = 'Customer completed adult self-registration.';
+    const policyReferences = ['SPK-IAM-001', 'SPK-IAM-002', 'SPK-IAM-007', '§4.9'];
     const householdsBefore = new Set(
       (await t.db.selectFrom('households').select('id').execute()).map((household) => household.id),
     );
@@ -123,6 +125,9 @@ describe('customer self-registration (SCR-C-01, SPK-IAM-001/002/007, §4.9)', ()
       givenName: ` ${validBody.givenName} `,
       familyName: ` ${validBody.familyName} `,
       dateOfBirth: validBody.dateOfBirth,
+      expectedRevision: 1,
+      reason,
+      policyReferences,
     });
 
     expect(response.status).toBe(201);
@@ -147,13 +152,23 @@ describe('customer self-registration (SCR-C-01, SPK-IAM-001/002/007, §4.9)', ()
 
     const auditRows = await t.db
       .selectFrom('audit_records')
-      .select(['target_id', 'action', 'after_revision'])
+      .select(['target_id', 'action', 'after_revision', 'reason', 'details'])
       .where('target_id', 'in', [account.id, response.body.id])
       .execute();
     expect(auditRows).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ target_id: response.body.id, action: 'identity.self_register' }),
-        expect.objectContaining({ target_id: account.id, action: 'identity.self_register' }),
+        expect.objectContaining({
+          target_id: response.body.id,
+          action: 'identity.self_register',
+          reason,
+          details: expect.objectContaining({ policyReferences }),
+        }),
+        expect.objectContaining({
+          target_id: account.id,
+          action: 'identity.self_register',
+          reason,
+          details: expect.objectContaining({ policyReferences }),
+        }),
       ]),
     );
     const personEvent = await t.db
@@ -238,6 +253,37 @@ describe('customer self-registration (SCR-C-01, SPK-IAM-001/002/007, §4.9)', ()
       .where('family_name', '=', body.familyName)
       .execute();
     expect(people).toHaveLength(0);
+  });
+
+  it('§4.9: rejects a stale expected revision before creating or linking a person', async () => {
+    const account = await createAccountFixture(t, { personId: null });
+    const body = { ...validBody, familyName: 'StaleRegistrationRevision', expectedRevision: 2 };
+
+    const response = await register(account.id, body);
+
+    expect(response.status).toBe(409);
+    expect(response.body).toMatchObject({ code: 'STALE_REVISION' });
+    expect(
+      await t.db
+        .selectFrom('accounts')
+        .select(['person_id', 'revision'])
+        .where('id', '=', account.id)
+        .executeTakeFirstOrThrow(),
+    ).toEqual({ person_id: null, revision: 1 });
+    expect(
+      await t.db
+        .selectFrom('persons')
+        .select('id')
+        .where('family_name', '=', body.familyName)
+        .execute(),
+    ).toEqual([]);
+    expect(
+      await t.db
+        .selectFrom('outbox_events')
+        .select('id')
+        .where('aggregate_id', '=', account.id)
+        .execute(),
+    ).toEqual([]);
   });
 
   it('SPK-IAM-001: retries on the same idempotency key return the same person', async () => {

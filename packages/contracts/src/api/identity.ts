@@ -121,12 +121,12 @@ export const CreatePersonBody = z
   .openapi('CreatePersonRequest');
 export type CreatePersonInput = z.infer<typeof CreatePersonBody>;
 
-export const SelfRegistrationBody = z
-  .strictObject({
+export const SelfRegistrationBody = withCommandMeta({
     givenName: PersonName,
     familyName: PersonName,
     dateOfBirth: DateOnly,
   })
+  .strict()
   .openapi('SelfRegistrationRequest');
 export type SelfRegistrationInput = z.infer<typeof SelfRegistrationBody>;
 

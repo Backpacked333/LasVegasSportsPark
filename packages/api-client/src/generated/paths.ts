@@ -70832,8 +70832,11 @@ export type components = {
         SelfRegistrationRequest: {
             /** Format: date */
             dateOfBirth: string;
+            expectedRevision?: number;
             familyName: string;
             givenName: string;
+            policyReferences?: string[];
+            reason?: string;
         };
         SendNotificationRequest: {
             expectedRevision?: number;

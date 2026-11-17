@@ -137,6 +137,7 @@ export class PeopleService implements PersonDirectoryPort {
       if (account.person_id !== null) {
         throw errors.resourceConflict('This account is already linked to a person.');
       }
+      assertExpectedRevision(input.expectedRevision, account.revision);
 
       await this.recordAuthority.assertNoLegacyAuthority(organizationId, 'person', {}, trx);
       await this.recordAuthority.assertNoLegacyAuthority(organizationId, 'account', {}, trx);
@@ -162,8 +163,14 @@ export class PeopleService implements PersonDirectoryPort {
         targetId: accountId,
         beforeRevision: account.revision,
         afterRevision: account.revision + 1,
+        reason: input.reason,
         correlationId,
-        details: { operation: 'link', personId: person.id, via: 'self_service' },
+        details: {
+          operation: 'link',
+          personId: person.id,
+          via: 'self_service',
+          policyReferences: input.policyReferences ?? [],
+        },
       });
       await this.outbox.enqueue(trx, IdentityEvents.accountLinked, {
         organizationId,
@@ -349,8 +356,13 @@ export class PeopleService implements PersonDirectoryPort {
       targetType: 'person',
       targetId: id,
       afterRevision: 1,
+      reason: input.reason,
       correlationId,
-      details: { kind: 'adult', source: 'self_service' },
+      details: {
+        kind: 'adult',
+        source: 'self_service',
+        policyReferences: input.policyReferences ?? [],
+      },
     });
     await this.outbox.enqueue(trx, IdentityEvents.personCreated, {
       organizationId,
