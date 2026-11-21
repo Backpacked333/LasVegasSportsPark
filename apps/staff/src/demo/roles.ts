@@ -369,7 +369,11 @@ export const DEMO_ROLES: readonly DemoRole[] = [
         path: '/workspace',
         title: 'Take attendance',
         body: 'The class on now opens as big tiles: tap once for here, twice for late, hold for absent. Allergy and form flags sit on the tile; Pickup releases each child to an adult the family allowed.',
-        tryThis: ['Mark Leo here, then undo it', 'Open Noah’s allergy flag', 'Release Maya at pickup'],
+        tryThis: [
+          'Mark Leo here, then undo it',
+          'Open Noah’s allergy flag',
+          'Release Maya at pickup',
+        ],
       },
       {
         path: '/workspace/assessments',
