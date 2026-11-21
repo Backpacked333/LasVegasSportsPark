@@ -311,8 +311,8 @@ export function ReviewStep({
     if (offerEndsAt) return `${heldFor} held until the offer ends · ${countdown(offerEndsAt, now)}`;
     if (held && basket?.holdExpiresAt)
       return `${heldFor} held for ${countdown(basket.holdExpiresAt, now)}`;
-    if (status === 'needs_forms') return `Sign the form below to hold ${heldFor.toLowerCase()}`;
-    if (status === 'working') return `Holding ${heldFor.toLowerCase()}…`;
+    if (status === 'needs_forms') return `Sign the form below to hold ${heldFor}`;
+    if (status === 'working') return `Holding ${heldFor}…`;
     return null;
   })();
   const registrationLines = quote?.lines.filter((l) => l.lineKind === 'registration') ?? [];
