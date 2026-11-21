@@ -59612,7 +59612,7 @@ export type components = {
             personId?: string;
             policyReferences?: string[];
             reason?: string;
-            token: string;
+            token?: string;
         };
         AcceptTeamPlaceOfferRequest: {
             expectedRevision: number;
