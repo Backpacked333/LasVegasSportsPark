@@ -169,7 +169,7 @@ describe('SCR-W-07 AssessmentsScreen', () => {
         { 'GET /participants/{personId}/assessments': page([assessment()]) },
       ),
     });
-    render(app.at('/workspace/assessments'));
+    render(app.at('/workspace/assessments/records'));
     expect(
       await screen.findByText('Youth assessments and progression turned off'),
     ).toBeInTheDocument();
@@ -209,7 +209,7 @@ describe('SCR-W-07 AssessmentsScreen', () => {
         },
       ),
     });
-    render(app.at('/workspace/assessments'));
+    render(app.at('/workspace/assessments/records'));
     await assessAlex(user);
     // From the coach's own session: "nothing visible yet", never "not available" or "check the link".
     expect(await screen.findByText('No assessments you can see yet')).toBeInTheDocument();
@@ -292,7 +292,7 @@ describe('SCR-W-07 AssessmentsScreen', () => {
         },
       ),
     });
-    render(app.at('/workspace/assessments'));
+    render(app.at('/workspace/assessments/records'));
     await assessAlex(user);
     const row = await screen.findByRole('listitem', {
       name: 'ball_control, observed 2026-10-20',
@@ -342,7 +342,7 @@ describe('SCR-W-07 AssessmentsScreen', () => {
         },
       ),
     });
-    render(app.at('/workspace/assessments'));
+    render(app.at('/workspace/assessments/records'));
     await assessAlex(user);
     await user.click(await screen.findByRole('button', { name: 'Record an assessment' }));
     const form = screen.getByRole('form', { name: 'Record an assessment of Alex Rivera' });
@@ -370,7 +370,7 @@ describe('SCR-W-07 AssessmentsScreen', () => {
         },
       ),
     });
-    render(app.at('/workspace/assessments'));
+    render(app.at('/workspace/assessments/records'));
     await assessAlex(user);
     const row = await screen.findByRole('listitem', {
       name: 'ball_control, observed 2026-10-20',
@@ -414,7 +414,7 @@ describe('SCR-W-07 AssessmentsScreen', () => {
         },
       ),
     });
-    render(app.at('/workspace/assessments'));
+    render(app.at('/workspace/assessments/records'));
     await assessAlex(user);
     const row = await screen.findByRole('listitem', {
       name: 'ball_control, observed 2026-10-20',
@@ -474,7 +474,7 @@ describe('SCR-W-07 AssessmentsScreen', () => {
         },
       ),
     });
-    render(app.at('/workspace/assessments'));
+    render(app.at('/workspace/assessments/records'));
     const offering = await screen.findByLabelText('Offering');
     await waitFor(() =>
       expect(within(offering).getByRole('option', { name: /Junior skills/ })).toBeInTheDocument(),
@@ -540,7 +540,7 @@ describe('SCR-W-07 AssessmentsScreen', () => {
         },
       ),
     });
-    render(app.at('/workspace/assessments'));
+    render(app.at('/workspace/assessments/records'));
     const offering = await screen.findByLabelText('Offering');
     await waitFor(() =>
       expect(within(offering).getByRole('option', { name: /Junior skills/ })).toBeInTheDocument(),
@@ -573,7 +573,7 @@ describe('SCR-W-07 AssessmentsScreen', () => {
         },
       ),
     });
-    render(app.at('/workspace/assessments'));
+    render(app.at('/workspace/assessments/records'));
     await assessAlex(user);
     const row = await screen.findByRole('listitem', {
       name: 'ball_control, observed 2026-10-20',
@@ -608,7 +608,7 @@ describe('SCR-W-07 AssessmentsScreen', () => {
         },
       ),
     });
-    render(app.at('/workspace/assessments'));
+    render(app.at('/workspace/assessments/records'));
     await assessAlex(user);
     const row = await screen.findByRole('listitem', { name: 'ball_control, observed 2026-10-20' });
     await user.click(
@@ -666,7 +666,7 @@ describe('SCR-W-07 AssessmentsScreen', () => {
         },
       ),
     });
-    render(app.at('/workspace/assessments'));
+    render(app.at('/workspace/assessments/records'));
     await assessAlex(user);
     const row = await screen.findByRole('listitem', { name: 'ball_control, observed 2026-10-20' });
     await user.click(
@@ -723,7 +723,7 @@ describe('SCR-W-07 AssessmentsScreen', () => {
     const app = createTestApp({
       routes: routes({}, { 'GET /participants/{personId}/assessments': page([draft]) }),
     });
-    render(app.at('/workspace/assessments'));
+    render(app.at('/workspace/assessments/records'));
     await assessAlex(user);
     const row = await screen.findByRole('listitem', { name: 'ball_control, observed 2026-10-20' });
     expect(
@@ -744,7 +744,7 @@ describe('SCR-W-07 AssessmentsScreen', () => {
     const app = createTestApp({
       routes: routes({}, { 'GET /me/assignments': myAssignments([]) }),
     });
-    render(app.at('/workspace/assessments'));
+    render(app.at('/workspace/assessments/records'));
     expect(await screen.findByText('No coached sessions')).toBeInTheDocument();
   });
 });
@@ -812,7 +812,7 @@ describe('SCR-W-07 progression recommendations (SPK-YOUTH-006)', () => {
         },
       ),
     });
-    render(app.at('/workspace/assessments'));
+    render(app.at('/workspace/assessments/records'));
     await assessAlex(user);
     expect(screen.getByText(/DEC-055/)).toBeInTheDocument();
     const form = screen.getByRole('form', { name: 'Recommend a next step for Alex Rivera' });
@@ -873,7 +873,7 @@ describe('SCR-W-07 progression recommendations (SPK-YOUTH-006)', () => {
         },
       ),
     });
-    render(app.at('/workspace/assessments'));
+    render(app.at('/workspace/assessments/records'));
     await assessAlex(user);
     const form = screen.getByRole('form', { name: 'Recommend a next step for Alex Rivera' });
     await user.click(within(form).getByRole('radio', { name: 'A specific offering' }));
@@ -938,7 +938,7 @@ describe('SCR-W-07 recommending a program (SPK-YOUTH-006)', () => {
         },
       ),
     });
-    render(app.at('/workspace/assessments'));
+    render(app.at('/workspace/assessments/records'));
     await assessAlex(user);
     const form = screen.getByRole('form', { name: 'Recommend a next step for Alex Rivera' });
     await user.click(within(form).getByRole('radio', { name: 'A program' }));
@@ -988,7 +988,7 @@ describe('SCR-W-07 recommending a program (SPK-YOUTH-006)', () => {
         { 'GET /programs': () => fakeResponse(403, apiErrorBody('ACCESS_DENIED')) },
       ),
     });
-    render(app.at('/workspace/assessments'));
+    render(app.at('/workspace/assessments/records'));
     await assessAlex(user);
     const form = screen.getByRole('form', { name: 'Recommend a next step for Alex Rivera' });
     await user.click(within(form).getByRole('radio', { name: 'A program' }));
@@ -1034,7 +1034,7 @@ describe('SCR-W-07 templates for program managers (DEC-054)', () => {
         },
       ),
     });
-    render(app.at('/workspace/assessments'));
+    render(app.at('/workspace/assessments/records'));
     expect(await screen.findByText(/DEC-054/)).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Draft a template' }));
     const form = screen.getByRole('form', { name: 'Draft an assessment template' });
@@ -1107,7 +1107,7 @@ describe('SCR-W-07 templates for program managers (DEC-054)', () => {
         },
       ),
     });
-    render(app.at('/workspace/assessments'));
+    render(app.at('/workspace/assessments/records'));
     await user.click(await screen.findByRole('button', { name: 'Draft a template' }));
     const form = screen.getByRole('form', { name: 'Draft an assessment template' });
     const program = within(form).getByLabelText('Program');
@@ -1139,7 +1139,7 @@ describe('SCR-W-07 templates for program managers (DEC-054)', () => {
 
   it('does not offer templates to a coach without the template permission', async () => {
     const app = createTestApp({ routes: routes() });
-    render(app.at('/workspace/assessments'));
+    render(app.at('/workspace/assessments/records'));
     expect(await screen.findByLabelText('Session')).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Assessment templates' })).toBeNull();
   });

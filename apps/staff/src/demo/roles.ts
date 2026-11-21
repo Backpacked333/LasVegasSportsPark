@@ -367,14 +367,19 @@ export const DEMO_ROLES: readonly DemoRole[] = [
     tour: [
       {
         path: '/workspace',
-        title: 'My assignments',
-        body: 'A coach sees only their own sessions and teams. Each assignment opens attendance, release and messages.',
-        tryThis: ['Open the next Mini kickers class', 'Accept the class that is offered'],
+        title: 'Take attendance',
+        body: 'The class on now opens as big tiles: tap once for here, twice for late, hold for absent. Allergy and form flags sit on the tile; Pickup releases each child to an adult the family allowed.',
+        tryThis: ['Mark Leo here, then undo it', 'Open Noah’s allergy flag', 'Release Maya at pickup'],
       },
       {
         path: '/workspace/assessments',
-        title: 'Player assessments',
-        body: 'Assess players against a template. Recommendations feed placement for the next season.',
+        title: 'Skills assessment',
+        body: 'Three plain-word levels per skill, a note for the family and a suggested next class. Nothing reaches families until Send all.',
+      },
+      {
+        path: '/workspace/issues',
+        title: 'Report an injury',
+        body: 'Who, what, review: the family is told, the manager sees it on Today and it is kept with the child’s record.',
       },
       {
         path: '/workspace/offline',

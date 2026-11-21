@@ -21,10 +21,12 @@ import { ExportsScreen } from '../../screens/reports/ExportsScreen';
 import { InsightReportsScreen } from '../../screens/reports/InsightReportsScreen';
 import { OperatingReportsScreen } from '../../screens/reports/OperatingReportsScreen';
 import { ReportRunScreen } from '../../screens/reports/ReportRunScreen';
+import { ManagerWeekScreen } from '../../screens/reports/week/ManagerWeekScreen';
 import './insight-admin.css';
 
 const ROUTES: readonly [path: string, element: ReactElement][] = [
   ['/reports', <OperatingReportsScreen />],
+  ['/reports/week', <ManagerWeekScreen />],
   ['/reports/insight', <InsightReportsScreen />],
   ['/reports/exports', <ExportsScreen />],
   ['/reports/runs/:runId', <ReportRunScreen />],

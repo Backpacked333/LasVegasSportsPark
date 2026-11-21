@@ -204,7 +204,7 @@ export async function seedStaffCoach(ctx: DemoContext, staff: DemoStaff): Promis
       );
       if (nextClass) {
         await optional(ctx, 'the end-of-term assessments', () =>
-          assessments(ctx, staff, people.children, kickers, calendar),
+          assessments(ctx, staff, people.children, kickers, nextClass, calendar),
         );
       }
     }
@@ -212,6 +212,16 @@ export async function seedStaffCoach(ctx: DemoContext, staff: DemoStaff): Promis
   if (goalkeeper && goalkeeperSessionId) {
     await optional(ctx, 'the Sunday swap and open referee slot', () =>
       sundaySwap(ctx, staff, goalkeeper.id, goalkeeperSessionId),
+    );
+  }
+  // The duty manager on the coach's sessions (the Team week's manager row).
+  for (const [offering, sessionId] of [
+    [kickers, kickersSessionId],
+    [goalkeeper, goalkeeperSessionId],
+  ] as const) {
+    if (!offering || !sessionId) continue;
+    await optional(ctx, `the duty manager on ${offering.name}`, () =>
+      dutyManager(ctx, staff, offering.id, sessionId),
     );
   }
   await settle(ctx);
@@ -714,6 +724,7 @@ async function assessments(
   staff: DemoStaff,
   children: readonly Child[],
   kickers: Offering,
+  nextClass: Offering,
   calendar: DemoCalendar,
 ): Promise<void> {
   const youth = service(ctx, YouthProgressionService);
@@ -760,6 +771,27 @@ async function assessments(
       offeringId: kickers.id,
       limit: 20,
     });
+    const suggested = await youth.participantRecommendations(
+      staff.coach.principal,
+      child.personId,
+      {
+        offeringId: kickers.id,
+        limit: 5,
+      },
+    );
+    if (suggested.items.length === 0) {
+      await youth.createRecommendation(
+        staff.coach.principal,
+        {
+          participantPersonId: child.personId,
+          fromOfferingId: kickers.id,
+          recommendedOfferingId: nextClass.id,
+          suitability: 'Ready for the next step: confident on the ball and in the group.',
+          policyReferences: [],
+        },
+        null,
+      );
+    }
     if (existing.items.length > 0) continue;
     const [d, p, l, note] = values[child.givenName] ?? [2, 2, 2, ''];
     for (const [i, value] of [d, p, l].entries()) {
@@ -854,4 +886,42 @@ async function sundaySwap(
       null,
     );
   }
+}
+
+async function dutyManager(
+  ctx: DemoContext,
+  staff: DemoStaff,
+  offeringId: string,
+  sessionId: string,
+): Promise<void> {
+  const assignments = service(ctx, AssignmentsService);
+  const manager = staff.manager;
+  const existing = await assignments.list(manager.principal, {
+    targetType: 'session',
+    targetId: sessionId,
+    limit: 20,
+    order: 'asc',
+  });
+  if (existing.items.some((a) => a.personId === manager.personId)) return;
+  const created = await assignments.create(
+    manager.principal,
+    {
+      personId: manager.personId,
+      kind: 'supervisor',
+      role: 'duty_manager',
+      engagement: 'regular',
+      offer: true,
+      targetType: 'session',
+      targetId: sessionId,
+      offeringId,
+      policyReferences: [],
+    },
+    null,
+  );
+  await assignments.accept(
+    manager.principal,
+    created.assignment.id,
+    { policyReferences: [] },
+    null,
+  );
 }

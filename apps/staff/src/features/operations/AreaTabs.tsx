@@ -40,6 +40,7 @@ export const ARRIVAL_TABS: readonly AreaTab[] = [
 ];
 
 export const STAFF_TABS: readonly AreaTab[] = [
+  { path: '/staff/week', title: 'Team week' },
   { path: '/staff', title: 'Assignments and replacement', end: true },
   { path: '/staff/availability', title: 'Availability and qualifications' },
   { path: '/staff/fees', title: 'Fee and hours approvals' },
