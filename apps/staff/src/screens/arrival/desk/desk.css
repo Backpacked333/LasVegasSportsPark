@@ -690,33 +690,12 @@
   opacity: 0.8;
 }
 
-/* The local avatar (initials on the person's colour). */
+/* Desk faces: the shared Avatar, lit on dark and green surfaces. */
 .desk-avatar {
-  flex: none;
-  border-radius: 999px;
-  display: grid;
-  place-items: center;
+  font-size: calc(var(--avatar-size) * 0.36);
   font-weight: 700;
-  background: var(--person-1-bg);
-  color: var(--person-1);
 }
-.desk-avatar[data-colour='2'] {
-  background: var(--person-2-bg);
-  color: var(--person-2);
-}
-.desk-avatar[data-colour='3'] {
-  background: var(--person-3-bg);
-  color: var(--person-3);
-}
-.desk-avatar[data-colour='4'] {
-  background: var(--person-4-bg);
-  color: var(--person-4);
-}
-.desk-avatar[data-colour='5'] {
-  background: var(--person-5-bg);
-  color: var(--person-5);
-}
-.desk-avatar[data-ring] {
+.desk-avatar-lit {
   box-shadow: 0 0 0 3px var(--floodlight);
 }
 

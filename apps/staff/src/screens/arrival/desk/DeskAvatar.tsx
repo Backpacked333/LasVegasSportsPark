@@ -1,17 +1,9 @@
 /**
- * A person's face at the desk: initials on the person's colour (the product has no uploaded
- * profile photo yet; the redesign's photos are placeholders). The colour is stable per person.
- *
- * TODO(staff shell): swap for the shared staff Avatar primitive once it lands in `src/ui`; this
- * local version exists only so the front-desk screens do not wait for it.
+ * A person's face at the desk: the shared `Avatar` (photo, else initials on the person colour),
+ * decorative because the name is always written beside it. `ring` lights it with a floodlight
+ * ring for dark or green surfaces (the big green "Checked in" answer, S 3d).
  */
-import { initialsOf } from '../../../features/operations/format';
-
-function colourOf(personId: string): number {
-  let hash = 0;
-  for (let i = 0; i < personId.length; i += 1) hash = (hash * 31 + personId.charCodeAt(i)) >>> 0;
-  return (hash % 5) + 1;
-}
+import { Avatar } from '../../../ui/Avatar';
 
 export function DeskAvatar({
   personId,
@@ -22,18 +14,16 @@ export function DeskAvatar({
   personId: string;
   name: string;
   size?: number;
-  /** A light ring around the face (on a dark or green surface). */
+  /** A floodlight ring around the face (on a dark or green surface). */
   ring?: boolean;
 }) {
   return (
-    <span
-      className="desk-avatar"
-      data-colour={colourOf(personId)}
-      data-ring={ring || undefined}
-      style={{ width: size, height: size, fontSize: Math.round(size * 0.36) }}
-      aria-hidden="true"
-    >
-      {initialsOf(name)}
-    </span>
+    <Avatar
+      name={name}
+      personKey={personId}
+      size={size}
+      decorative
+      className={ring ? 'desk-avatar desk-avatar-lit' : 'desk-avatar'}
+    />
   );
 }
