@@ -18,6 +18,7 @@ import { seedCompetitions, seedLeague } from './demo/league';
 import { seedMessageSequence, seedSeasonSchedule } from './demo/messages';
 import { seedFrontDesk } from './demo/front-desk';
 import { nameParentHousehold, seedParentCore } from './demo/parent-core';
+import { seedParentRegister } from './demo/parent-register';
 import { seedFamilies, seedStaff } from './demo/people';
 import { seedRegister } from './demo/register';
 import { seedRegistrations } from './demo/registrations';
@@ -148,6 +149,7 @@ export async function seedDemo(
   await seedReports(ctx, staff);
   await settle(ctx);
   await seedParentCore(ctx, staff, spaces, base.child.personId);
+  await seedParentRegister(ctx, staff, families, base.child.personId);
   ctx.log('done');
 
   const slug = ctx.organizationSlug;
