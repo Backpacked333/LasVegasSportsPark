@@ -31,6 +31,8 @@ import {
 } from '../../screens/workspace/WorkspaceActivityScreens';
 import { ReportProblemScreen } from '../../screens/workspace/ReportProblemScreen';
 import { WorkspaceScreen } from '../../screens/workspace/WorkspaceScreen';
+import { InjuryReportScreen } from '../../screens/workspace/coach/InjuryReport';
+import { PickupReleaseScreen } from '../../screens/workspace/coach/PickupRelease';
 import { WORKSPACE_TABS } from './AreaTabs';
 import './operations.css';
 
@@ -59,10 +61,12 @@ const ROUTES: readonly [path: string, element: ReactElement][] = [
   [`${WORKSPACE_PATH}/assignments/:assignmentId/attendance`, <WorkspaceAttendanceScreen />],
   [`${WORKSPACE_PATH}/assignments/:assignmentId/report`, <MatchReportScreen />],
   [`${WORKSPACE_PATH}/assignments/:assignmentId/release`, <WorkspaceReleaseScreen />],
+  [`${WORKSPACE_PATH}/assignments/:assignmentId/pickup`, <PickupReleaseScreen />],
   [`${WORKSPACE_PATH}/assignments/:assignmentId/message`, <WorkspaceMessageScreen />],
   [`${WORKSPACE_PATH}/fees`, <MyFeesScreen />],
   [`${WORKSPACE_PATH}/assessments`, <AssessmentsScreen />],
   [`${WORKSPACE_PATH}/report-problem`, <ReportProblemScreen />],
+  [`${WORKSPACE_PATH}/issues`, <InjuryReportScreen />],
   [
     `${WORKSPACE_PATH}/offline`,
     <OfflineQueueScreen tabs={WORKSPACE_TABS} tabsLabel="Workspace screens" />,

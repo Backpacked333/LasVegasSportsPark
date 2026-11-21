@@ -1,0 +1,804 @@
+/*
+ * Coach workspace (staff S 2d, S 3g, S 4d, S 5c; redesign handoff, phone 390). Night header over
+ * solid content, big tap tiles, the tab bar floating below. Colours come from styles.css tokens
+ * (night, tone-*, pitch, floodlight); glyph and word on every state (never colour alone).
+ */
+
+.coach-flow[data-fullscreen] {
+  --coach-actions-bottom: 12px;
+  padding-bottom: 24px;
+}
+
+.coach-now,
+.coach-flow {
+  display: flex;
+  flex-direction: column;
+  margin: 0 calc(-1 * var(--page-gutter, 16px));
+  padding-bottom: 112px;
+}
+
+.coach-hero {
+  background: var(--night);
+  color: var(--night-text);
+  padding: 14px 18px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-radius: 0 0 24px 24px;
+}
+
+.coach-phase {
+  display: inline-flex;
+  align-self: flex-start;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--night-raised);
+  color: var(--night-text);
+  font-size: 12px;
+  font-weight: 700;
+}
+.coach-phase i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.coach-phase[data-live] {
+  background: var(--floodlight);
+  color: var(--night);
+}
+
+.coach-title {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  color: var(--night-ink);
+}
+
+.coach-meta {
+  font-size: 13px;
+  color: var(--night-muted);
+}
+
+.coach-counts {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  text-align: center;
+}
+.coach-counts li {
+  padding: 8px 4px;
+  border-radius: 12px;
+  background: var(--night-line);
+  display: flex;
+  flex-direction: column;
+}
+.coach-counts b {
+  font-size: 24px;
+  color: var(--night-ink);
+}
+.coach-counts span {
+  font-size: 11px;
+  color: var(--night-muted);
+}
+.coach-counts li[data-tone='late'] b {
+  color: var(--night-warn);
+}
+.coach-counts li[data-tone='absent'] b {
+  color: var(--night-danger);
+}
+
+.coach-body {
+  padding: 14px 14px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.coach-hint {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.coach-tiles {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.coach-tile-cell {
+  position: relative;
+  display: flex;
+}
+
+.coach-tile {
+  flex: 1;
+  min-height: 92px;
+  padding: 8px 4px 22px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--ink);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  font: inherit;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  transition:
+    background-color 160ms ease-out,
+    border-color 160ms ease-out;
+}
+.coach-tile:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.coach-tile-name {
+  font-size: 13px;
+}
+.coach-tile-state {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.coach-tile[data-state='present'] {
+  border: 2px solid var(--pitch);
+  background: var(--tone-success-bg);
+}
+.coach-tile[data-state='present'] .coach-tile-state {
+  color: var(--tone-success);
+  font-weight: 700;
+}
+.coach-tile[data-state='late'] {
+  border: 2px solid var(--warning-edge);
+  background: var(--tone-warning-bg);
+}
+.coach-tile[data-state='late'] .coach-tile-state {
+  color: var(--tone-warning);
+  font-weight: 700;
+}
+.coach-tile[data-state='absent'] {
+  border: 2px solid var(--tone-danger);
+  background: var(--tone-danger-bg);
+}
+.coach-tile[data-state='absent'] .coach-tile-state {
+  color: var(--tone-danger);
+  font-weight: 700;
+}
+.coach-tile[data-state='absent'] .ui-avatar {
+  filter: grayscale(0.6);
+}
+.coach-tile[data-state='present'] .ui-avatar,
+.coach-tile[data-state='late'] .ui-avatar {
+  box-shadow:
+    0 0 0 2px var(--card),
+    0 0 0 4px var(--pitch);
+  border-radius: 999px;
+}
+.coach-tile[data-state='absent'] .ui-avatar {
+  box-shadow:
+    0 0 0 2px var(--card),
+    0 0 0 4px var(--tone-danger);
+  border-radius: 999px;
+}
+.coach-tile[data-waiting] {
+  border-style: dashed;
+}
+.coach-tile[data-conflict] {
+  border: 2px dashed var(--tone-danger);
+  cursor: default;
+}
+
+.coach-flags {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 6px;
+  display: flex;
+  justify-content: center;
+  gap: 4px;
+  pointer-events: none;
+}
+.coach-flag {
+  pointer-events: auto;
+  border: 0;
+  padding: 0 6px;
+  min-height: 16px;
+  border-radius: 999px;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  cursor: pointer;
+  position: relative;
+}
+/* A 44 px hit area around the small flag chip. */
+.coach-flag::after {
+  content: '';
+  position: absolute;
+  inset: -14px -6px;
+}
+.coach-flag[data-tone='warning'] {
+  background: var(--tone-warning-bg);
+  color: var(--tone-warning);
+}
+.coach-flag[data-tone='danger'] {
+  background: var(--tone-danger-bg);
+  color: var(--tone-danger);
+}
+.coach-flag[data-tone='info'] {
+  background: var(--tone-info-bg);
+  color: var(--tone-info);
+}
+
+.coach-showall {
+  align-self: center;
+  border: 0;
+  background: none;
+  padding: 10px 16px;
+  min-height: 44px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--pitch);
+  cursor: pointer;
+}
+
+.coach-pickup {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--ink);
+  text-decoration: none;
+  min-height: 64px;
+}
+.coach-pickup > .icon:last-child {
+  color: var(--pitch);
+}
+.coach-pickup-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 13px;
+  background: var(--tone-pending-bg);
+  color: var(--tone-pending);
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+.coach-pickup-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.3;
+}
+.coach-pickup-text b {
+  font-size: 14px;
+}
+.coach-pickup-text span {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.coach-links {
+  margin: 4px 0 0;
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+  font-size: 13px;
+}
+
+.coach-sheet-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.coach-sheet-body p {
+  margin: 0;
+}
+.coach-care {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.coach-care li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: var(--tone-info-bg);
+  color: var(--ink);
+}
+.coach-care li[data-kind='allergy'] {
+  background: var(--tone-danger-bg);
+}
+.coach-care li[data-kind='allergy'] b {
+  color: var(--tone-danger);
+}
+
+/* ---------------------------------------------------------------------------------------------
+ * Full-screen coach flows (S 3g release, S 4d injury, S 5c assessment): a night top bar with a
+ * back or close control, the step on the right, content below and a bottom action bar.
+ * ------------------------------------------------------------------------------------------- */
+
+.coach-bar {
+  background: var(--night);
+  color: var(--night-ink);
+  padding: 12px 18px 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-radius: 0 0 24px 24px;
+}
+.coach-bar h2 {
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--night-ink);
+}
+.coach-bar-step {
+  font-size: 13px;
+  color: var(--night-muted);
+}
+.coach-bar a,
+.coach-bar button {
+  display: inline-grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  margin: -10px 0 -10px -10px;
+  border: 0;
+  background: none;
+  color: var(--floodlight);
+  cursor: pointer;
+}
+
+.coach-flow-body {
+  padding: 16px 16px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.coach-flow-body h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.coach-card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.coach-card-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+  min-width: 0;
+}
+.coach-card-text small {
+  font-size: 13px;
+  color: var(--muted);
+}
+.coach-card-text b {
+  font-size: 22px;
+  font-weight: 700;
+}
+.coach-card-text b.coach-card-name {
+  font-size: 16px;
+}
+
+.coach-actions {
+  position: sticky;
+  bottom: var(--coach-actions-bottom, 96px);
+  margin-top: 8px;
+  display: flex;
+  gap: 10px;
+  padding: 16px 0 8px;
+  background: linear-gradient(transparent, var(--sand) 18px);
+}
+.coach-primary,
+.coach-secondary {
+  min-height: 56px;
+  border-radius: 999px;
+  font: inherit;
+  font-size: 16px;
+  font-weight: 700;
+  padding: 0 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  cursor: pointer;
+}
+.coach-primary {
+  flex: 1;
+  border: 0;
+  background: var(--pitch);
+  color: var(--on-primary);
+}
+.coach-primary:disabled {
+  background: var(--track);
+  color: var(--faint);
+  cursor: not-allowed;
+}
+.coach-secondary {
+  border: 1px solid var(--line-strong);
+  background: var(--card);
+  color: var(--ink);
+}
+
+/* S 3g: authorised adults. */
+.coach-adults {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+}
+.coach-adult {
+  position: relative;
+  width: 100%;
+  min-height: 160px;
+  border-radius: 20px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 14px 8px;
+  font: inherit;
+  color: var(--ink);
+  cursor: pointer;
+}
+.coach-adult b {
+  font-size: 15px;
+}
+.coach-adult-role {
+  font-size: 12.5px;
+  color: var(--muted);
+  line-height: 1.3;
+  text-align: center;
+}
+.coach-adult[aria-pressed='true'] {
+  border: 2px solid var(--pitch);
+  background: var(--tone-success-bg);
+}
+.coach-adult[aria-pressed='true'] .coach-adult-role {
+  color: var(--tone-success);
+  font-weight: 600;
+}
+.coach-adult-check {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--pitch);
+  color: var(--on-primary);
+  display: grid;
+  place-items: center;
+}
+.coach-adult[data-kind='other'] {
+  border: 1px dashed var(--tone-danger-line);
+  background: var(--danger-wash);
+}
+.coach-adult[data-kind='other'] b {
+  color: var(--tone-danger);
+}
+.coach-adult[data-kind='other'] .icon {
+  color: var(--tone-danger);
+}
+
+.coach-note {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* S 4d: choice chips and check rows. */
+.coach-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.coach-chip {
+  min-height: 44px;
+  padding: 0 16px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  background: var(--card);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+  cursor: pointer;
+}
+.coach-chip[aria-pressed='true'],
+.coach-chip[aria-checked='true'] {
+  background: var(--night);
+  border-color: var(--night);
+  color: var(--night-ink);
+}
+.coach-checks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.coach-check {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 48px;
+  padding: 0 14px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  font-size: 15px;
+  cursor: pointer;
+}
+.coach-check input {
+  width: 22px;
+  height: 22px;
+  accent-color: var(--pitch);
+}
+.coach-callout {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: var(--tone-info-bg);
+  color: var(--tone-info);
+  font-size: 14px;
+}
+.coach-callout[data-tone='pending'] {
+  background: var(--tone-pending-bg);
+  color: var(--tone-pending);
+}
+.coach-callout[data-tone='warning'] {
+  background: var(--tone-warning-bg);
+  color: var(--tone-warning);
+}
+.coach-callout p {
+  margin: 0;
+  flex: 1;
+}
+.coach-voice {
+  min-height: 48px;
+  border-radius: 14px;
+  border: 1px dashed var(--line-strong);
+  background: none;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--pitch);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  cursor: pointer;
+}
+.coach-voice:disabled {
+  color: var(--tone-pending);
+  cursor: default;
+}
+.coach-tag {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--tone-pending-bg);
+  color: var(--tone-pending);
+  font-size: 11px;
+  font-weight: 700;
+}
+.coach-review {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+}
+.coach-review li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-top: 1px solid var(--line-soft);
+  font-size: 14px;
+}
+.coach-review li:first-child {
+  border-top: 0;
+}
+.coach-review span {
+  color: var(--muted);
+}
+
+/* S 5c: assessment. */
+.coach-progress {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--night-line);
+  overflow: hidden;
+  margin-top: 6px;
+}
+.coach-progress span {
+  display: block;
+  height: 100%;
+  background: var(--floodlight);
+  border-radius: 999px;
+}
+.coach-assess-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.coach-round {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 1px solid var(--line-strong);
+  background: var(--card);
+  color: var(--pitch);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  flex: none;
+}
+.coach-round:disabled {
+  color: var(--faint);
+  cursor: default;
+}
+.coach-skills {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 4px 14px;
+  display: flex;
+  flex-direction: column;
+}
+.coach-skill {
+  border: 0;
+  margin: 0;
+  padding: 12px 0;
+  border-top: 1px solid var(--line-soft);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.coach-skill:first-child {
+  border-top: 0;
+}
+.coach-skill legend {
+  font-size: 15px;
+  font-weight: 700;
+  padding: 0;
+  margin-bottom: 8px;
+}
+.coach-levels {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+.coach-level {
+  min-height: 44px;
+  border-radius: 12px;
+  border: 1px solid var(--line-strong);
+  background: var(--card);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  cursor: pointer;
+}
+.coach-level[aria-checked='true'] {
+  background: var(--pitch);
+  border-color: var(--pitch);
+  color: var(--on-primary);
+}
+.coach-textarea {
+  width: 100%;
+  min-height: 64px;
+  border-radius: 14px;
+  border: 1px solid var(--line-strong);
+  background: var(--card);
+  padding: 10px 12px;
+  font: inherit;
+  font-size: 15px;
+  resize: vertical;
+}
+.coach-suggest {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 14px;
+  background: var(--tone-success-bg);
+  color: var(--tone-success);
+  font-size: 14px;
+  min-height: 48px;
+}
+.coach-suggest p {
+  margin: 0;
+  flex: 1;
+}
+.coach-switch {
+  appearance: none;
+  width: 44px;
+  height: 26px;
+  border-radius: 999px;
+  background: var(--track);
+  position: relative;
+  cursor: pointer;
+  flex: none;
+}
+.coach-switch::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--card);
+  transition: transform 160ms ease-out;
+}
+.coach-switch:checked {
+  background: var(--pitch);
+}
+.coach-switch:checked::after {
+  transform: translateX(18px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .coach-tile,
+  .coach-switch::after {
+    transition: none;
+  }
+}

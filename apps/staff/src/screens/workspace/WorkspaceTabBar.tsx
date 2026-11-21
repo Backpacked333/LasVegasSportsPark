@@ -8,37 +8,35 @@
  * The bar is a liquid glass capsule floating above the page that scrolls beneath it (`ui/glass`);
  * its tabs are flat, the current one a tinted pill with a filled glyph and heavier text.
  */
-import { NavLink, useLocation } from 'react-router';
+import { Link, useLocation } from 'react-router';
 import { WORKSPACE_PATH } from '../../navigation/areas';
 import { Glass } from '../../ui/glass/Glass';
-import { Icon, type IconName } from '../../ui/Icon';
+import { Icon } from '../../ui/Icon';
+import {
+  WORKSPACE_PHONE_TABS as TABS,
+  isFullScreenWorkspacePath,
+  isTabCurrent,
+} from './workspace-tabs';
 import './workspace.css';
-
-const TABS: readonly { to: string; label: string; icon: IconName; end?: boolean }[] = [
-  { to: WORKSPACE_PATH, label: 'Now', icon: 'stadium', end: true },
-  { to: `${WORKSPACE_PATH}/assessments`, label: 'Assess', icon: 'checklist' },
-  { to: `${WORKSPACE_PATH}/fees`, label: 'Fees', icon: 'payments' },
-  { to: `${WORKSPACE_PATH}/report-problem`, label: 'Issues', icon: 'construction' },
-  { to: `${WORKSPACE_PATH}/offline`, label: 'Queue', icon: 'sync' },
-];
 
 export function WorkspaceTabBar() {
   const { pathname } = useLocation();
   if (pathname !== WORKSPACE_PATH && !pathname.startsWith(`${WORKSPACE_PATH}/`)) return null;
+  if (isFullScreenWorkspacePath(pathname)) return null;
   return (
     <nav className="ws-tabbar" aria-label="Workspace tabs">
       <Glass radius={32} blur={5}>
         <ul>
           {TABS.map((tab) => (
             <li key={tab.to}>
-              <NavLink to={tab.to} end={tab.end} className="ws-tab">
-                {({ isActive }) => (
-                  <>
-                    <Icon name={tab.icon} size={22} filled={isActive} />
-                    <span>{tab.label}</span>
-                  </>
-                )}
-              </NavLink>
+              <Link
+                to={tab.to}
+                className={isTabCurrent(tab, pathname) ? 'ws-tab active' : 'ws-tab'}
+                aria-current={isTabCurrent(tab, pathname) ? 'page' : undefined}
+              >
+                <Icon name={tab.icon} size={22} filled={isTabCurrent(tab, pathname)} />
+                <span>{tab.label}</span>
+              </Link>
             </li>
           ))}
         </ul>

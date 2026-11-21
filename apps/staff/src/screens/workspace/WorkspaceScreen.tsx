@@ -17,7 +17,7 @@
  */
 import type { Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
-import { Link } from 'react-router';
+import { Link, useSearchParams } from 'react-router';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { AreaTabs, WORKSPACE_TABS } from '../../features/operations/AreaTabs';
@@ -34,6 +34,8 @@ import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StatusBadge, type StatusTone } from '../../ui/StatusBadge';
 import './workspace.css';
 import { GlassCard } from '../../ui/glass/GlassCard';
+import { CoachNow } from './coach/CoachNow';
+import { currentSession } from './coach/tile-model';
 
 type WorkspaceAssignment = Schema<'WorkspaceAssignment'>;
 type AssignmentStatus = WorkspaceAssignment['assignment']['status'];
@@ -281,6 +283,22 @@ function NowBoard({ items }: { items: readonly WorkspaceAssignment[] }) {
 
 export function WorkspaceScreen() {
   const assignments = useApiQuery({ path: '/me/assignments' });
+  const now = useNow(60_000);
+  const [params] = useSearchParams();
+  // S 2d: a coach's session on now (or within the hour, or at pickup) opens as the tap tiles;
+  // `?view=list` (or no such session) shows every assignment.
+  const current =
+    params.get('view') !== 'list' && assignments.data
+      ? currentSession(assignments.data.items, now)
+      : null;
+  if (current) {
+    return (
+      <section aria-label="Now" className="ops-screen workspace ws-coach">
+        <OfflineQueueStatus reviewPath="/workspace/offline" />
+        <CoachNow item={current} />
+      </section>
+    );
+  }
   return (
     <section aria-labelledby="workspace-title" className="ops-screen workspace">
       <PageHeader
