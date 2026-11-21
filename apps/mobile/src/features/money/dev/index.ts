@@ -28,3 +28,12 @@ export const DEV_PAYMENT_METHODS: readonly { token: string; label: string }[] | 
   ? // eslint-disable-next-line @typescript-eslint/no-require-imports -- must stay a conditional require so release bundles drop the module
     (require('./DevPaymentMethodPicker') as typeof PickerModule).DEV_PAYMENT_SCENARIOS
   : null;
+
+/**
+ * The captions under a development method on the Pay sheet; null in release builds, which never
+ * list methods (the words stay out of the release bundle, scripts/check-release-bundle.mjs).
+ */
+export const DEV_PAYMENT_CAPTIONS: { method: string; selected: string } | null = __DEV__
+  ? // eslint-disable-next-line @typescript-eslint/no-require-imports -- must stay a conditional require so release bundles drop the module
+    (require('./DevPaymentMethodPicker') as typeof PickerModule).DEV_PAYMENT_CAPTIONS
+  : null;

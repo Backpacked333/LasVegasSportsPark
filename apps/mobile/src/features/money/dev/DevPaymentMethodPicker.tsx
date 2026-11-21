@@ -8,6 +8,12 @@ import { makeStyles, spacing, type } from '../../../ui/theme';
 import type { PaymentMethodPickerProps } from './index';
 import { ChoiceCard } from '../../../ui/ChoiceList';
 
+/** The captions the Pay sheet shows under a development method (development builds only). */
+export const DEV_PAYMENT_CAPTIONS = {
+  method: 'Development payment method',
+  selected: 'Development payment method · no real payment',
+} as const;
+
 export const DEV_PAYMENT_SCENARIOS = [
   { token: 'pm_fake_visa', label: 'Succeeds at once' },
   { token: 'pm_fake_action', label: 'Needs a customer action' },

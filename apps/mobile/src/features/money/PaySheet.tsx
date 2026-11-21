@@ -43,7 +43,7 @@ import { StatusBadge } from '../../ui/StatusBadge';
 import { SupportDetails } from '../../ui/SupportDetails';
 import { Text } from '../../ui/Text';
 import { fonts, makeStyles, radius, spacing, tabular, type, useTheme } from '../../ui/theme';
-import { DEV_PAYMENT_METHODS } from './dev';
+import { DEV_PAYMENT_CAPTIONS, DEV_PAYMENT_METHODS } from './dev';
 import { formatMoney } from './format';
 import { PAYMENT_EFFECT_KEYS } from './payment-effects';
 import { paymentStatus } from './status';
@@ -251,7 +251,7 @@ export function PaySheet({
                           {m.label}
                         </Text>
                         <Text variant="footnote" tone="muted">
-                          Development payment method
+                          {DEV_PAYMENT_CAPTIONS?.method}
                         </Text>
                       </View>
                     </Pressable>
@@ -352,7 +352,7 @@ function MethodRow({
           {label}
         </Text>
         <Text variant="footnote" tone="muted">
-          Development payment method · no real payment
+          {DEV_PAYMENT_CAPTIONS?.selected}
         </Text>
       </View>
       <Pressable
