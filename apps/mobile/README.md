@@ -496,8 +496,8 @@ Not built here, and why: per-tab stacks (every detail route is on the root stack
 navigation change of its own); "Arrive by" (arrival guidance, **Pending decision** POL-046);
 "✓ Checked in" on the countdown pill (no customer read of a desk check-in); screen brightness on the
 pass (no brightness module is installed); gate pins (the API has no gates: the facility address is
-used); the full-screen night layout of the pass (the existing pass page keeps its frame); a coach's
-name in "The coach can see it" (not in the reads Home makes).
+used); a coach's name in "The coach can see it" (not in the reads Home makes). The full-screen night
+pass is built in Phase 2 (below).
 
 Proposed behaviour and pending decisions (one switch each in `src/features/home/proposed.ts`):
 
@@ -510,6 +510,78 @@ Proposed behaviour and pending decisions (one switch each in `src/features/home/
 - Wallet and a scannable code on the pass: hidden, **Pending decision** DEC-023.
 - "Enough to play" (players needed per game): hidden, **Pending decision**. "Team chat": shown
   disabled with "Proposed", **Pending decision** (messaging API).
+
+## Parent-app redesign: Phase 2, discover and register (handoff M 1d, 3d, 1e, 2a, 1f, 4e, 1g, 2e)
+
+Status legend as above (§6.7). **Verified** = asserted by the named jest tests (test renders, no
+device, §6.2). Demo data: `apps/api/src/dev/demo/parent-register.ts` (Winter Break Camp weeks, Spring
+Rec League · U9 with the `FRIENDS12` code, a uniform and a photo consent form, Futsal Skills Clinic,
+Junior Hoops at the time of Maya's game, a waitlist place offered to Maya for Goalkeeper Basics).
+
+- **M 1d Explore** (`src/screens/discover/DiscoverScreen.tsx`, `ExploreCards.tsx`; models in
+  `src/features/register/fit.ts`, `looking-for.ts`, `explore-facts.ts`, `family-busy.ts`): search sent
+  as `q` after 250 ms; "Looking for" chips with each child's age (date of birth from
+  `GET /v1/people/{id}`, on the facility day) on the shared who-filter, narrowing the list to the
+  published age band; one fit answer per card (✓ fits the child's week, ▲ clashes with a session,
+  booking or team game in the next 8 weeks, ✕ full · waitlist, ✓ already in); "3 left" at five or fewer
+  (`GET /v1/offering-availability`, hidden when the read fails); the promotion as a floodlight tag on
+  "Picked for Maya" tiles; camp weeks of one program as one card; no results with sport chips; when
+  and format behind the tune button. **Verified**: `src/screens/discover/__tests__/DiscoverExtras.test.tsx`,
+  `src/features/register/__tests__/register-model.test.ts`.
+- **M 3d Activity detail** (`OfferingDetailScreen.tsx`): picture with back and Share (an app link,
+  `sportspark://link?to=activity&id=`), fit and places answers, the facts card (when, where, ages with
+  "Maya qualifies · Leo is too young" from the API's eligibility), the earlier folds below, and the
+  bar "$95 · for 8 weeks · ~$12 a session" with "Register Maya" (Who with Maya ticked). **Verified**:
+  `OfferingDetailScreen.test.tsx`.
+- **M 1e / 2a / 1f / 4e Register** (`RegisterFlowScreen.tsx`, `register/*`, `ReviewScreen.tsx`; models
+  `basket-plan.ts`, `useRegisterBasket.ts`, `useRegistrationPayment.ts`, `last-place.ts`, `draft.ts`):
+  Who as a sheet over the activity; Options for camp weeks (live places, a full week joins the
+  waitlist, a week not open yet disabled with its date), extras from the activity's add-ons, a tier
+  with `PurchaseChoices`, and the night price bar (`POST /v1/discounts/evaluate` plus the extras,
+  "estimate"); Review & pay builds the flow's own cart, holds it first ("Maya's place is held for
+  14:52"), prices it, applies or refuses a code inline, takes forms in a sheet, and pays like the Pay
+  sheet (never optimistic, Idempotency-Key, unknown outcome "Do not pay again", a payment already
+  started is never repeated). A place lost while holding or paying opens 4e ("You weren't charged.",
+  re-priced choices, the best pre-selected, a dropped discount named, one-tap waitlist with what the
+  line chose). Back goes one step with the choices kept; leaving from a later step asks "Leave
+  registration? Your choices are kept for 30 min." The old start, forms, price and checkout links open
+  this flow or its Review. **Verified**: `RegisterFlowScreen.test.tsx`, `PurchaseChoices.test.tsx`,
+  `BasketScreen.test.tsx`, `registration-routes.test.tsx`.
+- **M 1g Done** (`register/DoneView.tsx` on the outcome route once the checkout is completed): who is
+  in, the sessions added to Calendar with the first one, team placement (◷ while the API's placement
+  is open, never a date of our own), the uniform to pick up, "Sign forms now" when a form is left, one
+  sibling suggestion (same day first), "Add to phone" (a calendar file) and Done. **Verified**:
+  `CheckoutOutcomeScreen.test.tsx`, `PurchaseReceipt.test.tsx`.
+- **M 2e Waitlist offer** (`register/WaitlistOffer.tsx` in `WaitlistScreen.tsx`): the countdown in
+  hours and minutes (seconds under an hour) with the deadline on the facility clock, "Take the place ·
+  $60" → Review & pay held until the offer ends, "Pass to the next family" with its confirm, the ended
+  state with "Stay on the waitlist", "This offer ended before payment" when the hold lapses while
+  paying. **Verified**: `WaitlistScreen.test.tsx`.
+- **M 1j Pass** (`PassScreen.tsx`, `PassCard.tsx`, `PassPeople.tsx`): the full-screen night view with
+  "Facility pass" and ✕, the person switch, the card with the person, today's activity and status, the
+  code area and the reference (groups of four, monospace, digits in floodlight), "Works offline · show
+  at the front desk". **Verified**: `PassScreen.test.tsx`.
+- **Offline banner** (`ConnectivityBanner.tsx`): "▲ Offline. Showing what was saved at 8:41." with the
+  time of the oldest data shown, on the facility clock. **Verified**: `ConnectivityBanner.test.tsx`.
+
+**Proposed** (not decided): the extras note when an activity sells no add-ons ("Extras proposed");
+"Add to phone" opens a calendar file on the web and shares it on a phone (no calendar module is
+installed; adding straight to the device calendar needs a dependency decision); the 30-minute draft is
+kept in memory only; the "Looking for" age narrowing uses the published age band (the API's
+eligibility still decides on Who).
+
+**Pending decision**: paying in the app (DEC-019: release builds show "Pay at the front desk for
+now", the "In-app payment proposed" tag); the scannable code and Wallet on the pass (DEC-023: the code
+area says "Scannable code proposed", no pattern is drawn, Wallet is hidden).
+
+Not built, and why: the coach row on the activity page (no customer read names a session's coach);
+searching by coach (the catalog search does not index coaches); "Receipt sent to dana@…" on Done (no
+read says a receipt e-mail was sent; Done points to You › Payments); screen brightness on the pass (no
+brightness module is installed); "Gate B" (the API has no gates); per-tab stacks: every detail route is
+on the root stack (`RootNavigator`), and giving each tab its own stack means moving every route under
+`app/(tabs)/<tab>/` with its own `_layout`, which changes every deep link, the link landing and the
+navigation tests; re-tap to pop and scroll is part of that change. It is left for a navigation change
+of its own.
 
 ## Conventions for screen builders
 
