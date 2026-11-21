@@ -18,6 +18,7 @@ import { basketLinePrice, quoteLineBasisLines } from '../../../features/registra
 import {
   IDS,
   basket,
+  inMinutes,
   familyRoutes,
   line,
   offering,
@@ -32,7 +33,7 @@ import {
 } from '../../../features/registration/testing/registration-test-app';
 import { mePermissions } from '../../../testing/test-app';
 import { BasketScreen } from '../BasketScreen';
-import { QuoteReviewScreen } from '../QuoteReviewScreen';
+import { ReviewScreen } from '../ReviewScreen';
 import { RegistrationIntentScreen } from '../RegistrationIntentScreen';
 
 const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), navigate: jest.fn() };
@@ -294,9 +295,9 @@ describe('PA-11 ADR-008: the Options step of registering', () => {
     });
     render(<RegistrationIntentScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
     const ada = await screen.findByRole('checkbox', { name: 'Ada. Eligible' });
-    expect(screen.getByLabelText('Step 1 of 5, Who')).toBeOnTheScreen();
+    expect(screen.getByLabelText('Step 1 of 3, Who')).toBeOnTheScreen();
     fireEvent.press(ada);
-    expect(await screen.findByLabelText('Step 2 of 5, Options')).toBeOnTheScreen();
+    expect(await screen.findByLabelText('Step 2 of 3, Options')).toBeOnTheScreen();
     const choices = within(screen.getByTestId(`choices-${IDS.childA}`));
     expect(choices.getByRole('header', { name: 'Options for Ada' })).toBeOnTheScreen();
     for (const group of ['Price', 'Add-ons', 'Uniform size']) {
@@ -304,7 +305,7 @@ describe('PA-11 ADR-008: the Options step of registering', () => {
     }
     // Unticking the only person goes back to Who; nothing was sent.
     fireEvent.press(screen.getByRole('checkbox', { name: 'Ada. Eligible' }));
-    expect(await screen.findByLabelText('Step 1 of 5, Who')).toBeOnTheScreen();
+    expect(await screen.findByLabelText('Step 1 of 3, Who')).toBeOnTheScreen();
     expect(app.fake.requests.some((r) => r.route === '/baskets/{id}/lines')).toBe(false);
     await app.settle();
   });
@@ -417,7 +418,7 @@ describe('Tier, add-on and uniform lines on the basket, quote and receipt (SPK-P
     ).toEqual({ label: 'Base price each', value: '$120.00', notes: [] });
   });
 
-  it('SPK-PAY-014, SPK-REG-012: the quote review shows each add-on and the uniform as its own line with what the quote stored', async () => {
+  it('SPK-PAY-014, SPK-REG-012 (handoff 1f): Review & pay shows each add-on and the uniform as its own line with what the quote stored', async () => {
     const place = quoteLine({
       description: 'Autumn Youth Program: Two days',
       unitPriceMinor: 13000,
@@ -495,8 +496,14 @@ describe('Tier, add-on and uniform lines on the basket, quote and receipt (SPK-P
     const app = createRegistrationTestApp({
       routes: {
         ...familyRoutes(),
-        'GET /registration-quotes/{id}': {
+        'GET /baskets/{id}': {
           status: 200,
+          body: basket({ status: 'held', holdExpiresAt: inMinutes(10), lines: [line()] }),
+        },
+        'GET /offerings/{id}': { status: 200, body: offering() },
+        'GET /acknowledgments': { status: 200, body: [] },
+        'POST /registration-quotes': {
+          status: 201,
           body: quote({
             lines: [place, lunch, kit],
             subtotalMinor: 14800,
@@ -513,23 +520,14 @@ describe('Tier, add-on and uniform lines on the basket, quote and receipt (SPK-P
         'GET /credits': { status: 200, body: { items: [], nextCursor: null } },
       },
     });
-    render(<QuoteReviewScreen quoteId={IDS.quote} />, { wrapper: app.wrapper });
-    // ADR-008: Ada's place, add-on and uniform are grouped under her name.
-    expect(await screen.findByRole('header', { name: 'For Ada' })).toBeOnTheScreen();
-    const ada = within(screen.getByTestId(`quote-person-${IDS.childA}`));
-    expect(ada.getByText('Autumn Youth Program: Two days')).toBeOnTheScreen();
-    expect(screen.getByText('Two days: 2 days chosen')).toBeOnTheScreen();
-    expect(ada.getByText('Add-on: Lunch')).toBeOnTheScreen();
-    expect(screen.getByLabelText('2 × $9.00: $18.00')).toBeOnTheScreen();
+    render(<ReviewScreen basketId={IDS.basket} />, { wrapper: app.wrapper });
+    expect(await screen.findByLabelText('Total, $148.00')).toBeOnTheScreen();
+    expect(screen.getByLabelText('Lunch, $18.00')).toBeOnTheScreen();
     expect(screen.getByText('Chosen for 2 days')).toBeOnTheScreen();
-    expect(screen.getByLabelText('Total for this add-on: $18.00')).toBeOnTheScreen();
-    expect(ada.getByText('Uniform: Club kit (YM)')).toBeOnTheScreen();
     expect(screen.getByText('Size YM')).toBeOnTheScreen();
     expect(
       screen.getByText('Not charged: this uniform is already held (listed at $25.00).'),
     ).toBeOnTheScreen();
-    expect(screen.getByLabelText('Total for this uniform: $0.00')).toBeOnTheScreen();
-    expect(screen.getByLabelText('Total: $148.00')).toBeOnTheScreen();
     // The stored basis of each kind of line, as helpers the other screens share.
     expect(quoteLineBasisLines(lunch)).toEqual(['Chosen for 2 days']);
     expect(quoteLineBasisLines(quoteLine())).toEqual([]);

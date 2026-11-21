@@ -32,6 +32,17 @@ re-export the `*Route` component of the screen.
 `__tests__/registration-routes.test.tsx` renders the real Expo Router tree and checks that every
 route above resolves to its screen.
 
+## Redesign (handoff M 1e, 2a, 1f, 4e, 1g, 2e)
+
+The start, forms, price and checkout screens are replaced by Register (`RegisterFlowScreen.tsx`:
+Who → Options → Review & pay, `register/*`) and Done (`register/DoneView.tsx`); the old routes stay and
+open the flow (`/registration/start/{id}`) or Review & pay of the cart (`/registration/quote/{id}`,
+`/registration/checkout/{id}`, `/registration/forms?basketId=`, and the new
+`/registration/review/{basketId}`). The cart (SCR-C-11) leads to Review & pay. Activities that are not
+registered through a cart (trials, pickup sessions, rentals, parties, makeups) keep the intent chooser
+(`RegistrationIntentScreen.tsx`). See the app README, "Phase 2", for what is verified; the sections
+below describe the rules the flow keeps (payment uncertainty, one key per intent, no client prices).
+
 ## Registration steps and customer words (PA-11, ADR-008)
 
 PA-11 (DEC-107) and ADR-008 are **Proposed**; what is below is **Verified** by the jest tests

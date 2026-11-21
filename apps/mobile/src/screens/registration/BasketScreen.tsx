@@ -302,17 +302,12 @@ function BasketContent({ basket, refetch }: { basket: Basket; refetch: () => voi
     basket.lines.map((l) => l.offeringId),
   );
   const offeringName = (id: string) => offerings[id]?.data?.name ?? 'Activity';
-  const quote = useApiCommand('post', '/registration-quotes');
   const release = useApiCommand('post', '/baskets/{id}/release', {
     invalidate: [['api', '/baskets/{id}'], MY_BASKETS_KEY],
   });
 
   const status = basketStatus(basket, now, zone);
   const ended = basket.status === 'expired' || basket.status === 'released';
-  const capacityFailed = failure?.error.code === 'CAPACITY_UNAVAILABLE';
-  const waitlistFirst =
-    capacityFailed &&
-    (failure?.error.details as { waitlistFirst?: unknown } | undefined)?.waitlistFirst === true;
   const forms = useFormsStatus(
     basket.lines.map((l) => ({
       participantPersonId: l.participantPersonId,
@@ -326,17 +321,8 @@ function BasketContent({ basket, refetch }: { basket: Basket; refetch: () => voi
     basket.lines.length > 0 &&
     !basket.approvalPending;
 
-  const getPrice = async () => {
-    setFailure(null);
-    try {
-      const created = await quote.submit({
-        body: { basketId: basket.id, discountCodes: [], creditIds: [] },
-      });
-      router.push(registrationRoutes.quote(created.id));
-    } catch (error) {
-      setFailure({ error: error as ApiError, retry: () => void getPrice() });
-    }
-  };
+  // Review & pay (1f) holds the places, prices them and takes the forms and the payment.
+  const getPrice = () => router.push(registrationRoutes.review(basket.id));
   const releaseHold = async () => {
     setFailure(null);
     try {
@@ -405,7 +391,7 @@ function BasketContent({ basket, refetch }: { basket: Basket; refetch: () => voi
               line={line}
               participantName={names(line.participantPersonId)}
               offeringName={offeringName(line.offeringId)}
-              showWaitlist={(capacityFailed || ended) && line.outcome !== 'confirmed'}
+              showWaitlist={ended && line.outcome !== 'confirmed'}
               offline={offline}
               forms={forms}
               onRemoved={() => setFailure(null)}
@@ -435,33 +421,21 @@ function BasketContent({ basket, refetch }: { basket: Basket; refetch: () => voi
           setFailure(null);
           refetch();
         }}
-        onCompleteForms={() => router.push(registrationRoutes.basketForms(basket.id))}
+        onCompleteForms={() => router.push(registrationRoutes.review(basket.id))}
       />
-      {capacityFailed ? (
-        <Section title="No place available">
-          {/* SPK-PAY-014 (quality review M-2, m-6): what is full may be the activity, a day or
-              an extra that was chosen; the waitlist is joined for exactly what the line chose. */}
-          <Text variant="body">
-            {waitlistFirst
-              ? 'Spots that come free go to the people already waiting. Nothing was charged. You can join the waitlist for what you chose, or remove the line and continue.'
-              : 'The activity, a day or an extra you chose is full for at least one line. Nothing was charged. You can join the waitlist for exactly what you chose, or remove the line and choose something else.'}
-          </Text>
-        </Section>
-      ) : null}
       <View style={styles.actions}>
         {needsForms && basket.status === 'open' ? (
           <Button
             label="Complete required forms"
-            onPress={() => router.push(registrationRoutes.basketForms(basket.id))}
+            onPress={() => router.push(registrationRoutes.review(basket.id))}
           />
         ) : null}
         {priceable ? (
           <Button
-            label="Get your price"
-            onPress={() => void getPrice()}
-            busy={quote.isProcessing}
+            label="Review and pay"
+            onPress={getPrice}
             disabled={offline}
-            accessibilityHint="Prices every line from the facility's current price rules"
+            accessibilityHint="Holds your places, prices every line and takes the forms and payment"
           />
         ) : null}
         {checkingOut && checkout ? (
@@ -475,9 +449,7 @@ function BasketContent({ basket, refetch }: { basket: Basket; refetch: () => voi
           // screen asks again for this quote, and the API returns the existing checkout.
           <Button
             label="Check your payment"
-            onPress={() =>
-              router.push(registrationRoutes.checkout(progress.pendingCheckoutQuoteId as string))
-            }
+            onPress={() => router.push(registrationRoutes.review(basket.id))}
           />
         ) : null}
         {basket.status === 'held' ? (

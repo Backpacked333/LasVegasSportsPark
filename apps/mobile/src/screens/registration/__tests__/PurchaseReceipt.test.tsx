@@ -41,7 +41,7 @@ const WED = '0192f1a0-0000-7000-8000-000000004403';
 describe('Add-ons and uniform after payment (SPK-PAY-014, SPK-REG-012)', () => {
   afterEach(settleApps);
 
-  it('SPK-PAY-014, SPK-REG-012: the checkout outcome names the add-ons and the uniform bought with each place', async () => {
+  it('SPK-REG-012 (handoff 1g): Done names the uniform bought with a place and where to pick it up (the add-ons are on the receipt)', async () => {
     const bought = basket({
       status: 'fulfilled',
       lines: [
@@ -96,17 +96,12 @@ describe('Add-ons and uniform after payment (SPK-PAY-014, SPK-REG-012)', () => {
       },
     });
     render(<CheckoutOutcomeScreen checkoutId={IDS.checkout} />, { wrapper: app.wrapper });
-    expect(await screen.findByLabelText('Registration complete')).toBeOnTheScreen();
-    // The place with extras names them, read as one element with its status.
+    expect(await screen.findByLabelText('Confirmed')).toBeOnTheScreen();
     expect(
-      await screen.findByLabelText(/^Ada: Autumn Youth Program\. .*\. Lunch\. Club kit, size YM$/),
+      await screen.findByLabelText(/^Club kit · YM\. For .+ · pick up at the front desk$/),
     ).toBeOnTheScreen();
-    expect(screen.getByText('Lunch × 2 days')).toBeOnTheScreen();
-    expect(screen.getByText('Club kit, size YM')).toBeOnTheScreen();
-    // A place bought without extras reads as it always did.
-    expect(
-      await screen.findByLabelText(/^Ben: Autumn Youth Program\. [^.]*\.?$/),
-    ).toBeOnTheScreen();
+    // Only the place with a uniform has one.
+    expect(screen.queryByLabelText(/For Ben · pick up/)).toBeNull();
   });
 
   it('SPK-PAY-014, SPK-REG-012: the order receipt lists each add-on and the uniform as its own line with its amount', async () => {
