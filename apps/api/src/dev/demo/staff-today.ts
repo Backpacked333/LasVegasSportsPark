@@ -135,9 +135,14 @@ export async function seedStaffToday(
     });
   };
 
-  await optional(ctx, 'the practice in progress on Field 1', () =>
-    direct(TODAY_DEMO_TITLES.practice, 'practice', spaces.field1North, -45, 15),
-  );
+  // Whichever half of Field 1 is free now (tonight's rental may hold the north half).
+  await optional(ctx, 'the practice in progress on Field 1', async () => {
+    try {
+      await direct(TODAY_DEMO_TITLES.practice, 'practice', spaces.field1North, -45, 15);
+    } catch {
+      await direct(TODAY_DEMO_TITLES.practice, 'practice', spaces.field1South, -45, 15);
+    }
+  });
   await optional(ctx, 'drop-in on the court', () =>
     direct(TODAY_DEMO_TITLES.dropIn, 'pickup', spaces.court, -55, 5),
   );
