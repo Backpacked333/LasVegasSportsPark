@@ -41,6 +41,7 @@ import {
   FORMATIONS,
   goingPlayers,
   placeName,
+  placeShort,
   placementOf,
   placeOrSwap,
   placesOf,
@@ -174,7 +175,11 @@ function Editor({ sheet }: { sheet: TeamSheet }) {
     setDrag({ ...drag, x: e.clientX, y: e.clientY, moved });
   };
   const onPointerUp = (spot: Spot) => (e: React.PointerEvent) => {
-    if (!drag) return;
+    // A tap on an empty place (nothing to drag from it) drops the chosen player there.
+    if (!drag) {
+      if (picked) choose(spot);
+      return;
+    }
     const wasDrag = drag.moved;
     const from = drag.from;
     setDrag(null);
@@ -364,7 +369,7 @@ function Editor({ sheet }: { sheet: TeamSheet }) {
                     </span>
                   )}
                   <span className="lineup-slot-name" aria-hidden="true">
-                    {player ? shortName(player.displayName) : placeName(formation, slot)}
+                    {player ? shortName(player.displayName) : placeShort(formation, slot)}
                   </span>
                   {player && player.availability !== 'available' ? (
                     <StatusBadge tone="warning" label="Not going" size="sm" />

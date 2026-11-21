@@ -724,3 +724,62 @@ describe('S 3a session drawer and S 3b weather cancellation', () => {
     expect(app.fake.requests.filter((r) => r.route === '/me/permissions')).toHaveLength(1);
   });
 });
+
+describe('Phase 8: the field crew’s preparation drives the Field check and a red issue', () => {
+  const preparations = (items: string[], status = 'in_progress') => ({
+    status: 200,
+    body: {
+      facilityId: FACILITY_A,
+      date: '2026-10-24',
+      timezone: 'America/Los_Angeles',
+      checklist: ['lines', 'goals_anchored', 'nets', 'corner_flags'],
+      items: [
+        {
+          id: 'fp-2',
+          facilityId: FACILITY_A,
+          resourceId: 'res-2',
+          date: '2026-10-24',
+          checkedItems: items,
+          status,
+          readyAt: null,
+          readyBy: null,
+          updatedBy: { kind: 'staff', accountId: null, personId: null, actorLabel: 'Crew' },
+          revision: 2,
+          updatedAt: TEST_NOW.toISOString(),
+        },
+      ],
+    },
+  });
+
+  it('SPK-READY-001: a pitch not ready 15 minutes before its first use is a red Needs action issue and a failed Field check', async () => {
+    const app = createTestApp({
+      routes: routes({ 'GET /field-preparations': preparations(['lines', 'nets']) }) as never,
+    });
+    render(app.at('/today'));
+    const issue = await screen.findByTestId(/^issue-field-not-ready:res-2:/);
+    expect(
+      within(issue).getByText('Field 2 not ready for Desert Foxes vs Lions'),
+    ).toBeInTheDocument();
+    expect(within(issue).getByText(/2 of 4 checks done/)).toBeInTheDocument();
+    expect(within(issue).getByRole('link', { name: 'Open fields' })).toHaveAttribute(
+      'href',
+      '/workspace/fields',
+    );
+    const strip = within(await screen.findByRole('list', { name: 'Starts in the next hour' }));
+    expect(await strip.findByText(/Field not ready/)).toBeInTheDocument();
+  });
+
+  it('SPK-READY-001: once the crew marks it ready, the issue is gone', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /field-preparations': preparations(
+          ['lines', 'goals_anchored', 'nets', 'corner_flags'],
+          'ready',
+        ),
+      }) as never,
+    });
+    render(app.at('/today'));
+    await screen.findByRole('list', { name: 'Needs action' });
+    expect(screen.queryByTestId(/^issue-field-not-ready/)).not.toBeInTheDocument();
+  });
+});

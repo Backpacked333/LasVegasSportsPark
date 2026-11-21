@@ -149,27 +149,47 @@ function ResultRow({ item, sheet }: { item: WeekItem; sheet: TeamSheet }) {
   );
 }
 
-function NeedsYou({
-  items,
-  sheets,
-  offers,
-  now,
-}: {
-  items: readonly WeekItem[];
-  sheets: ReadonlyMap<string, TeamSheet>;
+interface NeedsYouRows {
+  /** The next game, when players have not answered for it. */
+  nudges: WeekItem[];
+  /** Played games without the official result: the coach's score waits, or no score was kept. */
+  unconfirmed: WeekItem[];
   offers: number;
-  now: Date;
-}) {
+  count: number;
+}
+
+/** What "Needs you" lists (and the header counts). */
+export function needsYouOf(
+  items: readonly WeekItem[],
+  sheets: ReadonlyMap<string, TeamSheet>,
+  offers: number,
+  now: Date,
+): NeedsYouRows {
   const t = now.getTime();
-  const upcomingGames = items.filter((i) => i.kind === 'game' && new Date(i.end).getTime() > t);
-  const nudges = upcomingGames.filter((i) => (i.availability?.noResponse ?? 0) > 0).slice(0, 2);
+  const nextGame = items.find((i) => i.kind === 'game' && new Date(i.end).getTime() > t);
+  const nudges = nextGame && (nextGame.availability?.noResponse ?? 0) > 0 ? [nextGame] : [];
   const unconfirmed = items.filter((i) => {
     if (i.kind !== 'game' || new Date(i.end).getTime() > t) return false;
     const sheet = sheets.get(i.fixtureId!);
     if (!sheet || sheet.officialResult) return false;
     return sheet.gameLog !== null || sheet.availableActions.includes('record_game_log');
   });
-  const count = nudges.length + unconfirmed.length + (offers > 0 ? 1 : 0);
+  return {
+    nudges,
+    unconfirmed,
+    offers,
+    count: nudges.length + unconfirmed.length + (offers > 0 ? 1 : 0),
+  };
+}
+
+function NeedsYou({
+  rows,
+  sheets,
+}: {
+  rows: NeedsYouRows;
+  sheets: ReadonlyMap<string, TeamSheet>;
+}) {
+  const { nudges, unconfirmed, offers, count } = rows;
   if (count === 0) return null;
   return (
     <section className="crew-card" data-edge="warning" aria-labelledby="needs-you-title">
@@ -396,11 +416,8 @@ export function CoachWeekScreen() {
   const offers = (assignments.data?.items ?? []).filter(
     (a) => a.assignment.status === 'offered',
   ).length;
-  const needCount =
-    items.filter(
-      (i) =>
-        i.kind === 'game' && new Date(i.end).getTime() > t && (i.availability?.noResponse ?? 0) > 0,
-    ).length + (offers > 0 ? 1 : 0);
+  const needs = needsYouOf(items, sheets, offers, now);
+  const needCount = needs.count;
 
   return (
     <section aria-labelledby="coach-week-title" className="crew ops-screen">
@@ -418,7 +435,7 @@ export function CoachWeekScreen() {
       >
         {() => (
           <>
-            <NeedsYou items={items} sheets={sheets} offers={offers} now={now} />
+            <NeedsYou rows={needs} sheets={sheets} />
             {next ? (
               <NextCard item={next} sheet={sheets.get(next.fixtureId ?? '')} now={now} />
             ) : (

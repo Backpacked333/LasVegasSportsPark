@@ -68,6 +68,8 @@ function statusOf(day: FieldDay, now: Date): { tone: HandoffTone; label: string 
   if (day.closed) return { tone: 'danger', label: 'Closed' };
   const progress = progressOf(day.preparation);
   if (progress.ready) return { tone: 'success', label: 'Ready' };
+  if (!day.firstUse) return { tone: 'neutral', label: 'Not used today' };
+  if (!day.nextUse) return { tone: 'neutral', label: 'Done for today' };
   if (day.nextUse) {
     const until = new Date(day.nextUse.scheduledStart).getTime() - now.getTime();
     if (until <= NOT_READY_ALERT_MS) {

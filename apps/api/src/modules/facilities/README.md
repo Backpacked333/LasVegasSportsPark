@@ -360,6 +360,27 @@ Verified by `__tests__/release-checklist.spec.ts`.
   (`scheduling.read_schedule`), restriction counts by status and open/overdue task counts
   (`facilities.view_maintenance`). A section the viewer may not read is `null`, never 0.
 
+## Field preparation (migration 0975, staff redesign Phase 8 "Field crew · Fields") — verified
+
+- **Table** `field_preparations`: one record per pitch and facility-local day (`unique
+(organization_id, resource_id, local_date)`), the fixed checklist `checked_items` (a subset of
+  lines, goals_anchored, nets, corner_flags), status `in_progress / ready` with the ready facts.
+  The database refuses a ready record without every item (`field_preparations_ready_complete`) or
+  without who/when (`field_preparations_ready_facts`), an unknown item, and a pitch of another
+  facility (facility-scoped key to `resources`). Lifecycle: `FieldPreparationMachine`
+  (`mark_ready`, `reopen`).
+- **Endpoints:** `GET /v1/field-preparations?facilityId=&date=` (`facilities.view_maintenance`;
+  Today's Field check and the crew screen), `POST /v1/field-preparations` (tick or untick, creates
+  the day's record; `expectedRevision` once it exists; unticking an item of a ready pitch reopens
+  it), `POST /v1/field-preparations/{id}/ready` (every item ticked, `ELIGIBILITY_FAILED`
+  `checklist_incomplete` otherwise). Writes need `facilities.prepare_field` (facilities operator,
+  general manager), are `@Idempotent()`, audited; ready enqueues `facilities.field_marked_ready`
+  (no handler). Only a whole pitch is prepared (its halves share it); only today or tomorrow in
+  the facility's zone.
+- **Proposed:** the checklist items are fixed engineering defaults; "not ready 15 minutes before
+  first use" is computed by the staff Today screen from this record and the day's events (no
+  stored exception). **Verified:** `__tests__/field-preparations.spec.ts`.
+
 ## Known gaps / pending decisions
 
 - Due lead time per severity (critical 4 h, high 24 h, medium 72 h, low 168 h), the escalating

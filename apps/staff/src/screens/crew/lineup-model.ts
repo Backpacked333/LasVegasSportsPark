@@ -53,6 +53,15 @@ export function placeName(formation: string, slot: number): string {
   return row.slots.length > 1 ? `${name} ${row.slots.indexOf(slot) + 1}` : name;
 }
 
+/** "GK", "DEF", "MID", "FWD": the place's short label on the pitch. */
+export function placeShort(formation: string, slot: number): string {
+  const name = placeName(formation, slot);
+  if (name === 'Goalkeeper') return 'GK';
+  if (name.startsWith('Defender')) return 'DEF';
+  if (name.startsWith('Forward')) return 'FWD';
+  return 'MID';
+}
+
 /** slot → personId */
 export type Placement = Readonly<Record<number, string>>;
 

@@ -459,6 +459,7 @@ a.crew-row-title:hover {
   gap: 8px;
 }
 .bench-tile {
+  width: 100%;
   min-height: 104px;
   border-radius: 16px;
   border: 1px solid var(--line);
