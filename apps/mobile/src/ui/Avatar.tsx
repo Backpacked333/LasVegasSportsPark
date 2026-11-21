@@ -1,15 +1,29 @@
 /**
- * Initials avatars (ADR-008): a person's initials on a tint from `avatarTones`, the same tone for
- * the same person everywhere (`avatarToneFor`, keyed by the person's id). Initials only: the app
- * shows no photos of people.
+ * Avatars (ADR-008; redesign handoff Phase 0 "Avatar: photo → initials on person colour, optional
+ * ring"): the person's photo when one is given (`photoUri`), otherwise their initials on a tint.
+ * The tint is the person's household colour when the screen knows it (`personColor`, from
+ * `src/ui/person-colors.ts`), else a tone from `avatarTones` keyed by the person's id, the same
+ * everywhere (`avatarToneFor`). `ring` draws a ring in the person colour around it (chips on
+ * Home, the child profile). The API stores no profile photos yet, so screens pass no `photoUri`
+ * today and every avatar shows initials; the photo path is ready for when one exists.
  *
  * Accessibility (SPK-UX-009): an avatar's name is the person's name, read as an image. Where the
  * name is already written next to it (a row, a card) pass `decorative` and it is hidden, so the
  * name is not read twice. `AvatarStack` overlaps a few avatars with a "+N" for the rest and reads
  * every name, in order, as one element.
  */
+import { Image } from 'expo-image';
+import { useState } from 'react';
 import { Text, View, type StyleProp, type ViewStyle } from 'react-native';
-import { avatarToneFor, fonts, makeStyles, radius, useTheme } from './theme';
+import {
+  avatarToneFor,
+  fonts,
+  makeStyles,
+  radius,
+  useTheme,
+  type AvatarTone,
+  type PersonColor,
+} from './theme';
 
 export type AvatarSize = 'sm' | 'md' | 'lg';
 
@@ -40,23 +54,51 @@ export function initialsFor(name: string): string {
 }
 
 export interface AvatarProps extends AvatarPerson {
-  size?: AvatarSize;
+  size?: AvatarSize | number;
   /** The name is written next to the avatar: hide it from screen readers. */
   decorative?: boolean;
+  /** The person's household colour: the initials tint and the ring. */
+  personColor?: PersonColor;
+  /** A photo of the person; initials while it loads and if it fails. */
+  photoUri?: string | null;
+  /** A ring in the person colour (or the tone's text colour) around the avatar. */
+  ring?: boolean;
   style?: StyleProp<ViewStyle>;
   testID?: string;
 }
 
-export function Avatar({ name, id, size = 'md', decorative = false, style, testID }: AvatarProps) {
+/** Ring width and the gap between the ring and the picture. */
+const RING = 2;
+const RING_GAP = 2;
+
+export function Avatar({
+  name,
+  id,
+  size = 'md',
+  decorative = false,
+  personColor,
+  photoUri,
+  ring = false,
+  style,
+  testID,
+}: AvatarProps) {
   const theme = useTheme();
   const styles = useStyles();
-  const tone = avatarToneFor(theme, id ?? name);
-  const side = SIZES[size];
+  const [photoFailed, setPhotoFailed] = useState(false);
+  const tone: AvatarTone = personColor
+    ? { background: personColor.tint, foreground: personColor.onTint }
+    : avatarToneFor(theme, id ?? name);
+  const side = typeof size === 'number' ? size : SIZES[size];
+  const inner = ring ? side - 2 * (RING + RING_GAP) : side;
+  const showPhoto = !!photoUri && !photoFailed;
   return (
     <View
       style={[
         styles.avatar,
-        { width: side, height: side, backgroundColor: tone.background },
+        { width: side, height: side },
+        ring
+          ? { borderWidth: RING, borderColor: personColor?.accent ?? tone.foreground }
+          : { backgroundColor: tone.background },
         style,
       ]}
       accessible={!decorative}
@@ -66,12 +108,30 @@ export function Avatar({ name, id, size = 'md', decorative = false, style, testI
       importantForAccessibility={decorative ? 'no-hide-descendants' : 'yes'}
       testID={testID}
     >
-      <Text
-        style={[styles.initials, { color: tone.foreground, fontSize: side * 0.4 }]}
-        maxFontSizeMultiplier={1}
+      <View
+        style={[
+          styles.avatar,
+          { width: inner, height: inner, backgroundColor: tone.background, overflow: 'hidden' },
+        ]}
       >
-        {initialsFor(name)}
-      </Text>
+        {showPhoto ? (
+          <Image
+            source={{ uri: photoUri }}
+            style={{ width: inner, height: inner }}
+            contentFit="cover"
+            accessible={false}
+            onError={() => setPhotoFailed(true)}
+            testID={testID ? `${testID}-photo` : undefined}
+          />
+        ) : (
+          <Text
+            style={[styles.initials, { color: tone.foreground, fontSize: inner * 0.4 }]}
+            maxFontSizeMultiplier={1}
+          >
+            {initialsFor(name)}
+          </Text>
+        )}
+      </View>
     </View>
   );
 }

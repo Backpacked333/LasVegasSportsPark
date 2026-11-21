@@ -26,6 +26,7 @@ import {
 } from '../ui/theme';
 import { useToast } from '../ui/Toast';
 import { ActionSpecimens } from './specimens-actions';
+import { HouseholdSpecimens } from './specimens-household';
 import { InputSpecimens } from './specimens-inputs';
 import { StateSpecimens } from './specimens-states';
 import { SurfaceSpecimens } from './specimens-surfaces';
@@ -101,6 +102,7 @@ function GalleryContent({
       <InputSpecimens />
       <SurfaceSpecimens />
       <StateSpecimens />
+      <HouseholdSpecimens />
     </Screen>
   );
 }

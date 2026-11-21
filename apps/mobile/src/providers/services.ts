@@ -7,6 +7,7 @@ import type { FetchLike, KeyGenerator, SessionStore } from '@sportspark/api-clie
 import { randomUUID } from 'expo-crypto';
 import { readAppConfig, type AppConfig } from '../config/app-config';
 import { SecureSessionStore } from '../session/secure-session-store';
+import { SecurePersonFilterStore, type PersonFilterStore } from '../ui/person-filter-store';
 import { SecureThemeStore } from '../ui/secure-theme-store';
 import type { ThemePreferenceStore } from '../ui/theme-preference';
 import { consoleCrashReporter, type CrashReporter } from './crash-report';
@@ -32,6 +33,8 @@ export interface AppServices {
   crashReporter?: CrashReporter;
   /** Where the Legends mode choice is kept (absent: it lasts until the app closes). */
   themeStore?: ThemePreferenceStore;
+  /** Where the household "who" filter is remembered (absent: until the app closes). */
+  personFilterStore?: PersonFilterStore;
   /** Selection, impact and outcome haptics (ADR-008): the device's engine, silent on the web. */
   haptics: Haptics;
 }
@@ -46,6 +49,7 @@ export function createDeviceServices(): AppServices {
     now: () => new Date(),
     crashReporter: consoleCrashReporter,
     themeStore: new SecureThemeStore(),
+    personFilterStore: new SecurePersonFilterStore(),
     haptics: platformHaptics(),
   };
 }
