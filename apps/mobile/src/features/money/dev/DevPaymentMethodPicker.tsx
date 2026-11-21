@@ -54,3 +54,9 @@ const useStyles = makeStyles(({ colors }) => ({
   title: { ...type.heading, color: colors.text },
   caption: { ...type.caption, color: colors.textMuted },
 }));
+
+/** The Pay sheet's words for a development method (kept here so release bundles never carry them). */
+export const DEV_PAYMENT_WORDS = {
+  method: 'Development payment method',
+  methodNoPayment: 'Development payment method · no real payment',
+} as const;

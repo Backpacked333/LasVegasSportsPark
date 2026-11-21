@@ -28,3 +28,9 @@ export const DEV_PAYMENT_METHODS: readonly { token: string; label: string }[] | 
   ? // eslint-disable-next-line @typescript-eslint/no-require-imports -- must stay a conditional require so release bundles drop the module
     (require('./DevPaymentMethodPicker') as typeof PickerModule).DEV_PAYMENT_SCENARIOS
   : null;
+
+/** The Pay sheet's words for a development method; null in release builds. */
+export const DEV_PAYMENT_WORDS: { method: string; methodNoPayment: string } | null = __DEV__
+  ? // eslint-disable-next-line @typescript-eslint/no-require-imports -- must stay a conditional require so release bundles drop the module
+    (require('./DevPaymentMethodPicker') as typeof PickerModule).DEV_PAYMENT_WORDS
+  : null;
