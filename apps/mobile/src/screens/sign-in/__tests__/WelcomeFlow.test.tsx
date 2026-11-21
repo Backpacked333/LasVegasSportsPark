@@ -140,7 +140,7 @@ describe('handoff M 5b code and family', () => {
       await screen.findByRole('header', { name: 'We found your family at the park' }),
     ).toBeOnTheScreen();
     expect((await app.sessionStore.load())?.token).toBe('token-1');
-    expect(screen.getByText('Maya Ortiz')).toBeOnTheScreen();
+    expect(await screen.findByText('Maya Ortiz')).toBeOnTheScreen();
     fireEvent.press(screen.getByRole('button', { name: "Yes, that's us" }));
     expect(mockReplace).toHaveBeenLastCalledWith('/');
     fireEvent.press(screen.getByRole('button', { name: "Something's wrong" }));
