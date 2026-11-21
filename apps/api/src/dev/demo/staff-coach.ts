@@ -1,4 +1,9 @@
-import type { CheckoutPayment, Offering, Principal } from '@sportspark/contracts';
+import {
+  DomainError,
+  type CheckoutPayment,
+  type Offering,
+  type Principal,
+} from '@sportspark/contracts';
 import { UnitOfWork } from '../../kernel/database/unit-of-work';
 import {
   OfferingsService,
@@ -38,7 +43,7 @@ import {
   type DemoCalendar,
   type DemoContext,
 } from './context';
-import type { DemoStaff } from './people';
+import type { DemoAdult, DemoStaff } from './people';
 
 /**
  * The coach's and manager's screens as the redesign draws them (staff S 2d, S 3g, S 4d, S 5c,
@@ -192,10 +197,11 @@ export async function seedStaffCoach(ctx: DemoContext, staff: DemoStaff): Promis
       assignCoach(ctx, staff, kickers.id, kickersSessionId),
     );
     if (assigned) {
+      const coached = { ...staff, coach: assigned };
       await optional(ctx, "the coach's attendance so far", () =>
         recordAttendance(
           ctx,
-          staff,
+          coached,
           people.children,
           kickers.id,
           kickersSessionId,
@@ -204,7 +210,7 @@ export async function seedStaffCoach(ctx: DemoContext, staff: DemoStaff): Promis
       );
       if (nextClass) {
         await optional(ctx, 'the end-of-term assessments', () =>
-          assessments(ctx, staff, people.children, kickers, nextClass, calendar),
+          assessments(ctx, coached, people.children, kickers, nextClass, calendar),
         );
       }
     }
@@ -515,8 +521,11 @@ async function ensureOfferings(
     ctx.log(`  Little Kickers now: ${localTime(ctx.timezone, start)} crosses midnight, skipped`);
   }
 
-  // Goalkeeper Basics: Sunday of this week (or the next Sunday), 09:00-12:00 on Field 2.
-  const sundayOffset = calendar.weekStart + 6 >= 0 ? calendar.weekStart + 6 : 6;
+  // Goalkeeper Basics: Sunday of this week, 09:00-12:00 on Field 2; the next Sunday when this
+  // week's would start within the hour (assignments need an activity still to come).
+  const thisSunday = calendar.weekStart + 6;
+  const sundayOffset =
+    calendar.at(thisSunday, '09:00').getTime() <= now + 60 * MINUTE ? thisSunday + 7 : thisSunday;
   const goalkeeper = await ensure({
     name: COACH_DEMO.goalkeeper,
     label: 'Field 2',
@@ -635,42 +644,73 @@ async function registerAll(
   }
 }
 
+/**
+ * The coach sign-in coaches Little Kickers; when that person is committed elsewhere at the time
+ * (the seed's clock lands on another of their activities), the second coach takes it, so the
+ * rest of the stage is still built (attendance and drafts are then theirs).
+ */
 async function assignCoach(
   ctx: DemoContext,
   staff: DemoStaff,
   offeringId: string,
   sessionId: string,
-): Promise<true> {
+): Promise<DemoAdult> {
   const assignments = service(ctx, AssignmentsService);
-  const existing = await assignments.list(staff.manager.principal, {
+  const manager = staff.manager.principal;
+  const existing = await assignments.list(manager, {
     targetType: 'session',
     targetId: sessionId,
     limit: 10,
     order: 'asc',
   });
-  if (existing.items.some((a) => a.personId === staff.coach.personId)) return true;
-  const created = await assignments.create(
-    staff.manager.principal,
-    {
-      personId: staff.coach.personId,
-      kind: 'coach',
-      role: 'coach',
-      engagement: 'regular',
-      offer: true,
-      targetType: 'session',
-      targetId: sessionId,
-      offeringId,
-      policyReferences: [],
-    },
-    null,
-  );
-  await assignments.accept(
-    staff.coach.principal,
-    created.assignment.id,
-    { policyReferences: [] },
-    null,
-  );
-  return true;
+  for (const coach of [staff.coach, staff.secondCoach]) {
+    const held = existing.items.find(
+      (a) => a.personId === coach.personId && (a.status === 'accepted' || a.status === 'completed'),
+    );
+    if (held) return coach;
+  }
+  for (const coach of [staff.coach, staff.secondCoach]) {
+    let offeredId: string | null = null;
+    try {
+      const created = await assignments.create(
+        manager,
+        {
+          personId: coach.personId,
+          kind: 'coach',
+          role: 'coach',
+          engagement: 'regular',
+          offer: true,
+          targetType: 'session',
+          targetId: sessionId,
+          offeringId,
+          policyReferences: [],
+        },
+        null,
+      );
+      offeredId = created.assignment.id;
+      await assignments.accept(coach.principal, offeredId, { policyReferences: [] }, null);
+      return coach;
+    } catch (error) {
+      if (!DomainError.is(error) || error.code !== 'RESOURCE_CONFLICT') throw error;
+      ctx.log(
+        `  Little Kickers: ${coach.subject} is committed elsewhere now, trying the next coach`,
+      );
+      if (offeredId) {
+        const offered = await assignments.get(manager, offeredId);
+        await assignments.withdraw(
+          manager,
+          offeredId,
+          {
+            reason: 'Committed elsewhere at this time',
+            expectedRevision: offered.revision,
+            policyReferences: [],
+          },
+          null,
+        );
+      }
+    }
+  }
+  throw new Error('no demo coach is free for Little Kickers now');
 }
 
 async function recordAttendance(
