@@ -6,6 +6,8 @@ import {
   type IssuePassBody,
   type MyPass,
   type Pass,
+  type ArrivalLookup,
+  type ArrivalLookupBody,
   type PassScan,
   type Principal,
   type RevokePassBody,
@@ -47,10 +49,11 @@ import {
   organizationOf,
   toMyPass,
   toPass,
-  type PassRow,
 } from '../entry.shared';
+import { ENTRY_POLICY, policyForFacility, type EntryPolicy } from '../entry.policy';
 import { PassMachine } from '../entry.state-machines';
 import { ActivityResolver, type ResolvedActivity } from './activity-resolver';
+import { ArrivalChecks } from './arrival-checks';
 
 interface ScanCandidate {
   personId: string;
@@ -80,6 +83,8 @@ export class PassesService {
     private readonly outbox: Outbox,
     private readonly resolver: ActivityResolver,
     private readonly careNotes: CareNotesService,
+    private readonly checks: ArrivalChecks,
+    @Inject(ENTRY_POLICY) private readonly policy: EntryPolicy,
   ) {}
 
   async issue(
@@ -276,13 +281,99 @@ export class PassesService {
         passId: pass.id,
       });
     }
-    const now = this.clock.now();
-    const window = localDayWindow(facility.timezone, now);
     // ENT-04, SPK-IAM-007: a pass issued to a person later merged opens the surviving person.
     const holderPersonId = pass.holder_person_id
       ? await this.directory.resolveCanonicalPersonId(organizationId, pass.holder_person_id)
       : null;
-    const candidates = await this.candidates(db, organizationId, pass, holderPersonId);
+    const candidates = await this.candidates(db, organizationId, {
+      householdId: pass.holder_household_id,
+      holderPersonId,
+    });
+    const opened = await this.openSelection(
+      principal,
+      organizationId,
+      facility,
+      candidates,
+      holderPersonId,
+      { type: 'pass', id: pass.id },
+      correlationId,
+    );
+    return { pass: { id: pass.id, holderKind: pass.holder_kind }, ...opened };
+  }
+
+  /**
+   * S 2a "Name, phone or pass reference" (SPK-ENTRY-003, SPK-ENTRY-004): the desk found a family
+   * by name instead of a pass. It opens the same selection a pass of that holder opens (a
+   * household's members, or a person and the people they may view), with the same arrival checks,
+   * and records nobody, like a scan. Authorized as a scan (`entry.scan_pass`: it opens the arrival
+   * selection flow and nothing more); the audit names the holder that was looked up.
+   */
+  async lookup(
+    principal: Principal,
+    body: ArrivalLookupBody,
+    correlationId: string | null,
+  ): Promise<ArrivalLookup> {
+    const organizationId = organizationOf(principal);
+    await this.authorization.require(principal, EntryActions.scanPass, {
+      type: 'facility',
+      id: body.facilityId,
+      organizationId,
+      facilityId: body.facilityId,
+    });
+    const facility = await this.resolver.facility(organizationId, body.facilityId);
+    const db = this.uow.reader();
+    let candidates: ScanCandidate[];
+    let holderPersonId: string | null = null;
+    if (body.holder.kind === 'household') {
+      // Throws NOT_FOUND for a household of another organization or none at all.
+      await this.households.detail(db, organizationId, body.holder.householdId);
+      candidates = await this.candidates(db, organizationId, {
+        householdId: body.holder.householdId,
+        holderPersonId: null,
+      });
+    } else {
+      holderPersonId = await this.directory.resolveCanonicalPersonId(
+        organizationId,
+        body.holder.personId,
+      );
+      const holder = await this.directory.findPerson(organizationId, holderPersonId);
+      if (!holder || holder.status !== 'active') throw errors.notFound('person');
+      candidates = await this.candidates(db, organizationId, {
+        householdId: null,
+        holderPersonId,
+      });
+    }
+    const opened = await this.openSelection(
+      principal,
+      organizationId,
+      facility,
+      candidates,
+      holderPersonId,
+      body.holder.kind === 'household'
+        ? { type: 'household', id: body.holder.householdId }
+        : { type: 'person', id: holderPersonId as string },
+      correlationId,
+    );
+    return { holder: body.holder, ...opened };
+  }
+
+  /**
+   * The selection a scan or a lookup opens (SPK-ENTRY-003): the people, their sessions today at the
+   * facility with the arrival checks as they stand (S 2a, SPK-ENTRY-004), and their care notes for
+   * a role that may read them. Writes only the audit record of the opening.
+   */
+  private async openSelection(
+    principal: Principal,
+    organizationId: string,
+    facility: { id: string; timezone: string; settings: unknown },
+    candidates: ScanCandidate[],
+    holderPersonId: string | null,
+    target: { type: 'pass' | 'household' | 'person'; id: string },
+    correlationId: string | null,
+  ): Promise<Omit<PassScan, 'pass'>> {
+    const db = this.uow.reader();
+    const now = this.clock.now();
+    const window = localDayWindow(facility.timezone, now);
     const personIds = candidates.map((c) => c.personId);
     const participations = await this.enrollments.participationsOf(organizationId, personIds, {
       from: window.start,
@@ -322,10 +413,17 @@ export class PassesService {
       : [];
 
     const people: ScanPerson[] = [];
+    /** S 2a (SPK-ENTRY-004): each listed activity with what its arrival checks are judged on. */
+    const toEvaluate: Array<{
+      person: ScanPerson;
+      listed: ScanActivity;
+      resolved: ResolvedActivity;
+    }> = [];
     for (const candidate of candidates) {
       const person = await this.people.detail(db, organizationId, candidate.personId);
       const participation = participations.find((p) => p.participantPersonId === person.id);
       const activities: ScanActivity[] = [];
+      const resolvedOf = new Map<ScanActivity, ResolvedActivity>();
       const seen = new Set<string>();
       const checkinOf = (activityId: string) => {
         const c = live.find((l) => l.person_id === person.id && l.activity_id === activityId);
@@ -345,7 +443,9 @@ export class PassesService {
           scheduledEnd: session.end.toISOString(),
           basis: { kind: 'session_booking', id: booking.id, status: booking.status },
           checkin: checkinOf(session.detail.id),
+          issues: [],
         });
+        resolvedOf.set(activities[activities.length - 1] as ScanActivity, session);
       }
       for (const enrollment of participation?.enrollments ?? []) {
         for (const session of await sessionsOf(enrollment.offeringId)) {
@@ -361,7 +461,9 @@ export class PassesService {
             scheduledEnd: session.end.toISOString(),
             basis: { kind: 'enrollment', id: enrollment.id, status: enrollment.status },
             checkin: checkinOf(session.detail.id),
+            issues: [],
           });
+          resolvedOf.set(activities[activities.length - 1] as ScanActivity, session);
         }
       }
       activities.sort((a, b) => a.scheduledStart.localeCompare(b.scheduledStart));
@@ -370,7 +472,7 @@ export class PassesService {
         holderPersonId && candidate.relation === 'dependent' && person.kind === 'child'
           ? await this.authority.hasPermission(organizationId, holderPersonId, person.id, 'collect')
           : null;
-      people.push({
+      const listedPerson: ScanPerson = {
         personId: person.id,
         givenName: person.givenName,
         familyName: person.familyName,
@@ -381,19 +483,38 @@ export class PassesService {
         holderMayCollect,
         activities,
         careNotes: null,
-      });
+      };
+      people.push(listedPerson);
+      for (const listed of activities) {
+        const resolved = resolvedOf.get(listed);
+        if (resolved) toEvaluate.push({ person: listedPerson, listed, resolved });
+      }
     }
+    const policy = policyForFacility(this.policy, facility.settings);
     // §1.7, §4.14, SPK-ENTRY-004: operational care notes for the desk, only for a staff role that
     // may read them at this facility (identity decides; decided outside the transaction).
     const mayReadCareNotes = await this.careNotes.mayReadAtFacility(principal, facility.id);
 
     await this.uow.run(async ({ trx }) => {
+      // S 2a (SPK-ENTRY-004): the checks a check-in would record, read now and recorded nowhere,
+      // so the desk answers "cleared" or "not cleared" per person before checking anyone in.
+      for (const { person, listed, resolved } of toEvaluate) {
+        const evaluation = await this.checks.evaluate(
+          trx,
+          organizationId,
+          person.personId,
+          resolved,
+          policy,
+          person.onSite,
+        );
+        listed.issues = evaluation.issues;
+      }
       await this.audit.record(trx, {
         organizationId,
         actor: principal,
         action: EntryActions.scanPass.id,
-        targetType: 'pass',
-        targetId: pass.id,
+        targetType: target.type,
+        targetId: target.id,
         correlationId,
         details: { facilityId: facility.id, people: people.length, recorded: 'nothing' },
       });
@@ -406,8 +527,8 @@ export class PassesService {
           {
             via: EntryActions.scanPass.id,
             facilityId: facility.id,
-            referenceType: 'pass',
-            referenceId: pass.id,
+            referenceType: target.type,
+            referenceId: target.id,
           },
           correlationId,
         );
@@ -415,7 +536,6 @@ export class PassesService {
       }
     });
     return {
-      pass: { id: pass.id, holderKind: pass.holder_kind },
       facilityId: facility.id,
       scannedAt: now.toISOString(),
       window: { start: window.start.toISOString(), end: window.end.toISOString() },
@@ -429,12 +549,11 @@ export class PassesService {
   private async candidates(
     db: Db | Trx,
     organizationId: string,
-    pass: PassRow,
-    holderPersonId: string | null,
+    holder: { householdId: string | null; holderPersonId: string | null },
   ) {
     const out: ScanCandidate[] = [];
-    if (pass.holder_household_id) {
-      const household = await this.households.detail(db, organizationId, pass.holder_household_id);
+    if (holder.householdId) {
+      const household = await this.households.detail(db, organizationId, holder.householdId);
       for (const member of household.members) {
         const person = await this.directory.findPerson(organizationId, member.personId);
         if (person?.status === 'active') {
@@ -443,13 +562,13 @@ export class PassesService {
       }
       return out;
     }
-    const holder = holderPersonId;
-    if (!holder) return out;
-    const person = await this.directory.findPerson(organizationId, holder);
-    if (person?.status === 'active') out.push({ personId: holder, relation: 'holder' });
+    const holderId = holder.holderPersonId;
+    if (!holderId) return out;
+    const person = await this.directory.findPerson(organizationId, holderId);
+    if (person?.status === 'active') out.push({ personId: holderId, relation: 'holder' });
     // Authority, never household membership, decides whose sessions a personal pass opens (§4.5).
-    for (const grant of await this.relationships.authoritiesOf(organizationId, holder)) {
-      if (grant.subjectPersonId === holder || !grant.permissions.includes('view')) continue;
+    for (const grant of await this.relationships.authoritiesOf(organizationId, holderId)) {
+      if (grant.subjectPersonId === holderId || !grant.permissions.includes('view')) continue;
       const dependent = await this.directory.findPerson(organizationId, grant.subjectPersonId);
       if (dependent?.status === 'active') {
         out.push({ personId: grant.subjectPersonId, relation: 'dependent' });

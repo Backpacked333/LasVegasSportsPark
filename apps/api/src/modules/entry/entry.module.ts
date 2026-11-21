@@ -37,6 +37,7 @@ import {
   DeparturesController,
   MePassesController,
   PassesController,
+  ArrivalLookupsController,
   SessionCheckinsController,
   VisitsController,
 } from './controllers/arrival.controller';
@@ -155,6 +156,7 @@ const providers: Provider[] = [
   controllers: [
     MePassesController,
     PassesController,
+    ArrivalLookupsController,
     VisitsController,
     DeparturesController,
     SessionCheckinsController,
