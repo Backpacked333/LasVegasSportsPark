@@ -467,6 +467,7 @@ export function CancelledHero({
 }) {
   const styles = useStyles();
   const theme = useTheme();
+  const router = useRouter();
   const title = fixture.away
     ? `${fixture.home.teamName} vs ${fixture.away.teamName}`
     : fixture.home.teamName;
@@ -507,7 +508,25 @@ export function CancelledHero({
           {reason ??
             "You don't need to come. If the league sets a new date, it will appear in Calendar."}
         </Text>
-        <Button label="See what's next" onPress={onNext} block testID="cancelled-next" />
+        <View style={styles.cancelButtons}>
+          <View style={styles.cancelButton}>
+            <Button
+              label="Message coach"
+              variant="secondary"
+              block
+              onPress={() =>
+                router.push({
+                  pathname: '/messages/coach',
+                  params: { fixtureId: fixture.id },
+                } as Href)
+              }
+              testID="cancelled-message-coach"
+            />
+          </View>
+          <View style={styles.cancelButton}>
+            <Button label="See what's next" onPress={onNext} block testID="cancelled-next" />
+          </View>
+        </View>
       </View>
     </View>
   );
@@ -579,5 +598,8 @@ const useStyles = makeStyles(({ colors }) => ({
   cancelHeadText: { ...fonts.bold, fontSize: 19, lineHeight: 24, color: colors.primaryText },
   cancelRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
   cancelWords: { flex: 1, gap: 2 },
+  // Handoff M 3g: "Message coach" (M 4d, proposed) beside "See what's next".
+  cancelButtons: { flexDirection: 'row', gap: spacing.sm },
+  cancelButton: { flex: 1 },
   struck: { textDecorationLine: 'line-through' },
 }));

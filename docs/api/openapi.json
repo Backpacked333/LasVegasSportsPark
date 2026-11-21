@@ -33147,6 +33147,12 @@
           "title": {
             "type": "string"
           },
+          "place": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "start": {
             "type": "string",
             "format": "date-time"
@@ -33182,6 +33188,7 @@
           "offeringId",
           "sessionId",
           "title",
+          "place",
           "start",
           "end",
           "status",

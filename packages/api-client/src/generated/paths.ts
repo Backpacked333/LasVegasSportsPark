@@ -65016,6 +65016,7 @@ export type components = {
             offeringId: string;
             /** Format: uuid */
             personId: string;
+            place: string | null;
             /** Format: uuid */
             sessionBookingId: string | null;
             /** Format: uuid */

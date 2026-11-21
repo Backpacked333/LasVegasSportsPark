@@ -32,6 +32,17 @@
  *   opened, or else the notice itself in a sheet with "Acknowledge". The empty inbox is the
  *   `empty-inbox` illustration. A notice the API withdrew while open says so in its sheet.
  *
+ * Handoff M 2d (INTERACTIONS 2d rows 1 to 5; ADR-008, **Proposed**): "Inbox", with segments All /
+ * To do (with its count) / Changes / Results, sections Today / This week / Earlier, each a card of
+ * rows. A change says what moved in one line, the old value struck through and the new one in bold
+ * (SPK-COMMS-005); a result has a trophy tile, a place offer an hourglass and "See offer". Swiping a
+ * row left reveals "Mark read" (a full swipe marks it); "Mark all read" is the non-gesture
+ * alternative and screen readers get "Mark read" as an action on the row. The API has no
+ * "mark all" command, so each unread notice is marked with its own request
+ * (`POST /v1/me/inbox/{id}/read`), shown at once and put back if one does not save, with Try again
+ * (no Undo: the API has no "mark unread"). Offline, marking waits for a connection. A notice whose
+ * record is gone opens as the notice itself (the sheet with its text).
+ *
  * Status vocabulary (journeys.md section 3): "Unread", "Read", "Acknowledged",
  * "Replaced by a newer update".
  */
@@ -62,8 +73,9 @@ import {
 import { SectionQueryState } from '../../features/today/read-state';
 import { noticeStatus } from '../../features/today/status';
 import { useKnownFacilityZone } from '../../features/today/known-zone';
-import { formatTime, formatWhen } from '../../features/today/time';
-import { useApp, useConnectivity, useNow } from '../../providers/AppProviders';
+import { formatWhen } from '../../features/today/time';
+import type { ScheduleChange } from '../../features/today/notices';
+import { useApi, useApp, useConnectivity, useNow } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
 import { LiveRegion, sentences } from '../../ui/announce';
 import { Button } from '../../ui/Button';
@@ -78,15 +90,27 @@ import { StatusBadge, type StatusBadgeProps } from '../../ui/StatusBadge';
 import { Text } from '../../ui/Text';
 import {
   continuousCorners,
+  fonts,
   layout,
   makeStyles,
   MIN_TOUCH_SIZE,
   radius,
   spacing,
+  type,
   useTheme,
 } from '../../ui/theme';
 import { CommandError } from '../../ui/CommandError';
-import { inboxSections, noticeTime, type InboxDay, type InboxTab } from './inbox-sections';
+import { useOptimisticWrite } from '../../ui/optimistic';
+import { SwipeAction } from '../../ui/SwipeAction';
+import {
+  inboxSections,
+  inTab,
+  noticeLook,
+  noticeTime,
+  rowTime,
+  type InboxDay,
+  type InboxTab,
+} from './inbox-sections';
 
 type InboxItem = Schema<'InboxItem'>;
 type InboxPage = Schema<'InboxPage'>;
@@ -271,6 +295,75 @@ function NoticeWithdrawn() {
   );
 }
 
+/** One changed fact: what it was and what it is now (SPK-COMMS-005). */
+export interface ChangedFact {
+  before: string;
+  after: string;
+}
+
+/** What a schedule notice changed, in the order said: the place, then the time. */
+export function changedFacts(change: ScheduleChange): ChangedFact[] {
+  const { before, after } = change;
+  if (!before || !after) return [];
+  const out: ChangedFact[] = [];
+  const place = (d: NonNullable<ScheduleChange['before']>) =>
+    d.resources.map((r) => r.name).join(', ');
+  if (place(before) !== place(after) && place(before) && place(after)) {
+    out.push({ before: place(before), after: place(after) });
+  }
+  const when = (d: NonNullable<ScheduleChange['before']>) =>
+    `${formatWhen(d.scheduledStart, d.timezone)}`;
+  if (before.scheduledStart !== after.scheduledStart) {
+    out.push({ before: when(before), after: when(after) });
+  }
+  return out;
+}
+
+/**
+ * The one line of a change (handoff M 2d): "Maya · Desert Foxes vs Lions moved from Field 3 to
+ * Field 2. Same time.", the old value struck through and the new one in bold. Screen readers hear
+ * "was … now …" instead of the strike.
+ */
+function ChangeLine({ item, about }: { item: InboxItem; about: string }) {
+  const styles = useStyles();
+  const change = scheduleChangeOf(item);
+  const facts = change && change.kind === 'changed' ? changedFacts(change) : [];
+  if (!change || facts.length === 0) {
+    return (
+      <Text variant="callout" tone="muted" numberOfLines={2}>
+        {item.body}
+      </Text>
+    );
+  }
+  const who = about.replace(/^For: /u, '');
+  const what = change.after?.title ?? item.title;
+  const sameTime = !facts.some((f) => f.before.includes(':'));
+  const spoken = `${who ? `${who}, ` : ''}${what}: ${facts
+    .map((f) => `was ${f.before}, now ${f.after}`)
+    .join('; ')}${sameTime ? '. Same time.' : '.'}`;
+  return (
+    <Text variant="callout" style={styles.changeLine} accessibilityLabel={spoken}>
+      {who ? `${who} · ` : ''}
+      {what} moved{' '}
+      {facts.map((f, index) => (
+        <Text key={index}>
+          {index > 0 ? ' and ' : ''}from <Text style={styles.struck}>{f.before}</Text> to{' '}
+          <Text style={styles.bold}>{f.after}</Text>
+        </Text>
+      ))}
+      {sameTime ? '. Same time.' : '.'}
+    </Text>
+  );
+}
+
+const LOOK_ICON: Readonly<
+  Record<string, { icon: string; tone: 'success' | 'pending' | 'neutral' }>
+> = {
+  result: { icon: 'emoji_events', tone: 'success' },
+  offer: { icon: 'hourglass_top', tone: 'pending' },
+  payment: { icon: 'receipt_long', tone: 'neutral' },
+};
+
 /**
  * One notice in the list: a button named "title, for whom, status", that opens its item. Opening
  * the record a notice is about marks an unread notice read with the request the notice sends when
@@ -280,24 +373,39 @@ function NoticeRow({
   item,
   names,
   zone,
+  now,
+  readLocally,
+  first,
+  last,
   onOpenNotice,
+  onMarkRead,
 }: {
   item: InboxItem;
   names: Map<string, string>;
   zone: string;
+  now: Date;
+  /** Marked read here a moment ago (shown before the list is read again). */
+  readLocally: boolean;
+  first: boolean;
+  last: boolean;
   onOpenNotice: (attemptId: string, trigger: RefObject<View | null>) => void;
+  onMarkRead: (items: InboxItem[]) => void;
 }) {
   const styles = useStyles();
-  const { colors } = useTheme();
+  const theme = useTheme();
+  const { colors } = theme;
   const router = useRouter();
   const { reachable } = useConnectivity();
   const ref = useRef<View>(null);
   const read = useApiCommand('post', '/me/inbox/{id}/read', {
     invalidate: [INBOX_KEY, UNREAD_COUNT_KEY],
   });
-  const status = noticeStatus(item);
+  const status = readLocally ? { tone: 'neutral' as const, label: 'Read' } : noticeStatus(item);
   const about = participantsLine(item, names);
-  const unread = !item.readAt && !item.acknowledgedAt;
+  const unread = !item.readAt && !item.acknowledgedAt && !readLocally;
+  const look = noticeLook(item);
+  const tile = LOOK_ICON[look];
+  const offline = reachable === false;
   const target = noticeTarget(item);
   const open = () => {
     if (target.kind !== 'subject') {
@@ -310,48 +418,97 @@ function NoticeRow({
       .submit({ path: { id: item.attemptId }, body: revisionBody(item.revision) })
       .catch(() => undefined);
   };
+  const markable = unread && !offline;
   return (
-    <Pressable
-      ref={ref}
-      accessibilityRole="button"
-      accessibilityLabel={[item.title, about, status.label].filter(Boolean).join(', ')}
-      accessibilityHint={
-        target.kind === 'subject' ? 'Opens what this notice is about' : 'Opens the notice'
+    <SwipeAction
+      action={
+        markable ? { label: 'Mark read', icon: 'drafts', onAction: () => onMarkRead([item]) } : null
       }
-      onPress={open}
-      android_ripple={{ color: colors.surface }}
-      style={({ pressed }) => [styles.row, pressed && styles.pressed]}
-      testID={`inbox-item-${item.attemptId}`}
+      style={[
+        styles.rowFrame,
+        first ? styles.rowFirst : styles.rowDivided,
+        last ? styles.rowLast : null,
+      ]}
+      testID={`inbox-swipe-${item.attemptId}`}
     >
-      <View style={[styles.dot, unread ? styles.dotUnread : null]} />
-      <View style={styles.rowText}>
-        <View style={styles.rowTop}>
-          <Text variant="headline" style={styles.rowTitle}>
-            {item.title}
-          </Text>
-          <Text variant="footnote" tone="muted" tabular>
-            {formatTime(noticeTime(item), zone)}
-          </Text>
+      <Pressable
+        ref={ref}
+        accessibilityRole="button"
+        accessibilityLabel={[item.title, about, status.label].filter(Boolean).join(', ')}
+        accessibilityHint={
+          target.kind === 'subject' ? 'Opens what this notice is about' : 'Opens the notice'
+        }
+        accessibilityActions={markable ? [{ name: 'markRead', label: 'Mark read' }] : undefined}
+        onAccessibilityAction={(event) => {
+          if (event.nativeEvent.actionName === 'markRead') onMarkRead([item]);
+        }}
+        onPress={open}
+        android_ripple={{ color: colors.surface }}
+        style={({ pressed }) => [styles.row, pressed && styles.pressed]}
+        testID={`inbox-item-${item.attemptId}`}
+      >
+        {tile ? (
+          <View style={[styles.tile, { backgroundColor: theme.toneBackgrounds[tile.tone] }]}>
+            <Icon name={tile.icon} size={22} color={colors[tile.tone]} />
+          </View>
+        ) : (
+          <View style={[styles.dot, unread ? styles.dotUnread : null]} />
+        )}
+        <View style={styles.rowText}>
+          <View style={styles.rowTop}>
+            <Text
+              style={[styles.rowTitle, unread || look !== 'other' ? null : styles.rowTitleRead]}
+            >
+              {item.title}
+            </Text>
+            <Text variant="footnote" tone="muted" tabular>
+              {rowTime(noticeTime(item), now, zone)}
+            </Text>
+          </View>
+          {look === 'change' ? (
+            <ChangeLine item={item} about={about} />
+          ) : (
+            <>
+              {about ? (
+                <Text variant="footnote" tone="muted">
+                  {about}
+                </Text>
+              ) : null}
+              <Text variant="callout" tone="muted" numberOfLines={2}>
+                {item.body}
+              </Text>
+            </>
+          )}
+          <View style={styles.badges}>
+            {item.kind === 'schedule_changed' || item.kind === 'cancellation' ? (
+              <StatusBadge
+                tone={item.kind === 'cancellation' ? 'danger' : 'warning'}
+                label={item.kind === 'cancellation' ? 'Cancelled' : 'Change'}
+              />
+            ) : null}
+            {status.label !== 'Read' ? <StatusBadge {...status} /> : null}
+          </View>
+          {look === 'offer' && target.kind === 'subject' ? (
+            <View style={styles.offer}>
+              <Button
+                label="See offer"
+                onPress={() => router.push(target.href as Href)}
+                testID={`inbox-offer-${item.attemptId}`}
+              />
+            </View>
+          ) : null}
         </View>
-        {about ? (
-          <Text variant="footnote" tone="muted">
-            {about}
-          </Text>
-        ) : null}
-        <Text variant="callout" tone="muted" numberOfLines={2}>
-          {item.body}
-        </Text>
-        <StatusBadge {...status} />
-      </View>
-      <Icon name="chevron_right" size={22} color={colors.primary} />
-    </Pressable>
+      </Pressable>
+    </SwipeAction>
   );
 }
 
-const TABS = [
+const TAB_LABELS: readonly { value: InboxTab; label: string }[] = [
   { value: 'all', label: 'All' },
-  { value: 'action', label: 'Needs action' },
-] as const;
+  { value: 'todo', label: 'To do' },
+  { value: 'changes', label: 'Changes' },
+  { value: 'results', label: 'Results' },
+];
 
 const EMPTY_TITLE = 'No notifications';
 const EMPTY_TEXT = 'Schedule changes, results and messages from the facility will appear here.';
@@ -402,6 +559,40 @@ function InboxList({ openId }: { openId?: string }) {
     setOpen(id);
   }, []);
 
+  // Marked read here, shown at once (INTERACTIONS 2d rows 3 and 4), until the list is read again.
+  const [readLocally, setReadLocally] = useState<ReadonlySet<string>>(() => new Set());
+  const queryClient = useQueryClient();
+  const api = useApi();
+  const runOptimistic = useOptimisticWrite();
+  const { reachable } = useConnectivity();
+  const markRead = useCallback(
+    (targets: InboxItem[]) => {
+      const ids = targets.map((t) => t.attemptId);
+      if (ids.length === 0) return;
+      runOptimistic({
+        apply: () => setReadLocally((s) => new Set([...s, ...ids])),
+        revert: () => setReadLocally((s) => new Set([...s].filter((id) => !ids.includes(id)))),
+        commit: async () => {
+          // No "mark all" command in the API: one read per notice, in order.
+          for (const target of targets) {
+            await api.post('/me/inbox/{id}/read', {
+              path: { id: target.attemptId },
+              body: revisionBody(target.revision),
+              intent: api.newIntent(),
+            });
+          }
+        },
+        success: ids.length === 1 ? 'Marked as read.' : `Marked ${ids.length} as read.`,
+        failure: ids.length === 1 ? "That didn't save." : "Marking them read didn't save.",
+        onSettled: () => {
+          void queryClient.invalidateQueries({ queryKey: INBOX_KEY });
+          void queryClient.invalidateQueries({ queryKey: UNREAD_COUNT_KEY });
+        },
+      });
+    },
+    [api, queryClient, runOptimistic],
+  );
+
   const [refreshing, setRefreshing] = useState(false);
   const refresh = async () => {
     setRefreshing(true);
@@ -418,6 +609,11 @@ function InboxList({ openId }: { openId?: string }) {
     first.data !== undefined &&
     !(first.error && presentationForError(first.error) === 'unavailable');
   const sections: InboxDay[] = listed ? inboxSections(items, tab, now, zone) : [];
+  const unreadItems = items.filter(
+    (i) => !i.readAt && !i.acknowledgedAt && !readLocally.has(i.attemptId),
+  );
+  const todoCount = items.filter((i) => inTab(i, 'todo', now)).length;
+  const tabs = TAB_LABELS.map((t) => (t.value === 'todo' ? { ...t, count: todoCount } : t));
   const byNotification = new Map(items.map((i) => [i.notificationId, i]));
   const byAttempt = new Map(items.map((i) => [i.attemptId, i]));
   const openItem = open ? (byAttempt.get(open) ?? null) : null;
@@ -460,15 +656,30 @@ function InboxList({ openId }: { openId?: string }) {
             {section.title}
           </Text>
         ),
-        renderItem: ({ item }) => (
-          <NoticeRow item={item} names={names} zone={zone} onOpenNotice={openNotice} />
+        renderItem: ({ item, index, section }) => (
+          <NoticeRow
+            item={item}
+            names={names}
+            zone={zone}
+            now={now}
+            readLocally={readLocally.has(item.attemptId)}
+            first={index === 0}
+            last={index === section.data.length - 1}
+            onOpenNotice={openNotice}
+            onMarkRead={markRead}
+          />
         ),
-        ItemSeparatorComponent: () => <View style={styles.separator} />,
         ListEmptyComponent:
           listed && items.length > 0 ? (
             <EmptyState
-              title="You're all caught up"
-              message="Nothing in your notifications needs you right now."
+              title={tab === 'todo' ? "You're all caught up" : 'Nothing here yet'}
+              message={
+                tab === 'todo'
+                  ? 'Nothing in your inbox needs you right now.'
+                  : tab === 'changes'
+                    ? 'Changes to times and places will appear here.'
+                    : 'Results will appear here after each game.'
+              }
               testID="inbox-no-action"
             />
           ) : null,
@@ -493,14 +704,41 @@ function InboxList({ openId }: { openId?: string }) {
               />
             </LiveRegion>
           ) : (
-            <SegmentedControl<InboxTab>
-              label="Show"
-              segments={TABS}
-              value={tab}
-              onChange={setTab}
-              style={styles.tabs}
-              testID="inbox-tabs"
-            />
+            <View>
+              {unreadItems.length > 0 ? (
+                <View style={styles.markAll}>
+                  <Pressable
+                    onPress={() => markRead(unreadItems)}
+                    disabled={reachable === false}
+                    accessibilityRole="button"
+                    accessibilityLabel="Mark all read"
+                    accessibilityHint={
+                      reachable === false ? 'Marking read needs a connection' : undefined
+                    }
+                    accessibilityState={{ disabled: reachable === false }}
+                    style={styles.markAllButton}
+                    testID="inbox-mark-all"
+                  >
+                    <Text
+                      style={[
+                        styles.markAllText,
+                        reachable === false ? styles.markAllDisabled : null,
+                      ]}
+                    >
+                      Mark all read
+                    </Text>
+                  </Pressable>
+                </View>
+              ) : null}
+              <SegmentedControl<InboxTab>
+                label="Show"
+                segments={tabs}
+                value={tab}
+                onChange={setTab}
+                style={styles.tabs}
+                testID="inbox-tabs"
+              />
+            </View>
           )
         }
       </QueryBoundary>
@@ -549,29 +787,61 @@ export function InboxRoute() {
 
 const useStyles = makeStyles(({ colors }) => ({
   tabs: { marginHorizontal: layout.gutter, marginTop: spacing.md },
-  day: { paddingHorizontal: layout.gutter, paddingTop: spacing.xl, paddingBottom: spacing.sm },
+  day: { paddingHorizontal: layout.gutter, paddingTop: spacing.lg, paddingBottom: spacing.sm },
+  // The rows of a section form one card (handoff M 2d): the frame carries the card's edges.
+  rowFrame: {
+    marginHorizontal: layout.gutter,
+    backgroundColor: colors.background,
+    borderLeftWidth: 1,
+    borderRightWidth: 1,
+    borderColor: colors.border,
+    overflow: 'hidden',
+  },
+  rowFirst: {
+    borderTopWidth: 1,
+    borderTopLeftRadius: radius.lg,
+    borderTopRightRadius: radius.lg,
+    ...continuousCorners,
+  },
+  rowDivided: { borderTopWidth: 1, borderTopColor: colors.divider },
+  rowLast: {
+    borderBottomWidth: 1,
+    borderBottomLeftRadius: radius.lg,
+    borderBottomRightRadius: radius.lg,
+  },
   row: {
     minHeight: MIN_TOUCH_SIZE,
-    marginHorizontal: layout.gutter,
     flexDirection: 'row',
     alignItems: 'flex-start',
     gap: spacing.md,
-    paddingVertical: spacing.md,
+    paddingVertical: 14,
     paddingHorizontal: spacing.lg,
-    borderRadius: radius.lg,
-    ...continuousCorners,
     backgroundColor: colors.background,
-    borderWidth: 1,
-    borderColor: colors.border,
   },
   pressed: { backgroundColor: colors.surface },
-  separator: { height: spacing.sm },
   // The unread dot is decorative: the status badge says "Unread" in words.
-  dot: { width: 8, height: 8, marginTop: 8, borderRadius: radius.pill },
-  dotUnread: { backgroundColor: colors.primary },
+  dot: { width: 8, height: 8, marginTop: 7, borderRadius: radius.pill },
+  dotUnread: { backgroundColor: colors.info },
+  tile: {
+    width: 40,
+    height: 40,
+    borderRadius: radius.sm,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   rowText: { flex: 1, gap: spacing.xs },
   rowTop: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm },
-  rowTitle: { flex: 1 },
+  rowTitle: { flex: 1, ...fonts.bold, fontSize: 16, lineHeight: 21, color: colors.text },
+  rowTitleRead: { color: colors.textMuted },
+  changeLine: { color: colors.text },
+  struck: { textDecorationLine: 'line-through', color: colors.textMuted },
+  bold: { ...fonts.bold, color: colors.text },
+  badges: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
+  offer: { alignItems: 'flex-start', paddingTop: spacing.xs },
+  markAll: { flexDirection: 'row', justifyContent: 'flex-end', paddingHorizontal: layout.gutter },
+  markAllButton: { minHeight: MIN_TOUCH_SIZE, justifyContent: 'center' },
+  markAllText: { ...type.callout, ...fonts.semibold, color: colors.primary },
+  markAllDisabled: { color: colors.textMuted },
   detail: { gap: spacing.sm },
   gap: { gap: spacing.sm },
   footer: { paddingHorizontal: layout.gutter, paddingVertical: spacing.lg, gap: spacing.md },

@@ -80,7 +80,7 @@ export function SwitchRow({
           disabled={disabled}
           trackColor={{ false: colors.control, true: colors.primary }}
           // A light thumb in both themes (the platform's own default is teal on the web and
-          // Android, which clashed with the gold track in Legends mode).
+          // Android, which clashed with the accent track in Legends mode).
           thumbColor={switchThumbColor(theme)}
           ios_backgroundColor={colors.control}
         />

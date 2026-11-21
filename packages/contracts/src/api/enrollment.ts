@@ -1523,6 +1523,11 @@ export const FamilyCalendarItemSchema = z
     offeringId: z.uuid(),
     sessionId: z.uuid().nullable(),
     title: z.string(),
+    /**
+     * Handoff M 1h (SPK-YOUTH-007): the space it happens in ("Field 2", "Indoor court 1"), the
+     * session's own place label else the offering's; null when neither names one.
+     */
+    place: z.string().nullable(),
     start: Instant,
     end: Instant,
     status: z.string(),

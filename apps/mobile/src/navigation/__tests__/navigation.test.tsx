@@ -100,7 +100,7 @@ describe('primary navigation (SPK-UX-002)', () => {
     expect(app.haptics.events).toEqual(['selection']);
   });
 
-  it('PA-11 SCR-C-19: /family-calendar opens Calendar with "Everyone" selected, its person chips and the week\'s overlap warning', async () => {
+  it('PA-11 SCR-C-19: /family-calendar opens Calendar with "Everyone" selected, its person chips and the week\'s clash', async () => {
     // The family's week as the API serves it: two Saturday sessions of a child that overlap.
     const self = '0192f1a0-0000-7000-8000-00000000a001';
     const child = '0192f1a0-0000-7000-8000-00000000a002';
@@ -114,6 +114,7 @@ describe('primary navigation (SPK-UX-002)', () => {
       offeringId: null,
       sessionId: null,
       title,
+      place: null,
       start,
       end,
       status: 'confirmed',
@@ -180,17 +181,15 @@ describe('primary navigation (SPK-UX-002)', () => {
       'GET /me/fixtures': { status: 200, body: [] },
       'GET /me/team-entries': { status: 200, body: [] },
     });
-    // The rendered destination: Calendar, with "Everyone" selected and the overlap warned of.
+    // The rendered destination: Calendar, with "Everyone" selected and the clash called out (M 1h).
     expect(
-      await screen.findByLabelText(
-        '1 overlapping commitment this week. Overlaps are highlighted so you can plan around them.',
-      ),
+      await screen.findByLabelText(/^✕ Clash: .* is busy until 11:00, but .* starts at 10:30\.$/),
     ).toBeOnTheScreen();
     expect(router.getPathname()).toBe('/schedule');
     expect(router.getSearchParams()).toEqual({ people: 'everyone' });
     expect(screen.getByRole('header', { name: 'Calendar' })).toBeOnTheScreen();
     expect(screen.getByLabelText('Show activities for')).toBeOnTheScreen();
-    expect(screen.getByRole('button', { name: 'Everyone' })).toBeSelected();
+    expect(screen.getByRole('radio', { name: 'Everyone' })).toBeChecked();
     expect(screen.getByRole('button', { name: 'Previous week' })).toBeOnTheScreen();
     expect(screen.queryByLabelText('Link not available')).toBeNull();
   });
