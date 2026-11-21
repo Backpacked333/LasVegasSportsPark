@@ -84,7 +84,14 @@ export function formFixtures(fixtures: readonly SeasonFixture[]): SeasonFixture[
     .slice(-FORM_LENGTH);
 }
 
-export function FormGuide({ workspace }: { workspace: Workspace }) {
+export function FormGuide({
+  workspace,
+  variant = 'night',
+}: {
+  workspace: Workspace;
+  /** `card` (handoff M 1i): on a light card, win pitch green, draw grey, loss red, smaller. */
+  variant?: 'night' | 'card';
+}) {
   const { colors } = useTheme();
   const styles = useStyles();
   const entryId = workspace.entry.id;
@@ -112,17 +119,28 @@ export function FormGuide({ workspace }: { workspace: Workspace }) {
     })
     .filter((o): o is FormOutcome => o !== null);
   if (form.length === 0) return null;
-  const look = formLook(colors);
+  const look = variant === 'card' ? cardFormLook(colors) : formLook(colors);
   return (
     <View
-      style={styles.form}
+      style={[styles.form, variant === 'card' ? styles.formFlush : null]}
       accessible
       accessibilityLabel={`Form, last ${plural(form.length, 'official result')}, oldest first: ${form.map((o) => OUTCOME_WORD[o]).join(', ')}`}
       testID="form-guide"
     >
       {form.map((o, i) => (
-        <View key={i} style={[styles.formPill, look[o].pill]}>
-          <Text style={[styles.formText, look[o].text]}>{o}</Text>
+        <View
+          key={i}
+          style={[styles.formPill, variant === 'card' ? styles.formPillSmall : null, look[o].pill]}
+        >
+          <Text
+            style={[
+              styles.formText,
+              variant === 'card' ? styles.formTextSmall : null,
+              look[o].text,
+            ]}
+          >
+            {o}
+          </Text>
         </View>
       ))}
     </View>
@@ -138,6 +156,15 @@ function formLook(colors: ThemeColors) {
       pill: { backgroundColor: colors.nightRaised, borderColor: colors.nightMuted, borderWidth: 1 },
       text: { color: colors.onNight },
     },
+  } as const;
+}
+
+/** Pills on a light card (handoff 1i): win pitch green, draw grey, loss red; letters always shown. */
+function cardFormLook(colors: ThemeColors) {
+  return {
+    W: { pill: { backgroundColor: colors.primary }, text: { color: colors.primaryText } },
+    D: { pill: { backgroundColor: colors.control }, text: { color: colors.text } },
+    L: { pill: { backgroundColor: colors.danger }, text: { color: colors.primaryText } },
   } as const;
 }
 
@@ -161,7 +188,18 @@ export function useStandings(workspace: Workspace) {
   });
 }
 
-export function MiniStandings({ workspace }: { workspace: Workspace }) {
+export function MiniStandings({
+  workspace,
+  variant = 'plain',
+}: {
+  workspace: Workspace;
+  /**
+   * `card` (handoff M 1i): the own row as a rounded tonal band without "· You", the playoff cut as
+   * a dashed line under its row, and "Dashed line: playoff cut" below the table.
+   */
+  variant?: 'plain' | 'card';
+}) {
+  const card = variant === 'card';
   const styles = useStyles();
   const standings = useStandings(workspace);
   const data = standings.data;
@@ -188,19 +226,23 @@ export function MiniStandings({ workspace }: { workspace: Workspace }) {
           return (
             <View key={row.teamEntryId}>
               <View
-                style={[styles.tableRow, own && styles.ownRow]}
+                style={[
+                  styles.tableRow,
+                  own && (card ? styles.ownRowCard : styles.ownRow),
+                  card && cut !== null && row.position === cut ? styles.cutRow : null,
+                ]}
                 accessible
                 accessibilityLabel={`${ordinal(row.position)}, ${row.teamName}${own ? ' (your team)' : ''}, goal difference ${gd}, ${plural(row.points, 'point')}`}
                 testID={`mini-row-${row.teamEntryId}`}
               >
                 <Text style={[styles.cellPos, own && styles.ownText]}>{row.position}</Text>
                 <Text style={[styles.cellTeam, own && styles.ownText]}>
-                  {own ? `${row.teamName} · You` : row.teamName}
+                  {own && !card ? `${row.teamName} · You` : row.teamName}
                 </Text>
                 <Text style={[styles.cellNum, own && styles.ownText]}>{gd}</Text>
                 <Text style={[styles.cellNum, own && styles.ownText]}>{row.points}</Text>
               </View>
-              {cut !== null && row.position === cut && cut < data.rows.length ? (
+              {!card && cut !== null && row.position === cut && cut < data.rows.length ? (
                 <View
                   style={styles.playoffLine}
                   accessible
@@ -214,6 +256,15 @@ export function MiniStandings({ workspace }: { workspace: Workspace }) {
           );
         })}
       </View>
+      {card && cut !== null && cut < data.rows.length ? (
+        <Text
+          style={styles.caption}
+          accessibilityLabel={`Playoff line: the top ${plural(cut, 'team')} qualify if the table ends as it stands`}
+          testID="playoff-line"
+        >
+          Dashed line: playoff cut
+        </Text>
+      ) : null}
     </View>
   );
 }
@@ -390,6 +441,17 @@ const useStyles = makeStyles(({ colors }) => ({
     justifyContent: 'center',
   },
   formText: { ...fonts.extrabold, fontSize: 14, lineHeight: 18 },
+  formFlush: { paddingTop: 0, gap: 4 },
+  formPillSmall: { width: 22, height: 22, borderRadius: 6 },
+  formTextSmall: { ...fonts.bold, fontSize: 11, lineHeight: 14 },
+  ownRowCard: {
+    backgroundColor: colors.tonal,
+    borderRadius: radius.sm,
+    borderTopWidth: 0,
+    marginHorizontal: -spacing.sm,
+    paddingHorizontal: spacing.sm,
+  },
+  cutRow: { borderBottomWidth: 2, borderBottomColor: colors.control, borderStyle: 'dashed' },
   tableHead: { flexDirection: 'row', paddingVertical: spacing.xs },
   headText: { ...type.eyebrow, color: colors.textMuted },
   tableRow: {

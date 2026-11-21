@@ -57,7 +57,8 @@ export function ActivityHero({
   testID,
 }: {
   model: ActivityCardModel;
-  source: ArtworkSource;
+  /** The picture on top; left out under Game day's band (handoff M 1i), which is the picture. */
+  source?: ArtworkSource;
   /** The game's RSVP control; omitted for sessions. */
   rsvp?: ReactNode;
   testID: string;
@@ -66,7 +67,9 @@ export function ActivityHero({
   const styles = useStyles();
   return (
     <View style={[elevation(theme, 'card'), styles.card]} testID={testID}>
-      <Artwork source={source} aspectRatio={16 / 9} rounded={false} testID={`${testID}-art`} />
+      {source ? (
+        <Artwork source={source} aspectRatio={16 / 9} rounded={false} testID={`${testID}-art`} />
+      ) : null}
       <View style={styles.body}>
         <Text variant="title1" heading>
           {model.title}

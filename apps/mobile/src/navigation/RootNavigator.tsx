@@ -82,7 +82,8 @@ export function RootNavigator() {
           <Stack.Screen name="registration/checkout/[quoteId]" options={{ title: 'Checkout' }} />
           <Stack.Screen name="payments/index" options={{ title: 'Payments' }} />
           <Stack.Screen name="enrollments/index" options={{ title: 'Registrations' }} />
-          <Stack.Screen name="fixtures/[id]" options={{ title: 'Game' }} />
+          {/* Game day draws its own back button and title on the team's band (handoff M 1i). */}
+          <Stack.Screen name="fixtures/[id]" options={{ title: 'Game', headerShown: false }} />
           <Stack.Screen name="sessions/[sessionId]" options={{ title: 'Activity' }} />
           {/* Package G (conditional, behind their capability switches; reached from Account). */}
           <Stack.Screen name="bookings/index" options={{ title: 'Rentals and parties' }} />

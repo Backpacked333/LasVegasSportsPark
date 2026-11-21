@@ -3,8 +3,10 @@
  * SPK-CAP-003, SPK-READY-002, SPK-RESULT-001, SPK-RESULT-005, SPK-COMMS-005, SPK-SCHED-008,
  * SPK-UX-008, SPK-UX-009; PA-11 customer words, "game" for a fixture; ADR-008).
  *
- * - The top is the game's picture with its facts as tags, its status, the change, the required
- *   action and the RSVP (`ActivityHero`).
+ * - The top is Game day (handoff M 1i, `GameDay`): the scoreboard band, who's playing with the
+ *   household child's answer, check in and the standings. Below it, the game's details: its facts
+ *   as tags, its status, the change, the required action and the viewer's own RSVP
+ *   (`ActivityHero`, without a picture: the band is the page's picture).
  * - `GET /v1/fixtures/{id}`: teams, state, time, availability counts, the venue (facility, pitches
  *   and IANA zone, CMP-04), the viewer's roster status and the answers they may see (`responses`).
  *   NOT_FOUND (the person is on neither roster and holds no view grant) is "not available", with
@@ -32,7 +34,6 @@ import { useLocalSearchParams, useRouter, type Href } from 'expo-router';
 import { useEffect, useRef } from 'react';
 import { Text, View } from 'react-native';
 import { useApiQuery } from '../../api/useApiQuery';
-import { artworkFor } from '../../artwork/artworkFor';
 import { pendingMessage } from '../../copy/pending';
 import { teamRoutes } from '../../features/teams/routes';
 import {
@@ -272,7 +273,13 @@ function FixtureContent({ fixtureId }: { fixtureId: string }) {
   return (
     <View testID="fixture-detail">
       {/* Handoff 1i: the Game day band, who's playing, check in and standings first. */}
-      <GameDay fixture={detail} mine={mine} workspace={workspace} zone={zone.zone} />
+      <GameDay
+        fixture={detail}
+        mine={mine}
+        workspace={workspace}
+        zone={zone.zone}
+        result={result}
+      />
       <LastUpdated
         at={oldestUpdate([fixture.updatedAt, readiness.updatedAt, results.updatedAt])}
         now={now}
@@ -280,7 +287,6 @@ function FixtureContent({ fixtureId }: { fixtureId: string }) {
       <View>
         <ActivityHero
           model={model}
-          source={artworkFor({ kind: 'game', title: model.title }, 'wide').source}
           testID="fixture-card"
           rsvp={
             <RsvpControl

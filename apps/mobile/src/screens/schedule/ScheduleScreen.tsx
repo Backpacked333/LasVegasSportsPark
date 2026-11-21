@@ -645,6 +645,11 @@ function CalendarContent() {
           <ReadState read={fixtureState.read} label="your team games" />
         </View>
       ) : null}
+    </View>
+  );
+
+  const footer = (
+    <View style={styles.footer}>
       {changes.length > 0 ? (
         <Section title="Changes" testID="schedule-changes">
           {changes.map(({ item, change }) => (
@@ -655,11 +660,6 @@ function CalendarContent() {
           ))}
         </Section>
       ) : null}
-    </View>
-  );
-
-  const footer = (
-    <View style={styles.footer}>
       <PickupSessions onFind={() => router.push('/discover')} />
       {family || askedForEveryone ? <CollectingAChild /> : null}
     </View>
