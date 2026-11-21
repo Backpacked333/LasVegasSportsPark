@@ -14,7 +14,7 @@ import { SIGN_IN_UNAVAILABLE, SignInScreen } from '../SignInScreen';
 
 // A release bundle: the development-only entry points are null (src/dev, src/demo).
 jest.mock('../../../dev', () => ({ DevSignIn: null }));
-jest.mock('../../../demo', () => ({ DemoSignIn: null, DemoOverlay: null }));
+jest.mock('../../../demo', () => ({ DemoSignIn: null, DemoWelcome: null, DemoOverlay: null }));
 
 const mockPush = jest.fn();
 jest.mock('expo-router', () => ({

@@ -5,14 +5,15 @@
  * account recovery (SCR-C-02). The decision and its owner are in the "Details for support" fold
  * only (PA-11, SPK-UX-011 **Proposed**; ADR-008).
  *
- * Development builds offer the development sign-in instead (src/dev), or the demo sign-in when the
- * app config's `appMode` is `demo` (src/demo). Both are `null` outside `__DEV__`, so release bundles
+ * Development builds offer the development sign-in instead (src/dev), or, when the app config's
+ * `appMode` is `demo`, the redesigned welcome and code (handoff M 5a, 5b: `WelcomeFlow`) with the
+ * demo's stand-in for the code provider (src/demo). Both are `null` outside `__DEV__`, so release bundles
  * contain neither (scripts/check-release-bundle.mjs).
  */
 import { useRouter } from 'expo-router';
 import { View } from 'react-native';
 import { onboardingArtwork } from '../../artwork/manifest';
-import { DemoSignIn } from '../../demo';
+import { DemoWelcome } from '../../demo';
 import { DevSignIn } from '../../dev';
 import { useApp } from '../../providers/AppProviders';
 import { Artwork } from '../../ui/Artwork';
@@ -30,7 +31,8 @@ export function SignInScreen() {
   const router = useRouter();
   const { services } = useApp();
   const styles = useStyles();
-  if (DemoSignIn && services.config.appMode === 'demo') return <DemoSignIn />;
+  // Demo mode: the redesigned welcome and code (handoff M 5a, 5b) with the demo's stand-in.
+  if (DemoWelcome && services.config.appMode === 'demo') return <DemoWelcome />;
   if (DevSignIn) return <DevSignIn />;
   return (
     <Screen>
