@@ -100,10 +100,10 @@ function photoOf(task: Task): string | null {
 
 function Assignee({ personId }: { personId: string | null }) {
   const name = usePersonName(personId);
-  if (!personId) return <span className="board-assignee">Nobody yet</span>;
+  if (!personId) return <span className="mt-board-assignee">Nobody yet</span>;
   const full = name.data ? `${name.data.givenName} ${name.data.familyName}` : 'Assigned';
   return (
-    <span className="board-assignee">
+    <span className="mt-board-assignee">
       <Avatar name={full} personKey={personId} size={24} decorative />
       {full}
     </span>
@@ -262,8 +262,8 @@ function TaskCard({
   const severity = SEVERITY[task.severity];
   const closed = task.openRestrictionIds.length > 0;
   return (
-    <li className="crew-card board-card" aria-label={`${field}: ${task.issue}`}>
-      <div className="board-photo">
+    <li className="crew-card mt-board-card" aria-label={`${field}: ${task.issue}`}>
+      <div className="mt-board-photo">
         {photo ? (
           <img src={photo} alt={`Photo of ${field}`} />
         ) : (
@@ -274,7 +274,7 @@ function TaskCard({
         <StatusBadge tone="neutral" label={field} size="sm" />
         <StatusBadge tone={severity.tone} label={severity.label} size="sm" />
       </div>
-      <p className="board-issue">{task.issue}</p>
+      <p className="mt-board-issue">{task.issue}</p>
       {task.resourceId && column !== 'done' ? (
         <p className="crew-meta">
           {closed
@@ -284,7 +284,7 @@ function TaskCard({
               : `▲ ${affected.length} ${affected.length === 1 ? 'booking' : 'bookings'} affected today`}
         </p>
       ) : null}
-      <div className="board-foot">
+      <div className="mt-board-foot">
         <Assignee personId={task.assignedOwnerPersonId} />
         {canManage && column === 'todo' && !task.assignedOwnerPersonId ? (
           <Button
@@ -424,7 +424,7 @@ function Board({ facility }: { facility: FacilityContext }) {
       query={tasks}
       label="maintenance tasks"
       loading={
-        <SkeletonGroup label="maintenance tasks" className="board">
+        <SkeletonGroup label="maintenance tasks" className="mt-board">
           <Skeleton height={320} radius={20} />
           <Skeleton height={320} radius={20} />
           <Skeleton height={320} radius={20} />
@@ -442,14 +442,14 @@ function Board({ facility }: { facility: FacilityContext }) {
               now.getTime() - new Date(t.resolvedAt ?? t.closedAt ?? t.updatedAt).getTime() < WEEK,
           );
         return (
-          <div className="board">
+          <div className="mt-board">
             {COLUMNS.map((col) => {
               const items = shown.filter((t) => columnOf(t) === col.id);
               return (
-                <section key={col.id} className="board-col" aria-labelledby={`board-${col.id}`}>
-                  <div className="board-col-head">
+                <section key={col.id} className="mt-board-col" aria-labelledby={`board-${col.id}`}>
+                  <div className="mt-board-col-head">
                     <h3 id={`board-${col.id}`}>{col.title}</h3>
-                    <span className="board-count" aria-label={`${items.length} tasks`}>
+                    <span className="mt-board-count" aria-label={`${items.length} tasks`}>
                       {items.length}
                     </span>
                   </div>

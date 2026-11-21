@@ -291,7 +291,7 @@ function FieldCard({
             return (
               <li key={item.key}>
                 <label
-                  className="field-check"
+                  className="prep-check"
                   data-checked={checked || undefined}
                   data-disabled={disabled || undefined}
                 >
