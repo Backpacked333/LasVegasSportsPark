@@ -65,7 +65,7 @@ describe('SCR-S-50 AssistantPanel', () => {
   it('SPK-AUTO-005: is closed by default and asks nothing of the API until opened', async () => {
     const app = createTestApp({ routes: { 'GET /today': todayFeed([exceptionItem()]) } });
     render(app.at('/today'));
-    await screen.findByRole('list', { name: 'Open issues' });
+    await screen.findByRole('list', { name: 'Needs action' });
     expect(screen.getByRole('button', { name: 'Assistant (optional)' })).toHaveAttribute(
       'aria-expanded',
       'false',

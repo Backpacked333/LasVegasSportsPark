@@ -4,7 +4,9 @@
  * switches), the coach and referee workspace (SPK-UX-007), sign-in, and a not-available page for
  * unknown paths.
  */
+import { Suspense } from 'react';
 import { Navigate, Route, Routes } from 'react-router';
+import { UiGallery } from './dev';
 import { competitionRoutes } from './features/competition/routes';
 import { insightAdminRoutes } from './features/insight-admin/routes';
 import { operationsRoutes } from './features/operations/routes';
@@ -62,6 +64,16 @@ export function AppRoutes() {
         {packageGRoutes()}
         {messageSequenceRoutes()}
         <Route path="/today" element={<TodayScreen />} />
+        {UiGallery ? (
+          <Route
+            path="/dev/ui"
+            element={
+              <Suspense fallback={null}>
+                <UiGallery />
+              </Suspense>
+            }
+          />
+        ) : null}
         <Route path="/today/exceptions/:exceptionId" element={<ExceptionDetailScreen />} />
         <Route path="/people" element={<PeopleScreen />} />
         <Route path="/people/access-reviews" element={<AccessReviewsScreen />} />

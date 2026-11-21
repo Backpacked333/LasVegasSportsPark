@@ -40,12 +40,15 @@ export function Kpi({
   label,
   value,
   sub,
+  footer,
 }: {
   icon: IconName;
   tone?: KpiTone;
   label: string;
   value: ReactNode;
   sub?: ReactNode;
+  /** A third line under the value (redesign S 1a: "is that bad?", a progress bar). */
+  footer?: ReactNode;
 }) {
   return (
     <Glass radius={20} bezel={16} squircle className="kpi-glass" contentClassName="kpi">
@@ -59,6 +62,7 @@ export function Kpi({
         <span className="kpi-value">{value}</span>
         {sub ? <span className="kpi-sub">{sub}</span> : null}
       </span>
+      {footer ? <span className="kpi-footer">{footer}</span> : null}
     </Glass>
   );
 }

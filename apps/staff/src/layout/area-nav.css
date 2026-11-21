@@ -25,11 +25,31 @@
   background: var(--pitch);
   color: var(--on-primary);
 }
-/* Staff S 3d: check-ins waiting to sync on this device (amber; the words follow, hidden). */
-.nav-item .nav-count[data-tone='warning'],
-.nav-item a[aria-current='page'] + .nav-count[data-tone='warning'] {
-  background: var(--warning-edge);
-  color: var(--on-tone);
+/* Redesign handoff S 1a: the pill's tone says what kind of wait it is (the count is also read as
+   words, so the colour is never the only signal). */
+.nav-item .nav-count[data-tone] {
+  height: 20px;
+  line-height: 20px;
+}
+.nav-item .nav-count[data-tone='danger'] {
+  background: var(--tone-danger-bg);
+  color: var(--tone-danger);
+}
+.nav-item .nav-count[data-tone='warning'] {
+  background: var(--tone-warning-bg);
+  color: var(--tone-warning);
+}
+.nav-item .nav-count[data-tone='pending'] {
+  background: var(--tone-pending-bg);
+  color: var(--tone-pending);
+}
+.nav-item .nav-count[data-tone='info'] {
+  background: var(--tone-info-bg);
+  color: var(--tone-info);
+}
+.nav-item .nav-count[data-tone='success'] {
+  background: var(--tone-success-bg);
+  color: var(--tone-success);
 }
 .nav-item .nav-count-text {
   position: absolute;

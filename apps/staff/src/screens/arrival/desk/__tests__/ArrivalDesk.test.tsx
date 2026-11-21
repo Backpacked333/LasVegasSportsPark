@@ -597,7 +597,7 @@ describe('S 3d checked in with the Wi-Fi down (§4.15, SPK-AT-018)', () => {
       ),
     ).toEqual([]);
     // Two check-ins on the rail badge (the navigation's Arrival area) and in the list.
-    expect(await screen.findByTestId('nav-device-count')).toHaveTextContent('2');
+    expect(await screen.findByTestId('nav-count-arrival')).toHaveTextContent('2');
     expect(
       screen.getByText('Arrival and attendance: 2 waiting to sync on this device'),
     ).toBeInTheDocument();
@@ -639,6 +639,6 @@ describe('S 3d checked in with the Wi-Fi down (§4.15, SPK-AT-018)', () => {
         observedState: 'present',
       }),
     );
-    await waitFor(() => expect(screen.queryByTestId('nav-device-count')).toBeNull());
+    await waitFor(() => expect(screen.queryByText(/waiting to sync on this device/)).toBeNull());
   });
 });

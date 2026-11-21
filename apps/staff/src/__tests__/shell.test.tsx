@@ -19,6 +19,8 @@ import {
   todayFeed,
 } from '../testing/test-app';
 
+const FACILITY_C = '0192f1a0-0000-7000-8000-00000000fa03';
+
 const SPEC_ORDER = [
   'Today',
   'Schedule',
@@ -36,8 +38,27 @@ const SPEC_ORDER = [
   'Administration',
 ];
 
-/** The sidebar shows the same fourteen areas grouped by job: Operate, Compete, Grow, Business. */
+/**
+ * The sidebar shows the same fourteen areas grouped by job: Operate, Compete, Grow, Business, by
+ * their shorter rail names (redesign handoff S 1a); each link's name stays the area title.
+ */
 const SIDEBAR_ORDER = [
+  'Today',
+  'Schedule',
+  'Arrival',
+  'Facilities',
+  'Leagues',
+  'Teams',
+  'Staff & officials',
+  'Programs',
+  'People',
+  'Registrations',
+  'Finance',
+  'Communications',
+  'Reports',
+  'Administration',
+];
+const SIDEBAR_TITLES = [
   'Today',
   'Schedule',
   'Arrival and attendance',
@@ -64,8 +85,13 @@ describe('staff shell (SCR-S-01, SPK-UX-005)', () => {
       .getAllByRole('link')
       .map((a) => a.textContent);
     expect(STAFF_AREAS.map((a) => a.title)).toEqual(SPEC_ORDER);
-    expect([...SIDEBAR_ORDER].sort()).toEqual([...SPEC_ORDER].sort());
+    expect([...SIDEBAR_TITLES].sort()).toEqual([...SPEC_ORDER].sort());
     expect(links).toEqual([...SIDEBAR_ORDER, 'My assignments']);
+    // WCAG 2.5.3: the visible rail name is part of the link's accessible name (the area title).
+    const names = within(nav)
+      .getAllByRole('link')
+      .map((a) => a.getAttribute('aria-label') ?? a.textContent);
+    expect(names).toEqual([...SIDEBAR_TITLES, 'My assignments']);
     for (const group of ['Operate', 'Compete', 'Grow', 'Business']) {
       expect(within(nav).getByRole('list', { name: group })).toBeInTheDocument();
     }
@@ -157,7 +183,8 @@ describe('staff shell (SCR-S-01, SPK-UX-005)', () => {
   });
 
   it('closes on desktop resize and focuses the visible sidebar (SPK-UX-009)', async () => {
-    const query = '(max-width: 900px)';
+    // Redesign handoff: the drawer is the phone's (under 600 px); tablets get the icon rail.
+    const query = '(max-width: 600px)';
     let changeListener: ((event: MediaQueryListEvent) => void) | undefined;
     const mediaQueryList = {
       matches: true,
@@ -166,10 +193,14 @@ describe('staff shell (SCR-S-01, SPK-UX-005)', () => {
       },
       removeEventListener: vi.fn(),
     } as unknown as MediaQueryList;
-    const matchMedia = vi.fn((mediaQuery: string) => {
-      expect(mediaQuery).toBe(query);
-      return mediaQueryList;
-    });
+    const other = {
+      matches: false,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    } as unknown as MediaQueryList;
+    const matchMedia = vi.fn((mediaQuery: string) =>
+      mediaQuery === query ? mediaQueryList : other,
+    );
     vi.stubGlobal('matchMedia', matchMedia);
 
     try {
@@ -262,7 +293,7 @@ describe('navigation from GET /v1/me/permissions (SPK-UX-005, K-05)', () => {
     await nav.findByRole('link', { name: 'Today' });
     expect(nav.getAllByRole('link').map((a) => a.textContent)).toEqual([
       'Today',
-      'Arrival and attendance',
+      'Arrival',
       'Finance',
       'My assignments',
     ]);
@@ -458,8 +489,8 @@ describe('facility switcher (scope from GET /v1/me)', () => {
     const app = createTestApp({
       routes: {
         'GET /me': staffMe([]),
-        'GET /facilities': facilityDirectoryOf([FACILITY_A, FACILITY_B], {
-          outOfScope: [FACILITY_B],
+        'GET /facilities': facilityDirectoryOf([FACILITY_A, FACILITY_B, FACILITY_C], {
+          outOfScope: [FACILITY_C],
         }),
       },
     });
@@ -471,7 +502,7 @@ describe('facility switcher (scope from GET /v1/me)', () => {
         within(select)
           .getAllByRole('option')
           .map((o) => o.textContent),
-      ).toEqual(['All facilities', 'North Park 1']),
+      ).toEqual(['All facilities', 'North Park 1', 'North Park 2']),
     );
     expect(app.fake.requests.filter((r) => r.route === '/facilities')).toHaveLength(1);
     expect(app.fake.requests.some((r) => r.route === '/today')).toBe(false);
@@ -499,10 +530,21 @@ describe('facility switcher (scope from GET /v1/me)', () => {
     expect(app.fake.requests.some((r) => r.route === '/today')).toBe(false);
   });
 
-  it('shows a single facility as text and no switcher for a non-staff principal', async () => {
-    const single = createTestApp({ routes: { 'GET /me': staffMe([FACILITY_A]) } });
+  it('hides the switcher for a single facility (redesign shell row 3) and for a non-staff principal', async () => {
+    const single = createTestApp({
+      routes: {
+        'GET /me': staffMe([FACILITY_A]),
+        'GET /facilities': facilityDirectoryOf([FACILITY_A]),
+        'GET /today': todayFeed([], [FACILITY_A]),
+      },
+    });
     const { unmount } = render(single.at('/today'));
-    expect(await screen.findByText('Facility: North Park 1')).toBeInTheDocument();
+    // The page names the facility; the header offers no choice.
+    expect(await screen.findByText(/North Park 1/)).toBeInTheDocument();
+    await waitFor(() =>
+      expect(single.fake.requests.some((r) => r.route === '/facilities')).toBe(true),
+    );
+    expect(screen.queryByRole('combobox', { name: 'Facility' })).toBeNull();
     unmount();
 
     const customer = createTestApp({ routes: { 'GET /me': staffMe([], 'customer') } });
@@ -583,7 +625,7 @@ describe('connectivity banner (SPK-UX-008 offline, SCR-W-10)', () => {
     let now = new Date('2026-10-24T12:00:00.000Z');
     const app = createTestApp({ now: () => now });
     render(app.at('/today'));
-    expect(await screen.findByText('No open issues')).toBeInTheDocument();
+    expect(await screen.findByText(/Nothing needs action right now/)).toBeInTheDocument();
     now = new Date('2026-10-24T12:45:00.000Z');
     act(() => app.connectivity.set(false));
     const banner = await screen.findByTestId('connectivity-banner');

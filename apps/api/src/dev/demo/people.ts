@@ -130,7 +130,7 @@ export interface DemoStaff {
   secondOfficial: DemoAdult;
 }
 
-async function ensureStaff(
+export async function ensureStaff(
   ctx: DemoContext,
   spec: AdultSpec,
   roles: readonly StaffRole[],

@@ -270,6 +270,118 @@ of stage 4 (2026-10-30), from the screen groups' verified coverage. Details per 
 | SCR-W-09 Supervised release (coach)                    | Partial                | Procedure **Pending decision** DEC-005, DEC-034, DEC-075.                                                                                                                                                                                                                                                                          |
 | SCR-W-10 Workspace connectivity state                  | Implemented and tested |                                                                                                                                                                                                                                                                                                                                    |
 
+## Redesign handoff: shared primitives, shell, Today (Phase 0 staff side, Phase 4)
+
+Screen ids are the handoff's (`docs/design/redesign-handoff`, staff board): S 1a Today desktop,
+S 1d Today phone, S 3a session drawer, S 3b weather cancel, S 3h locked shared tablet.
+Status words follow §6.7 (Verified, Proposed, Pending decision).
+
+### Shared primitives (`src/ui`), shown in every state at `/dev/ui` (development and demo builds)
+
+| Primitive          | File                   | Use                                                                                                                                                                                       |
+| ------------------ | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `StatusBadge`      | `StatusBadge.tsx`      | Six tones (success, warning, error = `danger`, info, neutral, pending), glyph + word; `size="sm"` for the 20 px chips of dense cards.                                                     |
+| `Avatar`           | `Avatar.tsx`           | Photo, or initials on the person colour (`personColour(id)`, `--person-1..5`) when there is none or it fails; `ring`; `decorative` when the name is written beside it.                    |
+| `Toast`            | `Toast.tsx`            | `useToast().show({ message, onUndo?, action?, tone?, durationMs?, countdown? })`: 2.4 s, 5 s with Undo, one at a time (the replaced one's `onClose('replaced')` runs), above the tab bar. |
+| `Drawer`           | `Drawer.tsx`           | Right-hand panel over a dimmed page; Escape, ✕ or the scrim close it (not while `locked`); focus moves in, stays and returns (`useFocusTrap`).                                            |
+| `BottomSheet`      | `BottomSheet.tsx`      | Phone sheet: drag the handle down, the scrim, ✕ or Escape; `locked` while processing.                                                                                                     |
+| `Skeleton`         | `Skeleton.tsx`         | Blocks in the final layout; `SkeletonGroup` announces "Loading …" once.                                                                                                                   |
+| `SegmentedControl` | `SegmentedControl.tsx` | A radio group on a sunk track; arrow keys move and choose; `size="lg"` for desk tablets.                                                                                                  |
+| `OfflineBanner`    | `OfflineBanner.tsx`    | Amber, the time of the last good data, what needs a connection, the queued count; the shell's `ConnectivityBanner` uses it.                                                               |
+| `Flash`            | `Flash.tsx`            | A live number that flashes floodlight for 1 s when it changes.                                                                                                                            |
+
+Tokens added to `styles.css` (both themes): person colours, `--toast-*`, `--shadow-drawer`,
+`--shadow-sheet`, `--flash`, `--skeleton*`. Verified: `src/ui/__tests__/redesign-primitives.test.tsx`.
+
+### Shell (`src/layout`)
+
+- One responsive shell: the expanded glass sidebar from 1280 px, the 84 px icon rail on desk
+  tablets (601-1279 px), and under 600 px a floating glass tab bar (`PhoneTabBar`: Today, Scan,
+  Schedule, Report) with everything else behind Menu. The collapse button's choice is remembered
+  and wins over the automatic one. Proposed (the design marks the manager's phone tab bar so).
+- The rail shows shorter names (`railTitle` in `navigation/areas.ts`); each link's accessible
+  name stays the area title (WCAG 2.5.3). "Bookings & parties" and "Point of sale" are shortcuts
+  to their Package G screens, shown only while their capability is on.
+- Rail badges: the API's attention counts, toned by what waits (red Today, amber Staff and
+  officials, purple Registrations). **For other screens:** `useRailBadge(area, { count, tone,
+label } | null)` (`layout/RailBadges.tsx`) shows a count that only this device knows (the
+  arrival desk's offline queue) on that area's rail item and phone tab while the caller is mounted;
+  it replaces the API's count for that area.
+- G then T / S / R / A opens Today, Schedule, Registrations or Arrival (`useGoShortcuts`; not
+  while typing, not in a dialog, only areas the API lists). Facility switcher hidden with a single
+  facility. "Live · 8:46 AM" is the facility's time. Account menu: Profile, Lock this tablet when
+  idle, Lock now, Switch user, Sign out (the sign-out icon stays beside the name).
+- Verified: `src/__tests__/shell.test.tsx`, `src/layout/__tests__/shell-redesign.test.tsx`.
+
+### Locked shared tablet (S 3h): Proposed design and its security reasoning
+
+The design asks for a 4-digit PIN that unlocks a shared desk tablet after 10 minutes idle, with
+check-ins still working while locked. Chosen (Proposed, not yet accepted in a recorded decision):
+a **per-device, per-staff PIN**, set when the staff member turns on "Lock this tablet when idle"
+in the account menu, kept only as a **salted PBKDF2-SHA-256 hash** (150 000 iterations, 16-byte
+random salt, constant-time compare) in this browser's storage (`layout/lock/pin.ts`). Reasoning:
+
+- The lock is a **screen guard, not authentication**. The API session is not touched while
+  locked (the check-ins of the locked screen are sent with it, recorded as that staff member), and
+  every request still passes the API's authentication guard and authorization unchanged. Nothing
+  about the PIN reaches the API, so the guard cannot be weakened by it and no API credential is
+  added.
+- An API-backed PIN was not chosen: it would add a credential store and a second sign-in path to
+  the identity module for a device convenience, while a person holding the unlocked browser could
+  use the session token anyway; it buys nothing against that person and adds attack surface.
+- Brute force is limited where it matters (at the keypad): five wrong tries block the keypad for
+  a minute, and the **third block in a row signs the session out** (the token is removed; a full
+  sign-in is needed). The attempt count and the locked state are stored, so a reload stays locked
+  and does not reset the count. A 4-digit hash is weak against someone who can read the browser's
+  storage offline; such a person can read the session token too, so the PIN is not meant to
+  protect against them.
+- While locked the page underneath is inert (and hidden from assistive technology) and keeps its
+  place, so the PIN returns exactly where the person was. The locked screen shows no care notes,
+  reasons or family names: a cleared pass says "Checked in: Maya", anything else "Please wait
+  for staff".
+- "Switch user" signs the session out so another staff member signs in. Turning the setting off
+  forgets the PIN. If browser storage is blocked, the lock lasts for the page only.
+- Pending decision: whether shared tablets must lock (a facility setting instead of a per-device
+  choice), and whether operators want a managed-device kiosk lock instead (DEC-018 identity).
+
+### Today (S 1a, S 1d, S 3a, S 3b)
+
+- Reads (no new API read was needed; existing reads are composed, `screens/today/start-checks.ts`):
+  `GET /today`, `GET /events` (the facility day), `GET /facilities/{id}/operating-status`,
+  `GET /sessions`, per start `GET /fixtures/{id}/readiness` and `GET /events/{id}/detail`, for
+  classes the offering's required waivers, the expected children (`GET /attendance`) and their
+  waivers (`GET /people/{id}/waivers`, at most 30), for bookings `GET /bookings/{id}` and its
+  roster; KPIs from `GET /facilities/{id}/occupancy`, `GET /reports/expected-arrivals` and
+  `GET /reports/sales-by-product-line`; candidates from `GET /assignments/{id}/replacements` or
+  `GET /assignment-requirements/{id}/candidates`; "resolved today" from `GET /exceptions`.
+  Everything refreshes every 60 s and on focus; a changed number flashes for 1 s.
+- Writes: Assign and Ask (`POST /assignments` with `offer: true`; Undo is
+  `POST /assignments/{id}/withdraw` with the expected revision), Acknowledge
+  (`POST /exceptions/{id}/acknowledge`), and the weather cancellation (`PATCH /fixtures/{id}`
+  action cancel, `POST /sessions/{id}/cancel`, `POST /bookings/{id}/cancel`,
+  `POST /events/{id}/cancel`), each with an idempotency key per intent.
+- Snooze (30 min), "Flag at arrival" and the issues leaving the list after ✓ are kept on this
+  device (`today-local.tsx`); the API stays the source of truth.
+- "Open check-in" opens `/arrival?type=event&eventId=…` or
+  `/arrival?type=session&offeringId=…&sessionId=…` (the query `activityFromSearch` reads).
+- Verified: `src/screens/today/__tests__/TodayScreen.test.tsx`, `today-model.test.ts`.
+- Not built here: dragging a field board block (INTERACTIONS 1a row 4; the schedule screens,
+  S 1b / S 3e) and "Move" in the drawer (it opens the schedule). Care flags on players are not
+  read in the drawer: care notes are protected and every read is audited, so they stay at
+  check-in.
+- **Pending decision**: Assign. Only the assignee accepts an assignment (§4.8), so "Assign" sends
+  the offer and the slot counts as covered once they accept; a manager assigning directly needs a
+  product decision. "Send reminder" for missing waivers waits on DEC-012 (shown disabled with the
+  proposed tag).
+- **Proposed**: the weather cancellation's 2-minute Undo is a delayed send
+  (`pending-cancellations.ts`): games, sessions and events cannot be un-cancelled in the API, so
+  nothing is cancelled and nobody is told until the window closes (the page warns before it is
+  closed while a batch waits). The design's "Families are told within a minute" is therefore
+  "within the 2-minute window". "Pick a date now" writes the make-up date into the reason; it
+  does not reschedule. The added line travels as the command's reason; whether families see it
+  depends on the owning modules' notices. The dialog counts people (event attendees), not
+  families.
+
 ## Conventions for screen builders
 
 - **Layout.** One directory per screen under `src/screens/<area>/`, the screen in

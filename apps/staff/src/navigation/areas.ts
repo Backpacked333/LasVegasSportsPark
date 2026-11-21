@@ -8,7 +8,6 @@
  * areas the inventory assigns them, behind their capability switches (DEC-016).
  */
 import type { NavigationAreaId } from '@sportspark/api-client';
-import { useQueuedCheckinCount } from '../features/operations/offline/deskCheckins';
 import type { IconName } from '../ui/Icon';
 
 /**
@@ -21,6 +20,11 @@ export interface StaffArea {
   /** The API's navigation area id (`MeNavigationArea.id`). */
   id: NavigationAreaId;
   title: string;
+  /**
+   * The shorter name the rail shows (redesign handoff S 1a: "Leagues", "Arrival"); the link's
+   * accessible name stays `title`, which contains it (WCAG 2.5.3 label in name).
+   */
+  railTitle?: string;
   path: string;
   icon: IconName;
   group: StaffAreaGroup;
@@ -38,11 +42,6 @@ export interface StaffArea {
   }[];
   /** With `links`: the screens of the area not built yet, and why (shown as the placeholder). */
   pending?: { screenIds: string; purpose: string };
-  /**
-   * A count kept on this device to show beside the area (a hook, called once per render of the
-   * area's item), e.g. the arrival desk's check-ins waiting to sync (staff S 3d).
-   */
-  useDeviceCount?: () => number;
 }
 
 export const STAFF_AREAS: readonly StaffArea[] = [
@@ -50,7 +49,7 @@ export const STAFF_AREAS: readonly StaffArea[] = [
     id: 'today',
     title: 'Today',
     path: '/today',
-    icon: 'dashboard',
+    icon: 'today',
     group: 'Operate',
     screenIds: 'SCR-S-01, SCR-S-02, SCR-S-50',
     purpose:
@@ -69,6 +68,7 @@ export const STAFF_AREAS: readonly StaffArea[] = [
   },
   {
     id: 'leagues',
+    railTitle: 'Leagues',
     title: 'Leagues and tournaments',
     path: '/leagues',
     icon: 'trophy',
@@ -79,6 +79,7 @@ export const STAFF_AREAS: readonly StaffArea[] = [
   },
   {
     id: 'programs',
+    railTitle: 'Programs',
     title: 'Programs and camps',
     path: '/programs',
     icon: 'school',
@@ -89,6 +90,7 @@ export const STAFF_AREAS: readonly StaffArea[] = [
   },
   {
     id: 'teams',
+    railTitle: 'Teams',
     title: 'Teams and placement',
     path: '/teams',
     icon: 'groups',
@@ -99,6 +101,7 @@ export const STAFF_AREAS: readonly StaffArea[] = [
   },
   {
     id: 'people',
+    railTitle: 'People',
     title: 'People and families',
     path: '/people',
     icon: 'family_restroom',
@@ -109,6 +112,7 @@ export const STAFF_AREAS: readonly StaffArea[] = [
   },
   {
     id: 'registrations',
+    railTitle: 'Registrations',
     title: 'Registrations and waitlists',
     path: '/registrations',
     icon: 'how_to_reg',
@@ -119,6 +123,7 @@ export const STAFF_AREAS: readonly StaffArea[] = [
   },
   {
     id: 'arrival',
+    railTitle: 'Arrival',
     title: 'Arrival and attendance',
     path: '/arrival',
     icon: 'qr_code_scanner',
@@ -126,10 +131,10 @@ export const STAFF_AREAS: readonly StaffArea[] = [
     screenIds: 'SCR-S-28 to SCR-S-31',
     purpose: 'Arrival scanning, attendance, supervised release, offline queue review.',
     ownRoutes: true,
-    useDeviceCount: useQueuedCheckinCount,
   },
   {
     id: 'staff',
+    railTitle: 'Staff & officials',
     title: 'Staff and officials',
     path: '/staff',
     icon: 'sports',
@@ -161,9 +166,10 @@ export const STAFF_AREAS: readonly StaffArea[] = [
   },
   {
     id: 'facilities',
+    railTitle: 'Facilities',
     title: 'Facilities and maintenance',
     path: '/facilities',
-    icon: 'construction',
+    icon: 'stadium',
     group: 'Operate',
     screenIds: 'SCR-S-41, SCR-S-42',
     purpose: 'Assets and maintenance tasks, operating restrictions and release to service.',

@@ -6,9 +6,10 @@
  * rest of the device's queue (`POST /v1/offline-sync`) once the connection is back; the session
  * check-in record itself (its eligibility evaluation) is made online only.
  *
- * `useQueuedCheckinCount` is the count the navigation shows on the Arrival area: the desk
- * check-ins of the signed-in account still waiting on this device.
+ * `useQueuedCheckinCount` counts the desk check-ins of the signed-in account still waiting on this
+ * device; `QueuedCheckinRailBadge` (mounted once in the shell) shows it on the rail's Arrival item.
  */
+import { useRailBadge } from '../../../layout/RailBadges';
 import { useOfflineQueue } from './OfflineQueueProvider';
 import type { QueuedItem, ReviewItem } from './queue';
 
@@ -29,4 +30,24 @@ export function useCheckinsForReview(): ReviewItem[] {
 /** The navigation's Arrival badge: queued desk check-ins of the signed-in account. */
 export function useQueuedCheckinCount(): number {
   return useQueuedCheckins().length;
+}
+
+/**
+ * Shows the queued desk check-ins on the rail's Arrival item on every page (staff S 3d acceptance:
+ * "two check-ins queue, show on the rail badge"). Mounted once in the shell, inside the offline
+ * queue and rail badge providers.
+ */
+export function QueuedCheckinRailBadge(): null {
+  const waiting = useQueuedCheckinCount();
+  useRailBadge(
+    'arrival',
+    waiting > 0
+      ? {
+          count: waiting,
+          tone: 'warning',
+          label: `${waiting} waiting to sync on this device`,
+        }
+      : null,
+  );
+  return null;
 }

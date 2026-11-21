@@ -10,6 +10,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useSyncExternalStore } from 'react';
 import { receivedAtOf } from '../api/useApiQuery';
 import { useApp, useNow } from '../providers/AppProviders';
+import { OfflineBanner } from '../ui/OfflineBanner';
 import { StatusBadge } from '../ui/StatusBadge';
 
 /** Nothing that commits capacity, money, guardianship, rosters or pickup authority runs offline (§4.15). */
@@ -43,13 +44,9 @@ export function ConnectivityBanner() {
 
   if (!online) {
     return (
-      <div className="banner" role="alert" data-testid="connectivity-banner">
-        <StatusBadge tone="warning" label="You are offline" />
-        <span>
-          {age ? `Showing information from ${age}.` : 'Nothing has been loaded yet.'} Needs a
-          connection: {OFFLINE_UNAVAILABLE_ACTIONS.join(', ')}.
-        </span>
-      </div>
+      <OfflineBanner lastGood={age} testId="connectivity-banner">
+        Needs a connection: {OFFLINE_UNAVAILABLE_ACTIONS.join(', ')}.
+      </OfflineBanner>
     );
   }
   const threshold = services.config.staleDataThresholdMs;
