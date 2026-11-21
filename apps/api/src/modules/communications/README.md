@@ -777,3 +777,13 @@ Verified by `__tests__/composer-counts.spec.ts`:
   `kernel/__tests__/request-nul.spec.ts`); the shared command metadata (`reason`,
   `policyReferences`) still accepts the other C0 controls. Whatever is stored, the ICS rendering
   above never emits a control character.
+
+## Injury report notice (staff S 4d, migration 1072) — verified 2026-11-21
+
+`communications.notify_injury_report` on `competition.incident_reported`: an injury about a person
+is one protected operational `injury_report` notice with that person as its subject (the guardians
+holding `receive_messages` over a child hear about it, re-checked before dispatch), keyed on the
+source event (a replay composes nothing). It says that a report was made and where to ask; the
+restricted narrative is never copied. Migration 1072 adds the kind to the check constraint (a
+parallel branch adding another kind must merge both lists). Tested in
+`apps/api/src/modules/competition/__tests__/session-incidents.spec.ts`.

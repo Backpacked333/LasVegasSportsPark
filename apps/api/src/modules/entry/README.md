@@ -427,3 +427,18 @@ facility's zone, with the next action `register_or_book`; the check-in is held l
 blocked arrival. No override exists and none was added: a place for the day is registered or
 booked first. A pass scan offers each family member only the sessions their enrollment attends
 that day. An enrollment without a day selection behaves exactly as before.
+
+## Coach attendance tiles and release at pickup (staff S 2d, S 3g) — verified 2026-11-21
+
+- `GET /v1/releases/authorized-collectors` (`ReleasesService.authorizedCollectors`): the adults
+  who hold `collect` over one participant of the activity now (identity `actorsWithPermission`),
+  names only, for the assigned coach (accepted assignment, `StaffScope`) or the pickup desk. A
+  participant outside the activity reads as not found (§4.10); nothing is recorded; the release
+  re-checks authority when it is recorded. `__tests__/authorized-collectors.spec.ts`.
+- `GET /v1/attendance/care-flags` and `GET /v1/attendance/care-notes`
+  (`ParticipantCareService`): which participants of the activity have care notes, by kind only
+  (identity `CareNotesService.kindsIn`, no text, nothing audited), and one participant's notes
+  (identity `readForArrivalIn`, one audit record per read). The assigned coach or official, or
+  desk staff whose role may read care notes there. **Proposed policy:** assigned coaches reading
+  their own session's care notes (identity's care-note readers stay the desk and managers).
+  `__tests__/participant-care.spec.ts`.

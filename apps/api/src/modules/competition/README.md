@@ -947,3 +947,19 @@ private.
 tournament views. The fixture venue shown publicly is the copied venue (`fixtures.venue`), which
 follows the scheduling event through the outbox, so a field change appears after the next
 dispatch.
+
+## Session incidents: a coach reports an injury (staff S 4d, migration 0472) — verified 2026-11-21
+
+- An incident may name a program session (`offeringId` + `sessionId`): `incidents` gains
+  `offering_session_id` and `facility_id` (composite references to `offering_sessions` and
+  `facilities`; a check keeps a session incident an injury or an operational incident, with its
+  facility and no fixture). The session's facility, and whether the reporter holds an accepted
+  coach assignment for it, come from the workforce port `AssignmentCheckPort.sessionCoverage`
+  (read outside the transaction). Coaches report injuries and operational incidents of their own
+  session (`competition.report_incident` now lists `coach`); officials keep the fixture rule.
+- Every injury raises a `competition.injury_incident` operational exception (Today group
+  `incident`; the program managers' queue for a session, league management otherwise) titled with
+  the safe summary; the narrative is never copied (SPK-DISC-004).
+- `competition.incident_reported` carries `sessionId` and `facilityId` (optional for older events);
+  communications composes the guardians' `injury_report` notice from it.
+  `__tests__/session-incidents.spec.ts`.
