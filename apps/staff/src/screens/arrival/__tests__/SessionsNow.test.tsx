@@ -49,7 +49,7 @@ describe('SessionsNow', () => {
         },
       },
     });
-    render(app.at('/arrival'));
+    render(app.at('/arrival/select'));
     const list = await screen.findByRole('list', { name: 'Sessions now and next' });
     expect(within(list).getByText('Pitch 3 · 12 places')).toBeInTheDocument();
   });
@@ -114,7 +114,7 @@ describe('SessionsNow', () => {
         },
       },
     });
-    render(app.at('/arrival'));
+    render(app.at('/arrival/select'));
     const list = await screen.findByRole('list', { name: 'Sessions now and next' });
     expect(await within(list).findByText('With Coach Ramirez')).toBeInTheDocument();
     const request = app.fake.requests.find((r) => r.route === '/assigned-staff');

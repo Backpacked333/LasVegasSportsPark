@@ -35,7 +35,9 @@ import { useApp, useConnectivity, useNow } from '../providers/AppProviders';
 import { LiveRegion, sentences, useAnnouncement } from '../ui/announce';
 import { Button } from '../ui/Button';
 import { StatusBadge } from '../ui/StatusBadge';
-import { makeStyles, radius, spacing, type } from '../ui/theme';
+import { fonts, makeStyles, radius, spacing, type } from '../ui/theme';
+import { useKnownFacilityZone } from '../features/today/known-zone';
+import { formatDay, formatTime, localDayKey } from '../features/today/time';
 
 /** Actions the customer app never performs offline (§4.15: no payments, no capacity commitments). */
 export const OFFLINE_UNAVAILABLE_ACTIONS = ['registration', 'payment', 'RSVP', 'account changes'];
@@ -95,7 +97,7 @@ function useRefreshFailure(): string | null {
 
 /** What the banner says, most serious first (see the header); null when it is hidden. */
 export type ConnectivityNotice =
-  | { kind: 'offline'; age: string | null }
+  | { kind: 'offline'; age: string | null; savedAt: number | null }
   | { kind: 'reconnecting' }
   | { kind: 'degraded'; failure: string; age: string | null }
   | { kind: 'refreshed'; refreshedAt: number }
@@ -150,7 +152,7 @@ export function useConnectivityNotice(): { notice: ConnectivityNotice; now: Date
   const threshold = services.config.staleDataThresholdMs;
   const notice: ConnectivityNotice =
     reachable === false
-      ? { kind: 'offline', age }
+      ? { kind: 'offline', age, savedAt: oldest }
       : reconnecting
         ? { kind: 'reconnecting' }
         : failure
@@ -161,6 +163,19 @@ export function useConnectivityNotice(): { notice: ConnectivityNotice; now: Date
               ? { kind: 'stale', age }
               : null;
   return { notice, now };
+}
+
+/**
+ * "Showing what was saved at 8:41." (handoff 1b, 3f): the time of the oldest data on screen, on the
+ * facility's clock (SPK-SCHED-008), with its day when it was not saved today.
+ */
+export function savedAtWords(savedAt: number | null, now: Date, zone: string): string {
+  if (savedAt === null) return 'Nothing has been loaded yet.';
+  const time = formatTime(new Date(savedAt), zone).replace(/ (AM|PM)$/u, '');
+  const sameDay = localDayKey(new Date(savedAt), zone) === localDayKey(now, zone);
+  return sameDay
+    ? `Showing what was saved at ${time}.`
+    : `Showing what was saved ${formatDay(new Date(savedAt), zone)} at ${time}.`;
 }
 
 /**
@@ -207,6 +222,7 @@ export function ConnectivityAnnouncer() {
 export function ConnectivityBanner() {
   const styles = useStyles();
   const { notice, now } = useConnectivityNotice();
+  const zone = useKnownFacilityZone().zone;
   const queryClient = useQueryClient();
   const refreshNow = () => void queryClient.refetchQueries({ type: 'active' });
   // On iOS the words are announced once for the app by ConnectivityAnnouncer, not per banner.
@@ -222,12 +238,12 @@ export function ConnectivityBanner() {
           announcement={ANNOUNCED_BY_ROOT}
           testID="connectivity-banner"
         >
-          <StatusBadge tone="warning" label="You are offline" />
-          <Text style={styles.text}>
-            {notice.age
-              ? `Showing information from ${notice.age}.`
-              : 'Nothing has been loaded yet.'}{' '}
-            Needs a connection: {OFFLINE_UNAVAILABLE_ACTIONS.join(', ')}.
+          {/* 1b / 3f: "Offline. Showing what was saved at 8:41." (glyph and word, never colour alone). */}
+          <Text style={styles.offline}>
+            <Text accessibilityLabel="You are offline" style={styles.offlineWord}>
+              ▲ Offline.
+            </Text>{' '}
+            {savedAtWords(notice.savedAt, now, zone)}
           </Text>
         </LiveRegion>
       );
@@ -298,4 +314,6 @@ const useStyles = makeStyles(({ colors, toneBackgrounds }) => ({
     borderRadius: radius.md,
   },
   text: { ...type.caption, color: colors.text },
+  offline: { ...type.caption, ...fonts.semibold, color: colors.warning },
+  offlineWord: { ...fonts.bold, color: colors.warning },
 }));

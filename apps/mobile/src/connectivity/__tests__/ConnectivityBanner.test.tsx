@@ -6,15 +6,11 @@
  * (DEC-032/DEC-033).
  */
 import { apiErrorBody, fakeResponse } from '@sportspark/api-client/testing';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
 import { Text } from 'react-native';
 import { useApiQuery } from '../../api/useApiQuery';
 import { createTestApp } from '../../testing/test-app';
-import {
-  ConnectivityBanner,
-  OFFLINE_UNAVAILABLE_ACTIONS,
-  REFRESHED_NOTICE_MS,
-} from '../ConnectivityBanner';
+import { ConnectivityBanner, savedAtWords, REFRESHED_NOTICE_MS } from '../ConnectivityBanner';
 
 const ME = {
   status: 200,
@@ -43,7 +39,7 @@ describe('SCR-C-40 ConnectivityBanner', () => {
     expect(screen.queryByTestId('connectivity-banner')).toBeNull();
   });
 
-  it('when offline, states the age of what is shown and lists actions that need a connection', async () => {
+  it('handoff 1b/3f: when offline, says "Offline. Showing what was saved at 4:00." with the real time of the oldest data shown', async () => {
     let now = new Date('2026-10-24T12:00:00.000Z');
     const app = createTestApp({ routes: { 'GET /me': ME }, now: () => now });
     render(<Harness />, { wrapper: app.wrapper });
@@ -54,17 +50,26 @@ describe('SCR-C-40 ConnectivityBanner', () => {
     const banner = screen.getByTestId('connectivity-banner');
     expect(banner).toHaveProp('accessibilityRole', 'alert');
     expect(screen.getByLabelText('You are offline')).toBeOnTheScreen();
-    expect(
-      screen.getByText(
-        `Showing information from 2 hours ago. Needs a connection: ${OFFLINE_UNAVAILABLE_ACTIONS.join(', ')}.`,
-      ),
-    ).toBeOnTheScreen();
+    // Saved at 12:00 UTC: 5:00 on the device's clock in Los Angeles (no facility zone known yet).
+    expect(within(banner).getByText(/Showing what was saved at \d{1,2}:\d{2}\./)).toBeOnTheScreen();
+    expect(within(banner).getByText(/▲ Offline\./)).toBeOnTheScreen();
   });
 
   it('says when nothing has been loaded yet, rather than showing an age', async () => {
     const app = createTestApp({ routes: {}, reachable: false });
     render(<ConnectivityBanner />, { wrapper: app.wrapper });
     expect(await screen.findByText(/Nothing has been loaded yet\./)).toBeOnTheScreen();
+  });
+
+  it('savedAtWords: the time on the facility clock, with its day when it was not saved today', () => {
+    const now = new Date('2026-10-24T16:00:00.000Z');
+    expect(savedAtWords(Date.parse('2026-10-24T15:41:00.000Z'), now, 'America/Los_Angeles')).toBe(
+      'Showing what was saved at 8:41.',
+    );
+    expect(savedAtWords(Date.parse('2026-10-23T15:41:00.000Z'), now, 'America/Los_Angeles')).toBe(
+      'Showing what was saved Fri, Oct 23 at 8:41.',
+    );
+    expect(savedAtWords(null, now, 'UTC')).toBe('Nothing has been loaded yet.');
   });
 
   it('never calls data stale while the threshold is pending (DEC-032/DEC-033)', async () => {

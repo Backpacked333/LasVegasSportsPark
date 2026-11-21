@@ -159,6 +159,35 @@ Routes: `/today`, `/today/exceptions/:exceptionId`, `/people`, `/people/:personI
 what stays open are in `src/features/people/README.md`; tests live in
 `src/screens/{today,people,support}/__tests__/`.
 
+## Front desk (redesign phase 5: S 2a, S 3c, S 3d, S 4a, S 4b, S 4c)
+
+**Verified implementation** (tests named after the requirement in each `__tests__/`):
+
+| Screen                    | Route                                                   | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| ------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| S 2a Arrival desk         | `/arrival` (`screens/arrival/desk`)                     | Scan a pass (`POST /passes/scan`) or search by name (`GET /people`, then `POST /arrival-lookups`); one ✓ Cleared / ✕ Not cleared answer per person from the arrival checks the scan returns; care-note pill re-read on tap (`GET /people/{id}/care-notes`, audited); "Check in Maya and Leo" records the arrival, the check-in and the attendance of the cleared only (a cleared child can be left out: "Not today"); Sessions now, Still expected (names as the role may read them) |
+| S 3c Tablet to the parent | overlay on `/arrival`                                   | Full-screen form, rail and staff shortcuts out of reach; finger signature (or the typed name); one digital acceptance per child for a waiver (`POST /waiver-acceptances`) or an acknowledgment for a required form (`POST /acknowledgments`), signer named, staff never sign; "Thanks, Dana. Please hand the tablet back."; the family re-opens so the verdict re-checks                                                                                                             |
+| S 3d Checked in, offline  | `/arrival`                                              | One big green answer with faces, clears in 3 s (a tap holds it). Offline, each check-in is queued as its facility arrival and attendance observation (§4.15) through the existing queue (`features/operations/offline`, `purpose: 'desk_checkin'`), counted on the rail's Arrival badge (`useQueuedCheckinCount`) and listed under "Waiting to sync"; sent in order on reconnection                                                                                                  |
+| S 4a Front desk sale      | `/finance/point-of-sale/desk?household=`                | Owed fees first (each with the child it names), tap to add or remove; family credit applied as a line (`POST /credits/{id}/redeem`); products through a register sale; fees settled by cash or the card terminal (`POST /cash-tenders`); never optimistic                                                                                                                                                                                                                            |
+| S 4b Refund request       | `/finance/refund-requests`, `/:caseId`                  | The family's request (a support request) with the amount worked out by the cancellation preview; Refund cancels, refunds through the case, offers the place to the next family when ticked and resolves the request; Family credit; Change amount and Decline need a note; finance commands only                                                                                                                                                                                     |
+| S 4c Household record     | `/people/households/:id`, `/people/:personId/household` | Balance, credit, forms, visits; each child's activities, care flag and who may pick up; the family timeline; Take payment opens S 4a for the family                                                                                                                                                                                                                                                                                                                                  |
+
+The one-by-one selection (visitor categories, held check-ins, adults without a session) stays at
+`/arrival/select` ("One by one" tab, "Record arrivals one by one" on the desk).
+
+**Proposed behaviour** (shown in the purple pending tone, never faked): "Mark not coming" on a
+still-expected row (no staff attendance intent for sessions); the "+10%" bonus on a family credit
+(no policy; the credit is issued without it); "Over $200 needs a manager" (a constant,
+`MANAGER_REFUND_THRESHOLD_MINOR`, not an approved policy); a saved card on file at the desk
+(no payment-method read in the API); a staff note on a household.
+
+**Pending decisions and limits:** instalment plans (open decision 2: the demo's "instalment" fees
+are plain obligations); auto-offering a freed place (open decision 4: staff tick "the place goes to
+the waitlist" and the offer is their command); card tenders in release builds (DEC-019); a sibling
+whose waiver is current but ends soon cannot be signed for again (the API renews only a lapsed
+acceptance); offline, a new pass cannot be opened (no encrypted roster on the device, DEC-032), a
+family opened before the drop can still be checked in.
+
 ## Screen coverage (SCR-S-01 to SCR-S-57, SCR-W-01 to SCR-W-10)
 
 State: **Implemented and tested** = built and asserted by vitest and Testing Library in jsdom
@@ -240,6 +269,318 @@ of stage 4 (2026-10-30), from the screen groups' verified coverage. Details per 
 | SCR-W-08 Hours and fee records                         | Implemented and tested | Never shown as "Paid" (§1.7). Completed assignments over a named 180-day period (**Proposed** length); older fee records from the viewer's own fee list, newest first (`order=desc`, said on screen), with their assignments from one paged bulk read, also newest first.                                                          |
 | SCR-W-09 Supervised release (coach)                    | Partial                | Procedure **Pending decision** DEC-005, DEC-034, DEC-075.                                                                                                                                                                                                                                                                          |
 | SCR-W-10 Workspace connectivity state                  | Implemented and tested |                                                                                                                                                                                                                                                                                                                                    |
+
+## Redesign handoff: shared primitives, shell, Today (Phase 0 staff side, Phase 4)
+
+Screen ids are the handoff's (`docs/design/redesign-handoff`, staff board): S 1a Today desktop,
+S 1d Today phone, S 3a session drawer, S 3b weather cancel, S 3h locked shared tablet.
+Status words follow §6.7 (Verified, Proposed, Pending decision).
+
+### Shared primitives (`src/ui`), shown in every state at `/dev/ui` (development and demo builds)
+
+| Primitive          | File                   | Use                                                                                                                                                                                       |
+| ------------------ | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `StatusBadge`      | `StatusBadge.tsx`      | Six tones (success, warning, error = `danger`, info, neutral, pending), glyph + word; `size="sm"` for the 20 px chips of dense cards.                                                     |
+| `Avatar`           | `Avatar.tsx`           | Photo, or initials on the person colour (`personColour(id)`, `--person-1..5`) when there is none or it fails; `ring`; `decorative` when the name is written beside it.                    |
+| `Toast`            | `Toast.tsx`            | `useToast().show({ message, onUndo?, action?, tone?, durationMs?, countdown? })`: 2.4 s, 5 s with Undo, one at a time (the replaced one's `onClose('replaced')` runs), above the tab bar. |
+| `Drawer`           | `Drawer.tsx`           | Right-hand panel over a dimmed page; Escape, ✕ or the scrim close it (not while `locked`); focus moves in, stays and returns (`useFocusTrap`).                                            |
+| `BottomSheet`      | `BottomSheet.tsx`      | Phone sheet: drag the handle down, the scrim, ✕ or Escape; `locked` while processing.                                                                                                     |
+| `Skeleton`         | `Skeleton.tsx`         | Blocks in the final layout; `SkeletonGroup` announces "Loading …" once.                                                                                                                   |
+| `SegmentedControl` | `SegmentedControl.tsx` | A radio group on a sunk track; arrow keys move and choose; `size="lg"` for desk tablets.                                                                                                  |
+| `OfflineBanner`    | `OfflineBanner.tsx`    | Amber, the time of the last good data, what needs a connection, the queued count; the shell's `ConnectivityBanner` uses it.                                                               |
+| `Flash`            | `Flash.tsx`            | A live number that flashes floodlight for 1 s when it changes.                                                                                                                            |
+
+Tokens added to `styles.css` (both themes): person colours, `--toast-*`, `--shadow-drawer`,
+`--shadow-sheet`, `--flash`, `--skeleton*`. Verified: `src/ui/__tests__/redesign-primitives.test.tsx`.
+
+### Shell (`src/layout`)
+
+- One responsive shell: the expanded glass sidebar from 1280 px, the 84 px icon rail on desk
+  tablets (601-1279 px), and under 600 px a floating glass tab bar (`PhoneTabBar`: Today, Scan,
+  Schedule, Report) with everything else behind Menu. The collapse button's choice is remembered
+  and wins over the automatic one. Proposed (the design marks the manager's phone tab bar so).
+- The rail shows shorter names (`railTitle` in `navigation/areas.ts`); each link's accessible
+  name stays the area title (WCAG 2.5.3). "Bookings & parties" and "Point of sale" are shortcuts
+  to their Package G screens, shown only while their capability is on.
+- Rail badges: the API's attention counts, toned by what waits (red Today, amber Staff and
+  officials, purple Registrations). **For other screens:** `useRailBadge(area, { count, tone,
+label } | null)` (`layout/RailBadges.tsx`) shows a count that only this device knows (the
+  arrival desk's offline queue) on that area's rail item and phone tab while the caller is mounted;
+  it replaces the API's count for that area.
+- G then T / S / R / A opens Today, Schedule, Registrations or Arrival (`useGoShortcuts`; not
+  while typing, not in a dialog, only areas the API lists). Facility switcher hidden with a single
+  facility. "Live · 8:46 AM" is the facility's time. Account menu: Profile, Lock this tablet when
+  idle, Lock now, Switch user, Sign out (the sign-out icon stays beside the name).
+- Verified: `src/__tests__/shell.test.tsx`, `src/layout/__tests__/shell-redesign.test.tsx`.
+
+### Locked shared tablet (S 3h): Proposed design and its security reasoning
+
+The design asks for a 4-digit PIN that unlocks a shared desk tablet after 10 minutes idle, with
+check-ins still working while locked. Chosen (Proposed, not yet accepted in a recorded decision):
+a **per-device, per-staff PIN**, set when the staff member turns on "Lock this tablet when idle"
+in the account menu, kept only as a **salted PBKDF2-SHA-256 hash** (150 000 iterations, 16-byte
+random salt, constant-time compare) in this browser's storage (`layout/lock/pin.ts`). Reasoning:
+
+- The lock is a **screen guard, not authentication**. The API session is not touched while
+  locked (the check-ins of the locked screen are sent with it, recorded as that staff member), and
+  every request still passes the API's authentication guard and authorization unchanged. Nothing
+  about the PIN reaches the API, so the guard cannot be weakened by it and no API credential is
+  added.
+- An API-backed PIN was not chosen: it would add a credential store and a second sign-in path to
+  the identity module for a device convenience, while a person holding the unlocked browser could
+  use the session token anyway; it buys nothing against that person and adds attack surface.
+- Brute force is limited where it matters (at the keypad): five wrong tries block the keypad for
+  a minute, and the **third block in a row signs the session out** (the token is removed; a full
+  sign-in is needed). The attempt count and the locked state are stored, so a reload stays locked
+  and does not reset the count. A 4-digit hash is weak against someone who can read the browser's
+  storage offline; such a person can read the session token too, so the PIN is not meant to
+  protect against them.
+- While locked the page underneath is inert (and hidden from assistive technology) and keeps its
+  place, so the PIN returns exactly where the person was. The locked screen shows no care notes,
+  reasons or family names: a cleared pass says "Checked in: Maya", anything else "Please wait
+  for staff".
+- "Switch user" signs the session out so another staff member signs in. Turning the setting off
+  forgets the PIN. If browser storage is blocked, the lock lasts for the page only.
+- Pending decision: whether shared tablets must lock (a facility setting instead of a per-device
+  choice), and whether operators want a managed-device kiosk lock instead (DEC-018 identity).
+
+### Today (S 1a, S 1d, S 3a, S 3b)
+
+- Reads (no new API read was needed; existing reads are composed, `screens/today/start-checks.ts`):
+  `GET /today`, `GET /events` (the facility day), `GET /facilities/{id}/operating-status`,
+  `GET /sessions`, per start `GET /fixtures/{id}/readiness` and `GET /events/{id}/detail`, for
+  classes the offering's required waivers, the expected children (`GET /attendance`) and their
+  waivers (`GET /people/{id}/waivers`, at most 30), for bookings `GET /bookings/{id}` and its
+  roster; KPIs from `GET /facilities/{id}/occupancy`, `GET /reports/expected-arrivals` and
+  `GET /reports/sales-by-product-line`; candidates from `GET /assignments/{id}/replacements` or
+  `GET /assignment-requirements/{id}/candidates`; "resolved today" from `GET /exceptions`.
+  Everything refreshes every 60 s and on focus; a changed number flashes for 1 s.
+- Writes: Assign and Ask (`POST /assignments` with `offer: true`; Undo is
+  `POST /assignments/{id}/withdraw` with the expected revision), Acknowledge
+  (`POST /exceptions/{id}/acknowledge`), and the weather cancellation (`PATCH /fixtures/{id}`
+  action cancel, `POST /sessions/{id}/cancel`, `POST /bookings/{id}/cancel`,
+  `POST /events/{id}/cancel`), each with an idempotency key per intent.
+- Snooze (30 min), "Flag at arrival" and the issues leaving the list after ✓ are kept on this
+  device (`today-local.tsx`); the API stays the source of truth.
+- "Open check-in" opens `/arrival?type=event&eventId=…` or
+  `/arrival?type=session&offeringId=…&sessionId=…` (the query `activityFromSearch` reads).
+- Verified: `src/screens/today/__tests__/TodayScreen.test.tsx`, `today-model.test.ts`.
+- Not built here: dragging a field board block (INTERACTIONS 1a row 4; the schedule screens,
+  S 1b / S 3e) and "Move" in the drawer (it opens the schedule). Care flags on players are not
+  read in the drawer: care notes are protected and every read is audited, so they stay at
+  check-in.
+- **Pending decision**: Assign. Only the assignee accepts an assignment (§4.8), so "Assign" sends
+  the offer and the slot counts as covered once they accept; a manager assigning directly needs a
+  product decision. "Send reminder" for missing waivers waits on DEC-012 (shown disabled with the
+  proposed tag).
+- **Proposed**: the weather cancellation's 2-minute Undo is a delayed send
+  (`pending-cancellations.ts`): games, sessions and events cannot be un-cancelled in the API, so
+  nothing is cancelled and nobody is told until the window closes (the page warns before it is
+  closed while a batch waits). The design's "Families are told within a minute" is therefore
+  "within the 2-minute window". "Pick a date now" writes the make-up date into the reason; it
+  does not reschedule. The added line travels as the command's reason; whether families see it
+  depends on the owning modules' notices. The dialog counts people (event attendees), not
+  families.
+
+## Schedule and registrations (redesign phase 6: S 1b, S 3e, S 2b, S 5a, S 1c, S 3f, S 2c)
+
+Status words follow §6.7 (Verified = asserted by a jsdom test here; Proposed; Pending decision).
+
+### Schedule (`src/screens/schedule`, `/schedule/calendar`)
+
+- **S 1b day timeline** (`ScheduleCalendarScreen`, `ResourceTimeline`, `TimelineDetail`,
+  `schedule-model.ts`). 68 px rows (fields, then courts and other spaces, then rooms; a
+  subdivision only on a day it is booked or closed on its own); kind chips with counts, and the
+  conflict and draft chips, filter the grid (the other blocks dim; the text list "Bookings by
+  space" keeps everything). Open schedule drafts are drawn on the grid: a draft "create" is a
+  dashed block, a draft move or resize a dashed ghost. Conflicts are blocks holding the same ground
+  at overlapping times (only a draft can overlap a published event; the exclusion constraint is
+  the guarantee) and changes the API's validation flagged. Free hours of 60 min or more from now
+  on are "+ Free 12–2 · book" blocks; a gap or empty time opens New booking with the space and
+  time. The rail lists the readiness checks of Today (`useStartChecks`) with the first failed
+  check's fix as the primary action (Assign referee in place, missing forms, the restriction,
+  payment on the booking), Move (the facility-local move form, the keyboard path of a drag) and
+  Message; a rental or party also shows its booking. A draft block offers Publish
+  (`POST /schedule-drafts/{id}/publish`; an unpublished event outside a draft is put in a
+  one-change draft first) and Delete (discard, or autosave without that change). Day and Week
+  keep the date (`?date=`, `?view=week`). **Verified.**
+- **S 3e drag** (`useScheduleMove`). Pointer: press and move; touch and pen: long-press 400 ms.
+  The block tilts (not with reduced motion), "was here" marks its place, fitting gaps glow, a
+  clash turns it red and names what it hits; dropping there snaps back; Escape cancels; edges
+  resize in 15-minute steps. No new command: a drop writes a one-change schedule draft (`move`,
+  `resize` or `resource_change`) and validates it; a refused validation discards it and says why.
+  A valid move waits with a toast that stays until a choice: **Notify** publishes the draft (the
+  move commits under the exclusion constraint and the change notice goes out; bookings follow
+  their event through enrollment's handler), **Undo** discards it. Nobody is told before Notify;
+  a draft left by a closed page stays in Drafts and on the grid. Shortening a booked rental
+  that is paid needs a refund note (the change's reason); the refund itself is requested on the
+  payment. Only roles holding scheduling.manage_drafts and scheduling.publish_schedule can drag
+  (the front desk reads why). The toast counts people (event attendees), not families.
+  **Verified.**
+- **S 2b week by use** (`WeekHeatmap`). Space by local day (Monday to Sunday); the share of open
+  hours booked comes from `GET /reports/utilization` per day (its per-resource rows), the week's
+  total from `GET /reports/utilization-heatmap` (weekday by hour, summed); both need
+  reporting.view_utilization, so other roles see the cells toned by bookings with a sentence that
+  says so. Closures are hatched ("Closed", "Until 1 PM"), conflicts written in the cell; a cell
+  opens that day. **Verified.**
+- **Find a free slot** (`FreeSlotPanel`): `GET /resource-availability` over 14 days, filtered by
+  space type (format or kind), length, days and hours; the earliest start per space and day, with
+  the matching cells outlined; the no-match sentence of INTERACTIONS 2b row 3. **Verified.**
+- **S 5a New booking** (`NewBookingDrawer`): regulars first (`GET /bookings`, with what they
+  usually book), a people search once typing pauses, Enter picks the top; only the rentals and
+  parties whose booking availability lists the space; `POST /bookings`, then the API's quote
+  (`POST /registration-quotes`) and checkout in assisted registration. **Verified.**
+- **Proposed / pending decision 5 (slot holds and staff-side prices):** the 15-minute hold is
+  kept on the screen only (countdown, amber "Keep holding" at 2:00, released at 0); the server
+  holds nothing. No price is shown before booking; the price shown after is the API's quote.
+  Add-ons on a booking are not in the API (shown as proposed). "Text a pay link" is proposed
+  (no payment links in the API). A card on file does not exist in the API (DEC-019 provider
+  behaviour pending): "Charge card" opens the checkout.
+- Not built: dragging on Today's field board (INTERACTIONS 1a row 4). The board's mini timeline
+  is a decorative strip; moves happen on the day timeline with the same rules.
+
+### Registrations (`src/screens/registrations`, `/registrations`, also `/registrations/queue`)
+
+- **S 1c triage** (`RegistrationQueueScreen`, `TriageQueue`, `TriageRail`, `triage-model.ts`):
+  tabs with live counts (Needs a decision, Waitlist offers, Forms missing from
+  `GET /reports/enrollment-completeness`, All). Reasons in plain words with glyph badges (age
+  reasons from the date of birth: "Turns 5 on Dec 4"). Checkbox or X selects; rows sharing one
+  reason get the night bulk bar (Approve N, Decline…), each command on its own record. J/K/X/A/O/D
+  (not while typing or in a dialog); on narrow screens the rail is a bottom sheet. Approve is
+  optimistic with a 5 s Undo; the commands go after the window (an exception is
+  `override-eligibility` with the reason, then `accept` with the new revision), so the family is
+  told after it; a failure brings the row back with Try again. Over capacity: "Approve and
+  over-fill by 1" (`POST /capacity-pools/{id}/adjust`) or "Waitlist" (`POST /waitlist-entries`,
+  then decline with that reason). Deciding is offered to roles holding
+  enrollment.review_application (the front desk sees the facts). **Verified.**
+- **S 3f decline**: a reason (radio) and the family's message, prefilled per reason and
+  editable; the button follows the choices; when the API names an alternative offering with
+  places it is ticked by default and travels in the message. **Verified.**
+- **S 2c waitlist offers** (`WaitlistOffersTab`): `GET /waitlist-queue` (enrollment.manage_waitlist;
+  the front desk is told who manages offers). Time left with a bar; under 2 h the row turns amber
+  and suggests Call family (the payer's phone from `GET /people/{id}`); Withdraw (confirm) ends
+  the offer through `POST /waitlist-entries/{id}/remove`; a passed or lapsed offer goes to the
+  next family with `POST /waitlist-entries/{id}/offer`. The API does not record whether a family
+  opened an offer, so "not opened" is never claimed. **Verified.**
+- **Pending decision DEC-006** (offer expiry): Extend +12 h / +24 h is shown disabled (no
+  command moves an offer's expiry). **Pending decision 4** (auto-offer): "Offer the next family
+  by itself" is a read-only proposed switch. **Proposed:** the call note ("Called 8:52") is kept
+  on this device only (no contact log in the API). The median time to accept is worked out from
+  the settled offers listed.
+- The old area home (`RegistrationsScreen`) is replaced by the triage; its sections are linked
+  under "More".
+
+## Coach, manager and team (redesign phase 7: S 2d, S 3g, S 4d, S 5c, S 5b, S 4e)
+
+Screen ids are the handoff's (`docs/design/redesign-handoff`, staff board). Status words follow
+§6.7 (verified implementation, proposed behaviour, pending decision).
+
+**Verified implementation** (tests named after the requirement in each `__tests__/`):
+
+| Screen                 | Route / file                                                                           | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ---------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| S 2d Coach attendance  | `/workspace` (`screens/workspace/coach/CoachNow.tsx`)                                  | The coach's session on now (or within the hour, or at pickup) opens as tap tiles; `?view=list` shows every assignment. Tap cycles Unmarked → ✓ Here → ◷ Late (time stamped) → Unmarked; a 0.5 s press (or A) marks ✕ Absent with `navigator.vibrate(15)`. A mark waits on the device during its 5 s Undo and is sent when the toast closes (`POST /attendance-observations`, then corrections with a reason: observations are append-only, so a sent mark never returns to Unmarked); offline it is queued like check-ins. Flags: ▲ form (a required waiver missing, `GET /people/{id}/waivers`), ✕ allergy / ℹ care (`GET /attendance/care-flags`, kinds only); tapping opens a bottom sheet, care-note text read on tap (`GET /attendance/care-notes`, audited). |
+| S 3g Release at pickup | `/workspace/assignments/:id/pickup` (`coach/PickupRelease.tsx`)                        | Children marked here; big tiles of only the adults who may collect now (`GET /releases/authorized-collectors`); "Release Leo to Dana" (`POST /releases`, never optimistic; a refusal sends the coach to the desk); "Someone else" is a dead end ("Not authorised. Call the desk."); offline unavailable (DEC-034). Full screen: the tab bar hides (`workspace-tabs.ts`).                                                                                                                                                                                                                                                                                                                                                                                           |
+| S 4d Injury report     | `/workspace/issues` (Issues tab, `coach/InjuryReport.tsx`)                             | Who → what (where, what was done) → review; a head injury adds a concussion check. Send records one restricted `injury` incident on the session (`POST /incidents` with `offeringId`/`sessionId`): the API raises a `competition.injury_incident` issue on the managers' Today and composes an `injury_report` notice to the child's guardians. The summary carries no name (it is the Today title); concussion signs and notes go in the restricted narrative. The field problem report stays at `/workspace/report-problem` (the Issues tab stays current there).                                                                                                                                                                                                |
+| S 5c Skills assessment | `/workspace/assessments` (Assess tab, `coach/SkillsAssessment.tsx`)                    | One child at a time on the program's approved template (plain-word levels), a note, a suggested next class (the class this coach already suggested most, else the first upcoming offering of the program). Save drafts and moves on (optimistic, "Go back" on failure); arrows or a swipe skip; "Send all to families" submits each draft and shares each suggestion. The detailed records (corrections, review, templates) moved to `/workspace/assessments/records`.                                                                                                                                                                                                                                                                                             |
+| S 5b Team week         | `/staff/week` (first Staff and officials tab, `screens/staff/team/TeamWeekScreen.tsx`) | Shifts composed from assignments (one chip per person and day, first start to last end, coloured and written by role); open shifts from `GET /reports/uncovered-assignments` as a red dashed row, each listing who is free and qualified with Ask (`POST /assignments`, `offer: true`); a swap is a declined assignment with a proposed replacement, checked by `GET /assignments/{id}/replacements` and the week's hours; Approve offers the replacement (`POST /assignments/{id}/offer`), Decline withdraws it.                                                                                                                                                                                                                                                  |
+| S 4e Manager week      | `/reports/week` (first Reports tab, `screens/reports/week/ManagerWeekScreen.tsx`)      | Sales (sales by product line, against the previous period, reason = the line that moved most), fields booked (utilization, reason = the longest closure), no-shows (attendance); stacked sales by day (week) or week (month, season) in the schedule's kind colours, a day opens the schedule; Worth a look (families waiting → Add a session opens New booking on the first free hour tomorrow; applications waiting → Review; offers accepted → Details; injuries → Open; Promote → composer); Export CSV (stored run + export download) and PDF (print).                                                                                                                                                                                                        |
+
+The workspace phone tabs are one list (`screens/workspace/workspace-tabs.ts`); a future coach home
+(Phase 8 "My week") or a new tab changes that file only.
+
+**API added for these screens** (owning modules, CLAUDE.md): `GET /releases/authorized-collectors`,
+`GET /attendance/care-flags`, `GET /attendance/care-notes` (entry); session incidents and the Today
+issue (competition, migration 0472; workforce implements the `sessionCoverage` port); the
+`injury_report` notice (communications, migration 1072).
+
+**Proposed behaviour** (purple pending tone, never faked):
+
+- Assigned coaches read the operational care notes of their own session's participants (each read
+  audited). Identity's care-note readers stay the desk and the managers; whether coaches should
+  read them is a privacy decision for the operator.
+- The voice note in the injury report (the API stores no attachments); a typed note stands in.
+  The parent's name and a "Call" button are not shown: the coach reads no contacts.
+- Desk check-in time on the manager week (no timing is recorded); a "past players" audience for
+  Promote (the composer opens without it; a bulk-message composer is not specified yet).
+- The 40-hour weekly limit of a swap check (`WEEKLY_HOURS_LIMIT`, a constant, not a policy);
+  telling families of a coach change (no notice exists); "Add shift" (shifts without an activity
+  are not in the API); a coach asking for a swap from the phone (the request is today the
+  decline reason and the manager's proposed replacement).
+
+**Pending decisions and limits:** messaging (open decision 8) for the family texts beyond the
+injury notice; assessments reach families only after a program manager approves them
+(SPK-YOUTH-005); the demo's sales all fall on the seed day (payments cannot be backdated), so the
+chart shows one bar; approving a swap offers the slot: the session's coach changes once the person
+accepts (§4.8).
+
+## Phase 8: coach, referee and field crew screens (specified, not yet drawn)
+
+Built from `docs/design/redesign-handoff/BUILD_PLAN.md` "Phase 8" (no renders exist), in the
+language of the drawn phone screens (S 1d, S 2d, S 3g, S 4d, S 5c): a night header band, white
+20 px cards, 52 to 56 px field targets, floodlight for "now". Files: `src/screens/crew/*` (routes in
+`crew/routes.tsx`, one line in `App.tsx`), `src/screens/facilities/MaintenanceBoardScreen.tsx`,
+`src/screens/today/field-readiness.ts`. Status words follow §6.7.
+
+- **Homes per role** (`crew/workspace-kind.ts`). "/" opens the coach's week, the referee's home or
+  the field crew's fields (Today for anyone who runs the facility); the phone workspace tab bar
+  follows the role: coach Week · Teams · Now · Messages · More, referee Home · Games · Pay · Issues ·
+  More, crew Fields · Tasks · Report · Queue · More, everyone else the original tabs. This chooses
+  a layout from `GET /me` staff roles, never what the viewer may do. A `Field crew` demo role
+  (`demo-crew`, facilities operator) signs in to Fields. **Verified.**
+- **Coach · My week** (`/workspace/week`): Needs you (Nudge the next game's players without an
+  answer, `POST /fixtures/{id}/availability-requests`; a played game whose score waits for the
+  referee; offers to answer), the next session's night card (countdown pill, going / no answer,
+  Lineup, Start game day; Attendance and Pickup for a class), the rest of today, day chips.
+  Composed from `/me/assignments`, `/me/team-entries` (a youth team's coach holds its captain
+  role), `/me/fixtures` and the team sheet. **Verified.** **Pending decision:** allergy counts:
+  care notes are read by the desk and managers only (`identity.read_care_notes`), so the tile says
+  "At check-in".
+- **Coach · Lineup** (`/workspace/fixtures/:id/lineup`): the pitch in formation (initials on the
+  person colour; no photo API), the bench of Going players only, fewest minutes this season first,
+  ▲ amber below the team average. Drag to place or swap (pointer, touch, pen), or choose a player
+  and then a place (tap, Enter / Space; Escape lets go; each move announced). "Auto-fill fairly"
+  keeps the keeper and starts the fewest minutes. Save with Undo, Share. API added (competition
+  migration 0475): `GET/POST /fixtures/{id}/lineup`, `POST /fixtures/{id}/lineup/share`; minutes
+  come from the coach's game logs. **Verified.** **Pending decision 8:** sharing is recorded and
+  announced (`competition.lineup_shared`), but no notice reaches families until messaging exists.
+- **Coach · Live game day** (`/workspace/fixtures/:id/game-day`, night): ± per team (our goal
+  asks the scorer and assist), the timeline, Sub, Half time, Injury, "End game · 3–1". The game is
+  kept on this phone (ids and minutes only) and sent as the side's game log with every player's
+  minutes (`POST /fixtures/{id}/game-log`); offline it waits and is sent when the connection is
+  back. The game log is never the result: families see the score once the league publishes the
+  referee's report, which is checked against it. **Verified.** **Proposed:** the Injury button
+  opens `INJURY_REPORT_PATH` (`/workspace/report-problem?fixtureId=…&injury=1`), to be pointed at
+  the injury report (S 4d) route when it is merged.
+- **Coach · Team messages** (`/workspace/messages`): **Pending decision 8** (a messaging API).
+  One thread per real team; private replies "to you only", read counts, event and poll cards and
+  "Text them" are drawn in the proposed state; every send control is disabled with the reason
+  (`TEAM_MESSAGING_AVAILABLE = false`). No messages, real or invented. Phone numbers never shown.
+- **Referee home** (`/workspace/referee`): requests with Accept (at once, so Today's "no referee"
+  issue clears on its next read; Undo withdraws) and Can't (one-tap reason, `POST
+/assignments/{id}/decline`), confirmed games with their fee, availability (`GET/POST
+/availability` in the facility zone) and pay totals. **Verified.** **Proposed / pending
+  decision:** a reply-by time (no field in the API) and passing a declined request to the next
+  candidate by itself (the league manager offers it today).
+- **Referee match report** (SCR-W-05 with `crew/RefereeReportExtras.tsx`): the score is prefilled
+  from the coach's game log (`GET /fixtures/{id}/game-logs`); a different score must be fixed or
+  explained (the explanation goes into the report's notes); Field damage creates a crew task after
+  the report; Injury adds an injury incident; conduct chips go into the notes; the payout line.
+  **Verified.**
+- **Field crew · Fields** (`/workspace/fields`): pitches by first use, each with its checklist;
+  ticks save at once (`POST /field-preparations`), "Mark ready" only with every item ticked, shown
+  at once and sent after the 5 s Undo window. It drives Today's "Field" check (S 1a / S 3a, in
+  `start-checks.ts`), and a pitch not ready 15 minutes before its first use is a red Needs action
+  issue (`field-readiness.ts`). "Report a problem" creates a maintenance task. API added
+  (facilities migration 0975). **Verified.** **Proposed:** the photo (tasks keep evidence by
+  reference only; no upload API).
+- **Maintenance tasks board** (`/facilities/board`, tablet): To do / Doing / Done with the photo
+  (when the evidence links an image), field, bookings affected for the rest of today and assignee;
+  Assign to me, Start and Done move at once and send after the Undo window; "Close field" lists the
+  affected bookings with Move (the schedule day timeline, S 3e) and Cancel these (the S 3b dialog),
+  then closes the pitch for the task (`POST /maintenance-restrictions`). **Verified.**
+- Tests: `src/screens/crew/__tests__/*` and the Phase 8 block of
+  `src/screens/today/__tests__/TodayScreen.test.tsx`.
 
 ## Conventions for screen builders
 

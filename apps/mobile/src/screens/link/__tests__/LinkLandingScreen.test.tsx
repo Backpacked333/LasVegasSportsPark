@@ -58,6 +58,9 @@ describe('SCR-C-39 LinkLanding', () => {
     );
     expect(routeForTarget({ to: 'claim', token: TOKEN })).toBe('/onboarding');
     expect(routeForTarget({ to: 'inbox' })).toBe('/inbox');
+    // Handoff 3d "Share" and the 2e push "A place opened for Maya" (opaque ids only).
+    expect(routeForTarget({ to: 'activity', id: 'abc' })).toBe('/registration/offering/abc');
+    expect(routeForTarget({ to: 'waitlist', id: 'abc' })).toBe('/registration/waitlist/abc');
     // SCR-C-17: the open invitations (no token, nothing is answered from the link).
     expect(routeForTarget({ to: 'invitations' })).toBe('/invitations');
     expect(routeForTarget({ to: 'family' })).toBe('/family');

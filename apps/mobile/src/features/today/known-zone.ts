@@ -13,7 +13,7 @@
  * Nothing is requested for this: it reads the query cache (no new request, so the screens'
  * requests are unchanged), and follows it as answers arrive.
  */
-import { useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { notifyManager, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { useCallback, useSyncExternalStore } from 'react';
 import { displayZone, sharedZone, zoneOf, type DisplayZone } from './time';
 
@@ -62,8 +62,10 @@ export function knownFacilityZone(client: QueryClient): string {
  */
 export function useKnownFacilityZone(stated?: string | null): DisplayZone {
   const client = useQueryClient();
+  // Batched like TanStack's own hooks: a query created while another component renders (a read
+  // keyed on this zone) must not update this one during that render.
   const subscribe = useCallback(
-    (onChange: () => void) => client.getQueryCache().subscribe(onChange),
+    (onChange: () => void) => client.getQueryCache().subscribe(notifyManager.batchCalls(onChange)),
     [client],
   );
   const snapshot = useCallback(() => knownFacilityZone(client), [client]);

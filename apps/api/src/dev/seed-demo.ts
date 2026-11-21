@@ -16,12 +16,20 @@ import {
 } from './demo/context';
 import { seedCompetitions, seedLeague } from './demo/league';
 import { seedMessageSequence, seedSeasonSchedule } from './demo/messages';
+import { seedFrontDesk } from './demo/front-desk';
+import { seedParentAccount } from './demo/parent-account';
+import { nameParentHousehold, seedParentCore } from './demo/parent-core';
+import { seedParentRegister } from './demo/parent-register';
 import { seedFamilies, seedStaff } from './demo/people';
 import { seedRegister } from './demo/register';
 import { seedRegistrations } from './demo/registrations';
 import { seedRentals } from './demo/rentals';
 import { seedReports } from './demo/reports';
 import { seedSpaces } from './demo/spaces';
+import { seedStaffToday } from './demo/staff-today';
+import { seedStaffSchedule } from './demo/staff-schedule';
+import { seedStaffCoach } from './demo/staff-coach';
+import { seedStaffCrew } from './demo/staff-crew';
 import {
   assertSeedAllowed,
   seedDevelopment,
@@ -135,11 +143,22 @@ export async function seedDemo(
   ctx.log('register');
   const register = await seedRegister(ctx, staff, families);
   ctx.log('staff assignments');
+  // The desk scans the parent app's family: name it (Dana, Maya, Leo) before the desk's seed.
+  await nameParentHousehold(ctx, base.child.personId);
+  await seedFrontDesk(ctx, staff, spaces);
   await seedAssignments(ctx, staff, catalog, league);
+  await seedStaffToday(ctx, staff, spaces, catalog, league);
   await settle(ctx);
   ctx.log('reports');
   await seedReports(ctx, staff);
   await settle(ctx);
+  await seedParentCore(ctx, staff, spaces, base.child.personId);
+  await seedParentAccount(ctx, staff, spaces, base.child.personId);
+  await seedParentRegister(ctx, staff, families, base.child.personId);
+  // Last: it fills the free time it finds and skips anything that would clash.
+  await seedStaffSchedule(ctx, staff, spaces, catalog, families);
+  await seedStaffCoach(ctx, staff);
+  const crew = await seedStaffCrew(ctx, staff, spaces);
   ctx.log('done');
 
   const slug = ctx.organizationSlug;
@@ -191,6 +210,13 @@ export async function seedDemo(
           accountId: staff.manager.accountId,
           personId: staff.manager.personId,
           roles: [...staff.manager.principal.staffRoles],
+        },
+        // Phase 8: the field crew (demo/staff-crew.ts), whose home is Fields.
+        {
+          subject: crew.subject,
+          accountId: crew.accountId,
+          personId: crew.personId,
+          roles: [...crew.principal.staffRoles],
         },
       ],
       publicLinks,

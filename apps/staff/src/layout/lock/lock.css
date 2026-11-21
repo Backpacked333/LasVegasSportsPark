@@ -1,0 +1,202 @@
+/*
+ * S 3h Shared desk tablet, locked: the night surface over the whole dashboard, two halves (scan,
+ * PIN). The keypad keys are 76 px circles (above the 52-56 px desk minimum). Night tokens, so
+ * Legends mode keeps it dark too.
+ */
+.lock-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  background: radial-gradient(60% 70% at 25% 45%, var(--night-2), transparent 70%), var(--night);
+  color: var(--night-ink);
+  overflow: auto;
+}
+.lock-scan {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 48px 48px 40px;
+  border-right: 1px solid var(--night-line);
+  min-width: 0;
+}
+.lock-kicker {
+  font-size: 13.5px;
+  color: var(--night-muted);
+}
+.lock-scan h2 {
+  margin: 0;
+  font-size: 34px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: #fff;
+}
+.lock-scan-box {
+  flex: 1;
+  min-height: 260px;
+  border-radius: 24px;
+  background: radial-gradient(70% 70% at 50% 50%, var(--night-3), var(--night-2));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 22px;
+  padding: 24px;
+}
+.lock-scan-frame {
+  width: 204px;
+  height: 162px;
+  border: 3px solid var(--floodlight);
+  border-radius: 22px;
+  display: grid;
+  place-items: center;
+  color: color-mix(in srgb, var(--floodlight) 70%, var(--night));
+}
+.lock-scan-input {
+  width: min(320px, 100%);
+  min-height: 52px;
+  border-radius: 999px;
+  border: 1px solid var(--night-edge);
+  background: rgba(0, 0, 0, 0.25);
+  color: #fff;
+  padding: 0 20px;
+  font: inherit;
+  font-size: 15px;
+  text-align: center;
+}
+.lock-scan-input::placeholder {
+  color: var(--night-muted);
+}
+.lock-answer {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  font-size: 28px;
+  font-weight: 700;
+  text-align: center;
+  color: #fff;
+}
+.lock-answer-glyph {
+  width: 96px;
+  height: 96px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  font-size: 48px;
+}
+.lock-answer[data-tone='success'] .lock-answer-glyph {
+  background: var(--floodlight);
+  color: var(--night);
+}
+.lock-answer[data-tone='wait'] .lock-answer-glyph {
+  background: var(--night-warn-bg);
+  color: var(--night-warn);
+}
+.lock-foot {
+  margin: 0;
+  font-size: 13.5px;
+  color: var(--night-muted);
+}
+.lock-pin {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 40px 24px;
+  min-width: 0;
+}
+.lock-pin .ui-avatar[data-ring] {
+  box-shadow:
+    0 0 0 3px var(--night),
+    0 0 0 6px var(--floodlight);
+}
+.lock-name {
+  margin: 8px 0 0;
+  font-size: 24px;
+  font-weight: 700;
+  color: #fff;
+}
+.lock-meta {
+  margin: 0;
+  font-size: 13.5px;
+  color: var(--night-muted);
+}
+.lock-dots {
+  display: flex;
+  gap: 16px;
+  margin-top: 14px;
+}
+.lock-dots i {
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  border: 2px solid var(--night-soft);
+}
+.lock-dots i[data-filled] {
+  background: var(--floodlight);
+  border-color: var(--floodlight);
+}
+.lock-message {
+  margin: 0;
+  min-height: 20px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--night-warn);
+}
+.lock-keypad {
+  display: grid;
+  grid-template-columns: repeat(3, 76px);
+  gap: 12px;
+}
+.lock-key {
+  width: 76px;
+  height: 76px;
+  border-radius: 999px;
+  border: 0;
+  background: var(--night-2);
+  color: #fff;
+  font: inherit;
+  font-size: 26px;
+  font-weight: 600;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+.lock-key:hover:not([disabled]) {
+  background: var(--night-3);
+}
+.lock-key[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.lock-switch {
+  margin-top: 8px;
+  min-height: 44px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--floodlight);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+.lock-switch:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+/* Phones: the PIN first, the scan below. */
+@media (max-width: 760px) {
+  .lock-screen {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .lock-scan {
+    order: 2;
+    border-right: 0;
+    border-top: 1px solid var(--night-line);
+    padding: 24px 16px;
+  }
+}

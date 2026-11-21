@@ -364,6 +364,12 @@ export class CommunicationsModule implements OnModuleInit, OnModuleDestroy {
       (event, ctx) => this.competitionNotices.onResultPublished(ctx.trx, event),
       { failureOwner: 'league_manager' },
     );
+    this.registry.on<EventPayload<typeof MatchEvents.incidentReported>>(
+      MatchEvents.incidentReported.type,
+      'communications.notify_injury_report',
+      (event, ctx) => this.competitionNotices.onIncidentReported(ctx.trx, event),
+      { failureOwner: 'program_manager' },
+    );
     this.registry.on<EventPayload<typeof CompetitionEvents.availabilityRequested>>(
       CompetitionEvents.availabilityRequested.type,
       'communications.notify_availability_request',

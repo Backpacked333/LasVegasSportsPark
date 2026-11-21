@@ -21,7 +21,6 @@ import {
   line,
   offering,
   page,
-  quote,
   waitlistEntry,
 } from '../../../features/registration/testing/fixtures';
 import { createRegistrationTestApp } from '../../../features/registration/testing/registration-test-app';
@@ -90,7 +89,7 @@ describe('SCR-C-11 BasketScreen', () => {
     expect(screen.queryByTestId('registration-steps')).toBeNull();
     fireEvent.press(screen.getByRole('button', { name: 'Explore activities' }));
     expect(mockRouter.push).toHaveBeenCalledWith('/discover');
-    expect(screen.queryByRole('button', { name: 'Get your price' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Review and pay' })).toBeNull();
     await app.settle();
   });
 
@@ -124,7 +123,8 @@ describe('SCR-C-11 BasketScreen', () => {
   it('SPK-REG-009: offers the required forms while a signature is missing, and not once they are signed', async () => {
     const app = renderBasket({ routes: routes() });
     fireEvent.press(await screen.findByRole('button', { name: 'Complete required forms' }));
-    expect(mockRouter.push).toHaveBeenCalledWith(`/registration/forms?basketId=${IDS.basket}`);
+    // Forms are signed on Review & pay (handoff 1f).
+    expect(mockRouter.push).toHaveBeenCalledWith(`/registration/review/${IDS.basket}`);
 
     app.fake.set('GET /acknowledgments', (req: FakeRequest) =>
       fakeResponse(200, [acknowledgment(req.query.subjectPersonId as string, IDS.formPolicy)]),
@@ -136,18 +136,11 @@ describe('SCR-C-11 BasketScreen', () => {
     expect(screen.queryByRole('button', { name: 'Complete required forms' })).toBeNull();
   });
 
-  it('gets a price with no amounts in the request and opens the quote (SPK-PAY-001)', async () => {
-    const app = renderBasket({
-      routes: routes({ 'POST /registration-quotes': { status: 201, body: quote() } }),
-    });
-    const target = await screen.findByRole('button', { name: 'Get your price' });
-    await act(async () => {
-      fireEvent.press(target);
-    });
-    const sent = app.fake.requests.find((r) => r.route === '/registration-quotes');
-    expect(sent?.body).toEqual({ basketId: IDS.basket, discountCodes: [], creditIds: [] });
-    expect(sent?.headers['idempotency-key']).toMatch(/^key-/);
-    expect(mockRouter.push).toHaveBeenCalledWith(`/registration/quote/${IDS.quote}`);
+  it('handoff 1f: "Review and pay" opens Review & pay for this cart, which holds, prices and pays it (nothing is sent from the cart)', async () => {
+    const app = renderBasket({ routes: routes() });
+    fireEvent.press(await screen.findByRole('button', { name: 'Review and pay' }));
+    expect(mockRouter.push).toHaveBeenCalledWith(`/registration/review/${IDS.basket}`);
+    expect(app.fake.requests.some((r) => r.route === '/registration-quotes')).toBe(false);
   });
 
   it('SPK-REG-006: held places show the server expiry and an informational countdown; release sends the revision', async () => {
@@ -191,7 +184,7 @@ describe('SCR-C-11 BasketScreen', () => {
         'A line in this cart needs approval by staff before you can pay. Your spots are saved only when you check out.',
       ),
     ).toBeOnTheScreen();
-    expect(screen.queryByRole('button', { name: 'Get your price' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Review and pay' })).toBeNull();
   });
 
   it('SPK-REG-002: an ineligible line shows the API reasons and permitted alternatives', async () => {
@@ -236,26 +229,6 @@ describe('SCR-C-11 BasketScreen', () => {
     ).toBeOnTheScreen();
     expect(screen.getByText('→ Look at programs for older players.')).toBeOnTheScreen();
     expect(screen.getAllByLabelText(/Not eligible as entered/).length).toBeGreaterThan(0);
-  });
-
-  it('SPK-IAM-003: a payer without pay permission for a line sees the price as not available', async () => {
-    renderBasket({
-      routes: routes({
-        'POST /registration-quotes': () =>
-          fakeResponse(
-            403,
-            apiErrorBody('PARTICIPANT_AUTHORITY_REQUIRED', {
-              nextAction: 'request_participant_authority',
-            }),
-          ),
-      }),
-    });
-    const target = await screen.findByRole('button', { name: 'Get your price' });
-    await act(async () => {
-      fireEvent.press(target);
-    });
-    expect(await screen.findByLabelText('Not available')).toBeOnTheScreen();
-    expect(mockRouter.push).not.toHaveBeenCalled();
   });
 
   it('removes a line with the expected revision; a stale basket offers Reload', async () => {
@@ -307,73 +280,6 @@ describe('SCR-C-11 BasketScreen', () => {
     expect(app.progressStore.snapshot()).toEqual({ pendingCheckoutQuoteId: null });
   });
 
-  it('SPK-PAY-014, SPK-REG-012 (QA M-2): when what a line chose is full the wording says so, and the waitlist is joined for exactly that choice', async () => {
-    const day = '0192f1a0-0000-7000-8000-0000000000d1';
-    const chosen = line({
-      priceTierId: '0192f1a0-0000-7000-8000-0000000000f1',
-      selectedSessionIds: [day],
-      addons: [
-        {
-          addonId: '0192f1a0-0000-7000-8000-0000000000a1',
-          code: 'lunch',
-          name: 'Lunch',
-          selection: 'per_session',
-          sessionIds: [day],
-          priceMinor: 900,
-          currency: 'USD',
-          quantity: 1,
-        },
-      ],
-      uniform: {
-        offeringUniformId: '0192f1a0-0000-7000-8000-0000000000b1',
-        itemKey: 'kit',
-        name: 'Camp kit',
-        size: 'YM',
-        priceMinor: 2500,
-        currency: 'USD',
-        returningHolderFree: false,
-        heldUniformOrderId: null,
-      },
-    });
-    const app = renderBasket({
-      routes: routes({
-        'GET /baskets/{id}': { status: 200, body: basket({ lines: [chosen] }) },
-        'POST /registration-quotes': () =>
-          fakeResponse(
-            409,
-            apiErrorBody('CAPACITY_UNAVAILABLE', {
-              nextAction: 'join_waitlist_or_choose_alternative',
-            }),
-          ),
-        'POST /waitlist-entries': { status: 201, body: waitlistEntry() },
-      }),
-    });
-    const price = await screen.findByRole('button', { name: 'Get your price' });
-    await act(async () => {
-      fireEvent.press(price);
-    });
-    expect(
-      await screen.findByText(
-        'The activity, a day or an extra you chose is full for at least one line. Nothing was charged. You can join the waitlist for exactly what you chose, or remove the line and choose something else.',
-      ),
-    ).toBeOnTheScreen();
-    // The participant's name arrives with the family read, which may land after the basket.
-    const join = await screen.findByRole('button', { name: 'Join the waitlist for Ada' });
-    await act(async () => {
-      fireEvent.press(join);
-    });
-    expect(app.fake.requests.find((r) => r.route === '/waitlist-entries')?.body).toEqual({
-      offeringId: IDS.offering,
-      participantPersonId: IDS.childA,
-      intent: 'youth',
-      preferences: {},
-      priceTierId: '0192f1a0-0000-7000-8000-0000000000f1',
-      selectedSessionIds: [day],
-      addons: [{ addonId: '0192f1a0-0000-7000-8000-0000000000a1', sessionIds: [day] }],
-      uniform: { offeringUniformId: '0192f1a0-0000-7000-8000-0000000000b1', size: 'YM' },
-    });
-  });
-
   it('a checkout whose answer never arrived (app closed mid-payment) is found again from the basket', async () => {
     renderBasket({
       progress: { pendingCheckoutQuoteId: IDS.quote },
@@ -382,7 +288,8 @@ describe('SCR-C-11 BasketScreen', () => {
       }),
     });
     fireEvent.press(await screen.findByRole('button', { name: 'Check your payment' }));
-    expect(mockRouter.push).toHaveBeenCalledWith(`/registration/checkout/${IDS.quote}`);
+    // Review finds the payment that started and never charges again.
+    expect(mockRouter.push).toHaveBeenCalledWith(`/registration/review/${IDS.basket}`);
   });
 
   it('SPK-UX-001: after a reinstall, the basket finds its checkout in GET /me/registration-checkouts', async () => {
@@ -440,9 +347,9 @@ describe('SCR-C-11 BasketScreen', () => {
 
   it('offline: the basket is kept and pricing is disabled', async () => {
     const app = renderBasket({ routes: routes() });
-    expect(await screen.findByRole('button', { name: 'Get your price' })).toBeOnTheScreen();
+    expect(await screen.findByRole('button', { name: 'Review and pay' })).toBeOnTheScreen();
     act(() => app.sources.setReachable(false));
-    expect(screen.getByRole('button', { name: 'Get your price' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Review and pay' })).toBeDisabled();
     expect(
       screen.getByText('Getting a price and checking out need a connection. Your cart is kept.'),
     ).toBeOnTheScreen();

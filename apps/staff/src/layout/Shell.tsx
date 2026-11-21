@@ -15,11 +15,26 @@
  * A skip link and visible focus serve keyboard users (SPK-UX-009). Feedback for speed (SPK-UX-008
  * "processing"): a thin line at the top of the window while any read is in flight, each page
  * starts at its top, and the browser tab is titled with the screen it shows.
+ *
+ * Redesign handoff (staff shell, BUILD_PLAN Phase 4):
+ * - one responsive shell: the expanded glass sidebar on desktops (1280 px and up), the 84 px icon
+ *   rail on desk tablets (601-1279 px; S 1b, S 2a), and under 600 px a floating glass tab bar
+ *   (`PhoneTabBar`, S 1d) with everything else in the Menu drawer. A choice made with the
+ *   collapse button is remembered and wins over the automatic one;
+ * - the facility switcher is hidden when the viewer works at a single facility;
+ * - "Live · 8:46 AM" is the facility's local time (SPK-SCHED-008);
+ * - G then T, S, R or A goes to Today, Schedule, Registrations or Arrival (`useGoShortcuts`);
+ * - the rail foot is the account menu (`UserMenu`: Profile, the shared-tablet lock, Switch user,
+ *   Sign out) and rail items carry badges, which screens on this device can feed
+ *   (`RailBadges`);
+ * - toasts (`ui/Toast`) and the shared desk tablet lock (`lock/`, S 3h) live here, so they
+ *   survive navigation.
  */
 import { useIsFetching } from '@tanstack/react-query';
 import { Suspense, useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router';
-import { useApiQuery } from '../api/useApiQuery';
+import { useFacilityDirectory } from '../api/facility-directory';
+import { usePermissions } from '../api/permissions';
 import { ConnectivityBanner } from '../connectivity/ConnectivityBanner';
 import { DemoBar, TourPanel } from '../demo';
 import { OfflineQueueProvider } from '../features/operations/offline/OfflineQueueProvider';
@@ -30,38 +45,26 @@ import { WorkspaceTabBar } from '../screens/workspace/WorkspaceTabBar';
 import { LegendsToggle } from '../theme/LegendsToggle';
 import { Glass } from '../ui/glass/Glass';
 import { Icon } from '../ui/Icon';
+import { ToastProvider } from '../ui/Toast';
 import { UpdateRequiredNotice } from '../ui/UpdateRequiredNotice';
 import { AreaNav } from './AreaNav';
 import { CommandPalette, rememberRecent } from './CommandPalette';
-import { FacilitySwitcher } from './FacilitySwitcher';
+import { FacilitySwitcher, useFacilityChoices } from './FacilitySwitcher';
+import { LockProvider, useLock } from './lock/LockProvider';
+import { LockScreen } from './lock/LockScreen';
+import { PhoneTabBar } from './PhoneTabBar';
+import { RailBadgeProvider } from './RailBadges';
+import { QueuedCheckinRailBadge } from '../features/operations/offline/deskCheckins';
+import { useGoShortcuts } from './useGoShortcuts';
+import { PHONE_QUERY, TABLET_QUERY, useMediaQuery } from './useMediaQuery';
+import { UserMenu } from './UserMenu';
 import './shell.css';
+import '../ui/primitives.css';
 
 const RAIL_KEY = 'sportspark.sidebar';
 
 const DRAWER_FOCUSABLE_SELECTOR =
   'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
-
-const ROLE_LABELS: Record<string, string> = {
-  front_desk: 'Front desk',
-  league_manager: 'League manager',
-  program_manager: 'Program manager',
-  scheduler: 'Scheduler',
-  finance_operator: 'Finance operator',
-  facilities_operator: 'Facilities operator',
-  general_manager: 'General manager',
-  system_administrator: 'System administrator',
-  support_operator: 'Support operator',
-  coach: 'Coach',
-  official: 'Official',
-};
-
-function initialsOf(name: string): string {
-  const parts = name.split(/\s+/).filter(Boolean);
-  return parts
-    .slice(0, 2)
-    .map((p) => p[0]?.toUpperCase() ?? '')
-    .join('');
-}
 
 /** "⌘K" on Apple keyboards, "Ctrl K" elsewhere. */
 function shortcutLabel(): string {
@@ -80,42 +83,21 @@ function isEditable(target: EventTarget | null): boolean {
   );
 }
 
-/** The signed-in person in the sidebar foot: name and first staff role from `GET /v1/me`. */
-function SignedInPerson() {
-  const { session, signOut } = useApp();
-  const me = useApiQuery({ path: '/me', enabled: session.status === 'signed_in' });
-  const person = me.data?.person ?? null;
-  const name = [person?.givenName, person?.familyName].filter(Boolean).join(' ') || 'Signed in';
-  const role = me.data?.principal.staffRoles[0];
-  return (
-    <div className="side-user">
-      <span className="avatar" aria-hidden="true">
-        {initialsOf(name) || '•'}
-      </span>
-      <span className="side-user-text">
-        <span className="side-user-name">{name}</span>
-        <span className="side-user-role">
-          {role ? (ROLE_LABELS[role] ?? role) : 'Staff dashboard'}
-        </span>
-      </span>
-      <button
-        type="button"
-        className="side-icon-button"
-        aria-label="Sign out"
-        title="Sign out"
-        onClick={() => void signOut()}
-      >
-        <Icon name="logout" size={18} />
-      </button>
-    </div>
-  );
+/** The time zone of the facility the viewer works in (the first of their scope when "all"). */
+function useFacilityZone(): string | undefined {
+  const { facilityId, session } = useApp();
+  const { options } = useFacilityChoices();
+  const directory = useFacilityDirectory(session.status === 'signed_in');
+  const id = facilityId ?? options[0];
+  return directory.data?.items.find((f) => f.id === id)?.timezone;
 }
 
-/** Live (online, with the facility-agnostic clock) or offline, as text and glyph (SPK-UX-009). */
+/** Live with the facility's local time, or offline, as text and glyph (SPK-UX-009). */
 function LiveIndicator() {
   const { online } = useApp();
   const now = useNow();
-  const time = now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  const timeZone = useFacilityZone();
+  const time = now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', timeZone });
   return (
     <span className="live-pill" data-online={online} data-testid="live-indicator">
       {online ? (
@@ -140,11 +122,42 @@ function RouteProgress() {
   return <div className="route-progress" data-active={fetching > 0} aria-hidden="true" />;
 }
 
+/** The stored sidebar choice: collapsed, expanded, or (null) automatic by screen width. */
+function storedRail(value: string | null): boolean | null {
+  return value === 'rail' ? true : value === 'expanded' ? false : null;
+}
+
 export function Shell() {
-  const { updateRequired, preferences } = useApp();
+  const { updateRequired } = useApp();
+  if (updateRequired) return <UpdateRequiredNotice error={updateRequired} />;
+  return (
+    // One offline queue for the signed-in dashboard: it synchronises on reconnection wherever the
+    // viewer is (§4.15, SPK-AT-018). Badges, toasts and the lock outlive a page.
+    <RailBadgeProvider>
+      <OfflineQueueProvider>
+        <QueuedCheckinRailBadge />
+        <ToastProvider>
+          <LockProvider>
+            <ShellFrame />
+          </LockProvider>
+        </ToastProvider>
+      </OfflineQueueProvider>
+    </RailBadgeProvider>
+  );
+}
+
+function ShellFrame() {
+  const { preferences } = useApp();
+  const permissions = usePermissions();
+  const lock = useLock();
+  const locked = lock?.state.locked === true && lock.hasPin;
   const [menuOpen, setMenuOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const [rail, setRail] = useState(() => preferences.get(RAIL_KEY) === 'rail');
+  const [railChoice, setRailChoice] = useState(() => storedRail(preferences.get(RAIL_KEY)));
+  const tablet = useMediaQuery(TABLET_QUERY);
+  const rail = railChoice ?? tablet;
+  const { options: facilityOptions } = useFacilityChoices();
+  const showSwitcher = facilityOptions.length > 1;
   const menuButtonRef = useRef<HTMLButtonElement | null>(null);
   const drawerRef = useRef<HTMLElement>(null);
   const wasMenuOpen = useRef(false);
@@ -162,12 +175,20 @@ export function Shell() {
     document.title = screen ? `${screen.title} · Sportspark staff` : 'Sportspark staff';
   }, [location.pathname, preferences]);
 
+  // The collapse button sets the opposite of what is shown; going back to what the width would
+  // choose by itself forgets the choice.
   const toggleRail = useCallback(() => {
-    setRail((current) => {
-      preferences.set(RAIL_KEY, current ? null : 'rail');
-      return !current;
-    });
-  }, [preferences]);
+    const next = !rail;
+    const choice = next === tablet ? null : next;
+    preferences.set(RAIL_KEY, choice === null ? null : choice ? 'rail' : 'expanded');
+    setRailChoice(choice);
+  }, [preferences, rail, tablet]);
+
+  // G then T / S / R / A (not while typing, not while locked or in a dialog).
+  useGoShortcuts(
+    (area) => permissions.isAreaVisible(area as never) === true,
+    !locked && !paletteOpen && !menuOpen,
+  );
 
   // Quick navigation from anywhere: Ctrl+K or Command+K; "/" when not typing.
   useEffect(() => {
@@ -208,10 +229,10 @@ export function Shell() {
     }
   }, [menuOpen]);
 
-  // Keep the modal state aligned with the sidebar's 900 px CSS breakpoint.
+  // Keep the modal state aligned with the sidebar's 600 px CSS breakpoint.
   useEffect(() => {
     if (!menuOpen || typeof window.matchMedia !== 'function') return;
-    const narrowViewport = window.matchMedia('(max-width: 900px)');
+    const narrowViewport = window.matchMedia(PHONE_QUERY);
     const closeOnDesktop = (event: MediaQueryListEvent) => {
       if (!event.matches) {
         focusSidebarAfterResize.current = true;
@@ -261,14 +282,10 @@ export function Shell() {
     }
   };
 
-  if (updateRequired) return <UpdateRequiredNotice error={updateRequired} />;
-
   const close = () => setMenuOpen(false);
   return (
-    // One offline queue for the signed-in dashboard: it synchronises on reconnection wherever the
-    // viewer is (§4.15, SPK-AT-018).
-    <OfflineQueueProvider>
-      <div className="shell" data-rail={rail}>
+    <>
+      <div className="shell" data-rail={rail} inert={locked} aria-hidden={locked || undefined}>
         <a className="skip-link" href="#main" inert={menuOpen}>
           Skip to main content
         </a>
@@ -350,7 +367,7 @@ export function Shell() {
               </div>
             </nav>
             <div className="shell-side-foot">
-              <SignedInPerson />
+              <UserMenu />
             </div>
           </Glass>
         </aside>
@@ -362,7 +379,11 @@ export function Shell() {
           ) : null}
           <header className="shell-header">
             <h1 className="visually-hidden">Sportspark staff</h1>
-            <Glass className="header-group header-group-main" radius={23} blur={5}>
+            <Glass
+              className={`header-group header-group-main${showSwitcher ? '' : ' header-group-bare'}`}
+              radius={23}
+              blur={5}
+            >
               <button
                 type="button"
                 className="header-button menu-button"
@@ -389,7 +410,7 @@ export function Shell() {
                 onClick={() => setPaletteOpen(true)}
               >
                 <Icon name="search" size={18} />
-                <span className="jump-label">Jump to…</span>
+                <span className="jump-label">Jump to a person, team, booking…</span>
                 <kbd aria-hidden="true">{shortcutLabel()}</kbd>
               </button>
             </Glass>
@@ -405,6 +426,7 @@ export function Shell() {
             <Outlet />
           </main>
           <WorkspaceTabBar />
+          <PhoneTabBar />
         </div>
         {paletteOpen ? (
           <CommandPalette onClose={closePalette} rail={rail} onToggleRail={toggleRail} />
@@ -415,6 +437,7 @@ export function Shell() {
           </Suspense>
         ) : null}
       </div>
-    </OfflineQueueProvider>
+      {locked && lock ? <LockScreen lock={lock} /> : null}
+    </>
   );
 }

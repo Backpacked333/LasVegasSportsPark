@@ -4208,6 +4208,94 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/arrival-lookups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Open the arrival selection for a household or person found by name, as a scan of their pass would (S 2a; records nobody, SPK-ENTRY-003) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["ArrivalLookupRequest"];
+                };
+            };
+            responses: {
+                /** @description Command outcome */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ArrivalLookup"];
+                    };
+                };
+                /** @description Validation failed */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Access denied or participant authority required */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/assessment-templates": {
         parameters: {
             query?: never;
@@ -7097,6 +7185,148 @@ export type paths = {
                 };
             };
         };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/attendance/care-flags": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Which participants of an activity have operational care notes, by kind only (the assigned coach's tiles, S 2d; SPK-ENTRY-004) */
+        get: {
+            parameters: {
+                query: {
+                    activityId: string;
+                    activityType: "session" | "event";
+                    offeringId?: string;
+                    personIds: string[];
+                };
+                header?: {
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Result */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ParticipantCareFlags"];
+                    };
+                };
+                /** @description Access denied */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/attendance/care-notes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One participant's operational care notes for the assigned coach or desk; every read is audited (S 2d, §4.14) */
+        get: {
+            parameters: {
+                query: {
+                    activityId: string;
+                    activityType: "session" | "event";
+                    offeringId?: string;
+                    personId: string;
+                };
+                header?: {
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Result */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ParticipantCareNotes"];
+                    };
+                };
+                /** @description Access denied */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -20465,6 +20695,250 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/field-preparations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The day's pitch preparations of a facility (field crew checklist, SPK-READY-001) */
+        get: {
+            parameters: {
+                query: {
+                    date?: string;
+                    facilityId: string;
+                };
+                header?: {
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Result */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["FieldPreparationDay"];
+                    };
+                };
+                /** @description Access denied */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** Tick or untick a pitch's preparation checklist for a day (SPK-FAC-001) */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /** @description Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window. */
+                    "Idempotency-Key": string;
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["RecordFieldPreparationRequest"];
+                };
+            };
+            responses: {
+                /** @description Command outcome */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["FieldPreparation"];
+                    };
+                };
+                /** @description Validation failed */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Access denied */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Conflict (STALE_REVISION, IDEMPOTENCY_*) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/field-preparations/{id}/ready": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mark a pitch ready for the day: every checklist item ticked (SPK-READY-001) */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /** @description Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window. */
+                    "Idempotency-Key": string;
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["MarkFieldReadyRequest"];
+                };
+            };
+            responses: {
+                /** @description Command outcome */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["FieldPreparation"];
+                    };
+                };
+                /** @description Validation failed */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Access denied */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Conflict (STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Eligibility failed (a checklist item is not ticked) */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/finance/ledger-balances": {
         parameters: {
             query?: never;
@@ -21736,6 +22210,404 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/fixtures/{id}/game-log": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record the side's game log: score, timeline and minutes (SPK-UX-007, SPK-RESULT-001) */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /** @description Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window. */
+                    "Idempotency-Key": string;
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["RecordGameLogRequest"];
+                };
+            };
+            responses: {
+                /** @description Command outcome */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["GameLog"];
+                    };
+                };
+                /** @description Validation failed */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Access denied */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Conflict (STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/fixtures/{id}/game-logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The sides' game log scores, for the official's match check (SPK-RESULT-001) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Result */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["FixtureGameLogs"];
+                    };
+                };
+                /** @description Access denied */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/fixtures/{id}/lineup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The coach's team sheet: players with answers and season minutes, the lineup and the game log */
+        get: {
+            parameters: {
+                query?: {
+                    teamEntryId?: string;
+                };
+                header?: {
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Result */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["TeamSheet"];
+                    };
+                };
+                /** @description Access denied */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** Save a side's lineup for the fixture (SPK-CAP-001) */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /** @description Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window. */
+                    "Idempotency-Key": string;
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["SaveLineupRequest"];
+                };
+            };
+            responses: {
+                /** @description Command outcome */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Lineup"];
+                    };
+                };
+                /** @description Validation failed */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Access denied */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Conflict (STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/fixtures/{id}/lineup/share": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Send the side's saved lineup to its families (SPK-CAP-001) */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /** @description Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window. */
+                    "Idempotency-Key": string;
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["ShareLineupRequest"];
+                };
+            };
+            responses: {
+                /** @description Command outcome */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Lineup"];
+                    };
+                };
+                /** @description Validation failed */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Access denied */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Conflict (STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/fixtures/{id}/match-sheet": {
         parameters: {
             query?: never;
@@ -22252,6 +23124,104 @@ export type paths = {
                 };
             };
         };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/households/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read a household and its members (staff who read people's authority; S 4c household record)
+         * @description Implements SPK-IAM-001, SPK-IAM-003, §4.5, §4.10.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Household"];
+                    };
+                };
+                /** @description Validation failed */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Authentication required */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Access denied or participant authority required */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Conflict (stale revision, invalid transition, idempotency) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -23584,6 +24554,7 @@ export type paths = {
                 query?: {
                     fixtureId?: string;
                     seasonId?: string;
+                    sessionId?: string;
                     status?: components["schemas"]["IncidentStatus"];
                     subjectPersonId?: string;
                 };
@@ -46411,6 +47382,77 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/releases/authorized-collectors": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The adults who may collect a participant of the activity now, for the assigned coach or the pickup desk (S 3g, SPK-ENTRY-007) */
+        get: {
+            parameters: {
+                query: {
+                    activityId: string;
+                    activityType: "session" | "event";
+                    offeringId?: string;
+                    participantPersonId: string;
+                };
+                header?: {
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Result */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AuthorizedCollectors"];
+                    };
+                };
+                /** @description Access denied */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/releases/collector-checks": {
         parameters: {
             query?: never;
@@ -59612,7 +60654,7 @@ export type components = {
             personId?: string;
             policyReferences?: string[];
             reason?: string;
-            token: string;
+            token?: string;
         };
         AcceptTeamPlaceOfferRequest: {
             expectedRevision: number;
@@ -60418,6 +61460,28 @@ export type components = {
         };
         /** @enum {string} */
         ArrivalIssueCode: "no_participation" | "not_registered_for_session" | "enrollment_not_confirmed" | "missing_acknowledgment" | "waiver_missing" | "waiver_lapsed" | "outstanding_balance" | "balance_unknown" | "activity_canceled" | "activity_ended" | "not_on_site" | "desk_review_required";
+        ArrivalLookup: {
+            /** Format: uuid */
+            facilityId: string;
+            holder: components["schemas"]["PassHolder"];
+            nextAction: string;
+            people: components["schemas"]["ScanPerson"][];
+            /** @enum {string} */
+            recorded: "nothing";
+            /** Format: date-time */
+            scannedAt: string;
+            window: {
+                /** Format: date-time */
+                end: string;
+                /** Format: date-time */
+                start: string;
+            };
+        };
+        ArrivalLookupRequest: {
+            /** Format: uuid */
+            facilityId: string;
+            holder: components["schemas"]["PassHolder"];
+        };
         Assessment: {
             /** Format: uuid */
             authorPersonId: string;
@@ -60918,6 +61982,20 @@ export type components = {
             competitionId: string;
             /** @enum {string} */
             kind: "competition";
+        };
+        AuthorizedCollectors: {
+            /** Format: date-time */
+            checkedAt: string;
+            collectors: {
+                displayName: string;
+                familyName: string;
+                givenName: string;
+                /** Format: uuid */
+                personId: string;
+            }[];
+            /** Format: uuid */
+            participantPersonId: string;
+            restrictions: components["schemas"]["CollectorRestriction"][];
         };
         AutosaveScheduleDraftBody: {
             changes: components["schemas"]["DraftChangeInput"][];
@@ -62838,10 +63916,14 @@ export type components = {
             narrative?: string;
             /** Format: date-time */
             occurredAt?: string;
+            /** Format: uuid */
+            offeringId?: string;
             policyReferences?: string[];
             reason?: string;
             /** Format: uuid */
             seasonId?: string;
+            /** Format: uuid */
+            sessionId?: string;
             severity: components["schemas"]["IncidentSeverity"];
             /** Format: uuid */
             subjectPersonId?: string;
@@ -64808,6 +65890,7 @@ export type components = {
             offeringId: string;
             /** Format: uuid */
             personId: string;
+            place: string | null;
             /** Format: uuid */
             sessionBookingId: string | null;
             /** Format: uuid */
@@ -64893,6 +65976,36 @@ export type components = {
         };
         /** @enum {string} */
         FeeSubmissionStatus: "submitted" | "approved" | "adjusted" | "rejected" | "exported";
+        FieldPreparation: {
+            checkedItems: components["schemas"]["FieldPreparationItem"][];
+            date: string;
+            /** Format: uuid */
+            facilityId: string;
+            /** Format: uuid */
+            id: string;
+            /** Format: date-time */
+            readyAt: string | null;
+            readyBy: components["schemas"]["ActorSnapshot"] | null;
+            /** Format: uuid */
+            resourceId: string;
+            revision: number;
+            status: components["schemas"]["FieldPreparationStatus"];
+            /** Format: date-time */
+            updatedAt: string;
+            updatedBy: components["schemas"]["ActorSnapshot"];
+        };
+        FieldPreparationDay: {
+            checklist: components["schemas"]["FieldPreparationItem"][];
+            date: string;
+            /** Format: uuid */
+            facilityId: string;
+            items: components["schemas"]["FieldPreparation"][];
+            timezone: string;
+        };
+        /** @enum {string} */
+        FieldPreparationItem: "lines" | "goals_anchored" | "nets" | "corner_flags";
+        /** @enum {string} */
+        FieldPreparationStatus: "in_progress" | "ready";
         FinancialConsequence: {
             amountMinor: number | null;
             currency: string | null;
@@ -64982,6 +66095,19 @@ export type components = {
             responses: components["schemas"]["FixtureResponse"][];
             rosterStatus: components["schemas"]["RosterPlayingStatus"] | null;
             venue: components["schemas"]["FixtureVenue"] | null;
+        };
+        FixtureGameLogs: {
+            /** Format: uuid */
+            fixtureId: string;
+            logs: {
+                awayScore: number;
+                homeScore: number;
+                /** Format: date-time */
+                recordedAt: string;
+                /** Format: uuid */
+                teamEntryId: string;
+                teamName: string;
+            }[];
         };
         FixtureReadiness: {
             checks: components["schemas"]["ReadinessCheckOutcome"][];
@@ -65116,6 +66242,7 @@ export type components = {
             scoreAgainst: number;
             scoreFor: number;
         };
+        Formation: string;
         /** @enum {string} */
         FulfillmentMode: "all_or_nothing" | "partial";
         FutsalRules: {
@@ -65129,6 +66256,44 @@ export type components = {
             /** Format: date-time */
             dueAt: string;
             sequence: number;
+        };
+        GameLog: {
+            awayScore: number;
+            events: components["schemas"]["GameLogEvent"][];
+            homeScore: number;
+            /** Format: uuid */
+            id: string;
+            minutes: components["schemas"]["PlayerMinutes"][];
+            /** Format: date-time */
+            recordedAt: string;
+            revision: number;
+            /** Format: uuid */
+            teamEntryId: string;
+        };
+        GameLogEvent: {
+            /** Format: uuid */
+            assistPersonId: string | null;
+            /** @enum {string} */
+            kind: "goal";
+            minute: number;
+            /** Format: uuid */
+            personId: string | null;
+        } | {
+            /** @enum {string} */
+            kind: "opponent_goal";
+            minute: number;
+        } | {
+            /** @enum {string} */
+            kind: "substitution";
+            minute: number;
+            /** Format: uuid */
+            offPersonId: string;
+            /** Format: uuid */
+            onPersonId: string;
+        } | {
+            /** @enum {string} */
+            kind: "half_time";
+            minute: number;
         };
         GenerateBracketRequest: {
             expectedRevision?: number;
@@ -65451,6 +66616,8 @@ export type components = {
             createdAt: string;
             evidence: components["schemas"]["EvidenceRef"][];
             /** Format: uuid */
+            facilityId: string | null;
+            /** Format: uuid */
             fixtureId: string | null;
             /** Format: uuid */
             id: string;
@@ -65465,6 +66632,8 @@ export type components = {
             revision: number;
             /** Format: uuid */
             seasonId: string | null;
+            /** Format: uuid */
+            sessionId: string | null;
             severity: components["schemas"]["IncidentSeverity"];
             status: components["schemas"]["IncidentStatus"];
             /** Format: uuid */
@@ -65805,6 +66974,23 @@ export type components = {
             eligibilityPolicyVersionId: string | null;
             requiredFormPolicyVersionIds: string[];
         };
+        Lineup: {
+            changedSinceShared: boolean;
+            formation: components["schemas"]["Formation"];
+            /** Format: uuid */
+            id: string;
+            revision: number;
+            /** Format: date-time */
+            sharedAt: string | null;
+            slots: components["schemas"]["LineupSlot"][];
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        LineupSlot: {
+            /** Format: uuid */
+            personId: string;
+            slot: number;
+        };
         LinkCaseActionRequest: {
             actionId: string;
             /** Format: uuid */
@@ -65917,6 +67103,11 @@ export type components = {
             reversesRedemptionId: string | null;
             /** Format: uuid */
             sessionBookingId: string;
+        };
+        MarkFieldReadyRequest: {
+            expectedRevision: number;
+            policyReferences?: string[];
+            reason?: string;
         };
         MarkNotificationReadRequest: {
             expectedRevision?: number;
@@ -66449,7 +67640,7 @@ export type components = {
             recipients: components["schemas"]["NotificationRecipient"][];
         };
         /** @enum {string} */
-        NotificationKind: "registration_outcome" | "team_invitation" | "placement" | "waitlist_offer" | "schedule_published" | "schedule_changed" | "cancellation" | "payment_attention" | "assignment_offer" | "result_published" | "renewal_opportunity" | "youth_feedback" | "staff_broadcast" | "availability_request" | "activity_reminder" | "result_reminder" | "team_place_offer" | "team_waiting_list";
+        NotificationKind: "registration_outcome" | "team_invitation" | "placement" | "waitlist_offer" | "schedule_published" | "schedule_changed" | "cancellation" | "payment_attention" | "assignment_offer" | "result_published" | "renewal_opportunity" | "youth_feedback" | "staff_broadcast" | "availability_request" | "activity_reminder" | "result_reminder" | "team_place_offer" | "team_waiting_list" | "injury_report";
         NotificationPage: {
             items: components["schemas"]["Notification"][];
             nextCursor: string | null;
@@ -67223,6 +68414,20 @@ export type components = {
             enrollment: components["schemas"]["Enrollment"];
             recentSessions: components["schemas"]["RecentSessionAttendance"][];
         };
+        ParticipantCareFlags: {
+            items: {
+                kinds: ("allergy" | "care_instruction")[];
+                /** Format: uuid */
+                personId: string;
+            }[];
+        };
+        ParticipantCareNotes: {
+            notes: components["schemas"]["ScanCareNote"][];
+            /** Format: uuid */
+            personId: string;
+            /** Format: date-time */
+            readAt: string;
+        };
         ParticipationSummary: {
             /** Format: date */
             endsOn: string;
@@ -67630,6 +68835,11 @@ export type components = {
         };
         /** @enum {string} */
         PlacementStatus: "unassigned" | "proposed" | "assigned" | "released";
+        PlayerMinutes: {
+            minutes: number;
+            /** Format: uuid */
+            personId: string;
+        };
         /** @enum {string} */
         PlayerPosition: "goalkeeper" | "defender" | "midfielder" | "forward" | "outfield";
         PlayerProfile: {
@@ -69213,6 +70423,17 @@ export type components = {
         RecordedVisits: {
             visits: components["schemas"]["Visit"][];
         };
+        RecordFieldPreparationRequest: {
+            checkedItems: components["schemas"]["FieldPreparationItem"][];
+            date: string;
+            expectedRevision?: number;
+            /** Format: uuid */
+            facilityId: string;
+            policyReferences?: string[];
+            reason?: string;
+            /** Format: uuid */
+            resourceId: string;
+        };
         RecordFixtureAttendanceRequest: {
             expectedRevision?: number;
             /** Format: uuid */
@@ -69220,6 +70441,17 @@ export type components = {
             policyReferences?: string[];
             reason?: string;
             state: components["schemas"]["AttendanceMarkState"];
+            /** Format: uuid */
+            teamEntryId: string;
+        };
+        RecordGameLogRequest: {
+            awayScore: number;
+            events: components["schemas"]["GameLogEvent"][];
+            expectedRevision?: number;
+            homeScore: number;
+            minutes: components["schemas"]["PlayerMinutes"][];
+            policyReferences?: string[];
+            reason?: string;
             /** Format: uuid */
             teamEntryId: string;
         };
@@ -70453,6 +71685,15 @@ export type components = {
             } | null;
             tiebreakers: ("points" | "head_to_head" | "goal_difference" | "goals_for" | "goals_against" | "wins" | "fair_play" | "draw_of_lots" | "play_off")[];
         };
+        SaveLineupRequest: {
+            expectedRevision?: number;
+            formation: components["schemas"]["Formation"];
+            policyReferences?: string[];
+            reason?: string;
+            slots: components["schemas"]["LineupSlot"][];
+            /** Format: uuid */
+            teamEntryId: string;
+        };
         ScanActivity: {
             activity: components["schemas"]["ActivityDetail"];
             basis: {
@@ -70469,6 +71710,7 @@ export type components = {
                 /** @enum {string} */
                 status: "held" | "admitted";
             } | null;
+            issues: components["schemas"]["ArrivalIssue"][];
             /** Format: date-time */
             scheduledEnd: string;
             /** Format: date-time */
@@ -70918,6 +72160,13 @@ export type components = {
             outcome: components["schemas"]["ApplySettlementOutcome"];
             policyReferences?: string[];
             reason: string;
+        };
+        ShareLineupRequest: {
+            expectedRevision: number;
+            policyReferences?: string[];
+            reason?: string;
+            /** Format: uuid */
+            teamEntryId: string;
         };
         ShareRecommendationRequest: {
             expectedRevision: number;
@@ -71570,6 +72819,42 @@ export type components = {
             role: components["schemas"]["TeamRole"];
             /** Format: uuid */
             teamEntryId: string;
+        };
+        TeamSheet: {
+            availableActions: ("save_lineup" | "share_lineup" | "record_game_log")[];
+            /** Format: uuid */
+            fixtureId: string;
+            fixtureStatus: components["schemas"]["FixtureStatus"];
+            gameLog: components["schemas"]["GameLog"] | null;
+            lineup: components["schemas"]["Lineup"] | null;
+            officialResult: {
+                awayScore: number | null;
+                homeScore: number | null;
+                matchesGameLog: boolean | null;
+            } | null;
+            opponentName: string | null;
+            players: components["schemas"]["TeamSheetPlayer"][];
+            /** Format: date-time */
+            scheduledEnd: string | null;
+            /** Format: date-time */
+            scheduledStart: string | null;
+            /** @enum {string} */
+            side: "home" | "away";
+            teamAverageMinutes: number;
+            /** Format: uuid */
+            teamEntryId: string;
+            teamName: string;
+            timezone: string | null;
+            venueName: string | null;
+        };
+        TeamSheetPlayer: {
+            availability: components["schemas"]["AvailabilityState"];
+            displayName: string;
+            gamesThisSeason: number;
+            jerseyNumber: number | null;
+            minutesThisSeason: number;
+            /** Format: uuid */
+            personId: string;
         };
         /** @enum {string} */
         TeamStatus: "active" | "inactive" | "archived";

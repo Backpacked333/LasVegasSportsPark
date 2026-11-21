@@ -1,2 +1,2 @@
-// Route file only: SCR-C-34, src/screens/payments/PaymentsScreen.tsx.
-export { PaymentsRoute as default } from '../../src/screens/payments/PaymentsScreen';
+// Route file only: handoff M 4a Payments & receipts, src/screens/payments/PaymentsHomeScreen.tsx.
+export { PaymentsHomeScreen as default } from '../../src/screens/payments/PaymentsHomeScreen';

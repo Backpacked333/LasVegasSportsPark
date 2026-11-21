@@ -137,8 +137,9 @@ names (`src/ui/theme.ts`):
 
 - **Classic**: a calm warm white (`#F5F5F2`), white cards, pitch green `#0A7040` as the accent,
   night pitch `#0C2219` and floodlight `#C6F36B` for the hero surfaces.
-- **Legends mode**: neutral black (page `#0A0A0B`, cards `#131314`) with one gold accent
-  (`#E8B84A`, labels on gold `#17120A`); the same palette as the staff dashboard's Legends mode.
+- **Legends mode** (handoff M 5d): night green surfaces (page `#0C2219`, cards `#122C21`, lines
+  `#24473A`/`#2F5444`) with floodlight accents (`#C6F36B`, labels on it `#0C2219`). It follows the
+  phone's dark mode until the switch in You is used.
 
 Both keep tinted status pills with glyph and text, the bundled fonts loaded by `app/_layout.tsx`
 (Archivo at one width, in sentence case: titles are the bold face, nothing is set in capitals;
@@ -315,9 +316,10 @@ choices). What a screen builder can rely on, and what each part promises:
   corners, the Android ripple, the platform switch's own colours, and the stored choice across a
   reinstall or a restore from backup. Contrast was checked by calculation, not measured on a
   device.
-- The design's scannable pass symbol (**Pending decision** DEC-023), choosing whose pass to show
-  and "Add to Wallet" are not built; "Maybe" RSVP stays **Pending decision** DEC-064, and arrival
-  notes and directions on the next-up card **Pending decision** POL-046.
+- The design's scannable pass symbol and "Add to Wallet" are not built (**Pending decision**
+  DEC-023); choosing whose pass to show, "Maybe" (offered as **Proposed**, DEC-064) and Directions
+  are part of the redesign (section "Parent-app redesign" below); arrival notes stay **Pending
+  decision** POL-046.
 
 ### Park UI wiring of the new API reads (verified in jest)
 
@@ -437,6 +439,182 @@ stage-3 operations; what the screens use now, and the API issues still open, are
 
 Discover, registration and checkout (SCR-C-07 to SCR-C-16) are described, with their status and
 pending decisions, in [`src/screens/registration/README.md`](src/screens/registration/README.md).
+
+## Parent-app redesign: Phase 0 primitives and Phase 1 core loop (handoff M 1b and friends)
+
+Status legend as above (§6.7). Everything here is ADR-008 visual system v2, **Proposed**; nothing
+has been seen on a device (§6.2). **Verified** = asserted by the named jest tests.
+
+Primitives for the screens that follow (Calendar, Explore and You reuse them):
+
+| Primitive                                                                                                                                                                                                                                                               | Where                                                      | Tests                                                           |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- | --------------------------------------------------------------- |
+| Person colours: the account holder's own, then pink, blue, orange, teal, purple per child in creation order, in both themes (`theme.personColors`, `selfPersonColor`)                                                                                                   | `src/ui/person-colors.ts`                                  | `src/ui/__tests__/household-primitives.test.tsx` (**Verified**) |
+| Avatar: photo (`photoUri`) → initials on the person colour (`personColor`), optional `ring`                                                                                                                                                                             | `src/ui/Avatar.tsx`                                        | same                                                            |
+| Household "who" filter: `PersonFilterProvider` (in `AppProviders`, remembered on the device through `services.personFilterStore`), `usePersonFilter(people)`, `PersonChipRow` (Everyone + each person, selected night-filled, hidden with one person, scrolls sideways) | `src/ui/PersonFilter.tsx`, `src/ui/person-filter-store.ts` | same                                                            |
+| Toast with an action: 2.4 s plain, 5 s with Undo / Try again, one at a time, `danger` tone                                                                                                                                                                              | `src/ui/Toast.tsx`                                         | same, `Toast.test.tsx`                                          |
+| Optimistic write: show at once, Undo for 5 s (sends the inverse write), revert + "didn't save" with Try again                                                                                                                                                           | `src/ui/optimistic.ts`                                     | same                                                            |
+| Sheet: `locked` (no grabber, ✕ disabled, scrim/drag/back/escape ignored), `eyebrow`, `headerContent`                                                                                                                                                                    | `src/ui/Sheet.tsx`                                         | same, `Sheet.test.tsx`                                          |
+| SegmentedControl `variant="filled"` (answer control: primary fill + check glyph), `disabled`, `value: null`                                                                                                                                                             | `src/ui/SegmentedControl.tsx`                              | same                                                            |
+
+The dev gallery shows each one in every state (`src/dev-gallery/specimens-household.tsx`).
+
+Screens (Phase 1):
+
+- **M 1b Home "Today first"** (`src/screens/home/HomeScreen.tsx`, `TodayHero.tsx`, `TodoList.tsx`,
+  `WeekStrip.tsx`; models in `src/features/home/`): greeting with the pass and the inbox beside it,
+  the who chips filtering the whole page, the hero with the live countdown, kickoff and place,
+  the answer control, Directions (maps at the facility address) and Show pass; To do acting in place
+  (Pay sheet, Sign sheet, Join sheet) with "3 left · about 2 min" and "✓ Paid" for 3 s (M 3a); This
+  week (day strip with person dots, rows, Calendar); "Picked for Maya"; skeleton, nothing today
+  ("Next up"), no activities (Explore prompt), offline (M 3f) and a cancelled game (M 3g).
+  **Verified**: `src/screens/home/__tests__/HomeSurfaces.test.tsx`, `HomeScreen.test.tsx`,
+  `src/features/home/__tests__/home-model.test.ts`.
+- **M 2b / 3b Pay sheet** (`src/features/money/PaySheet.tsx`): `POST /v1/obligations/{id}/payments`,
+  never optimistic (spinner, locked sheet, Idempotency-Key); declined keeps the sheet open, "You
+  weren't charged.", the next method picked and named on the button; unknown outcomes never read as
+  success or failure (SPK-PAY-007). **Verified** in `HomeSurfaces.test.tsx`.
+- **M 2c Sign sheet** (`src/features/waivers/SignSheet.tsx`): summary first (the version's
+  `summary`), the full text of the version recorded, typed name prefilled and kept until the app
+  closes, "Also sign for Maya" for a sibling's same waiver that is missing or ends within 30 days,
+  one acceptance per person, partial success named. **Verified** in `HomeSurfaces.test.tsx`.
+- **M 3c Join sheet** (`src/features/teams/JoinTeamSheet.tsx`): accepts from the recipient's own
+  invitation list (`POST /v1/team-invitations/{id}/accept` without the link token, an API change
+  of this work); "Not now" hides it for 7 days (kept in memory until the app closes: **Proposed**
+  follow-up, a device store). **Verified** in `HomeSurfaces.test.tsx`.
+- **M 1j Pass** (`src/screens/pass/PassPeople.tsx` on `PassScreen`): a switch between the household
+  members and "All", each with today's activity and "✓ Cleared to play" / "▲ Waiver needed first"
+  from their waivers ("as of" offline); `?person=` preselects. The code stays the holder's own
+  opaque reference (SPK-ENTRY-002).
+- **M 1i Game day** (`src/screens/activity/GameDay.tsx` at the top of `/fixtures/{id}`): scoreboard
+  band with the countdown, field card with Map, who's playing (bar and words) with the household
+  child's answer (shared with Home), "Check in with Maya's pass", form and mini standings with the
+  playoff line.
+- **Shell**: the Home tab's badge is the To do count (hidden at 0, "9+"); pull to refresh says
+  "Updated just now" for 2 s.
+
+Not built here, and why: per-tab stacks (every detail route is on the root stack today, a
+navigation change of its own); "Arrive by" (arrival guidance, **Pending decision** POL-046);
+"✓ Checked in" on the countdown pill (no customer read of a desk check-in); screen brightness on the
+pass (no brightness module is installed); gate pins (the API has no gates: the facility address is
+used); a coach's name in "The coach can see it" (not in the reads Home makes). The full-screen night
+pass is built in Phase 2 (below).
+
+Proposed behaviour and pending decisions (one switch each in `src/features/home/proposed.ts`):
+
+- "Maybe" (`tentative`) is offered as drawn: **Proposed**, **Pending decision** DEC-064 (handoff
+  DEC-021). A parent answering for a child: **Proposed**, **Pending decision** DEC-090 (the API's
+  `register` mapping).
+- Instalments ("3 × $40"): hidden, **Pending decision** (no price rule offers them to customers).
+- Paying in the app: the methods are the fake provider's scenarios in development builds only;
+  release builds say "Pay at the front desk for now", **Pending decision** DEC-019.
+- Wallet and a scannable code on the pass: hidden, **Pending decision** DEC-023.
+- "Enough to play" (players needed per game): hidden, **Pending decision**. "Team chat": shown
+  disabled with "Proposed", **Pending decision** (messaging API).
+
+## Parent-app redesign: Phase 3 (calendar, game day, inbox, You, money, settings, first run)
+
+Status legend as above (§6.7). ADR-008 visual system v2, **Proposed**; nothing has been seen on a
+device (§6.2). **Verified** = asserted by the named jest tests; looked at in the browser preview
+against the handoff renders (not native acceptance).
+
+| Screen                          | Route / file                                                                                     | What it does                                                                                                                                                                                                                                                                                                          | Tests (**Verified**)                                                           |
+| ------------------------------- | ------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| M 1h Calendar                   | `/schedule`, `src/screens/schedule/ScheduleScreen.tsx`, `calendar-day.ts`                        | Household who chips, week card strip with one dot per person (read with names), "Today" hidden while today is selected, days under "Today · Saturday 21", empty runs in one line, back to back (under 45 min, different spaces) ▲ and clashes ✕ in one sentence, rows with the person's stripe, avatar and status.    | `schedule/__tests__/ScheduleScreen.test.tsx`, `calendar-day.test.ts`           |
+| M 1i Game day                   | `/fixtures/[id]`, `src/screens/activity/GameDay.tsx`                                             | Band with back, "season · division · Week N", Share, records from the table, countdown or score, field card; who's playing with "Maya is going · Change"; check in; team chat proposed; Message the coach; standings card with form, own row, dashed playoff cut, opening the full table.                             | `activity/__tests__/GameDay.test.tsx`, `FixtureDetailScreen.test.tsx`          |
+| M 2d Inbox                      | `/inbox`, `src/screens/inbox/InboxScreen.tsx`                                                    | All / To do (count) / Changes / Results; Today / This week / Earlier cards; a change in one line with the old value struck through; swipe "Mark read" (`ui/SwipeAction`), accessibility action, "Mark all read" (one read request per notice: the API has no read-all).                                               | `inbox/__tests__/InboxLayout.test.tsx`, `InboxScreen.test.tsx`                 |
+| M 4d Message the coach          | `/messages/coach?fixtureId=`, `src/screens/messages/MessageCoachScreen.tsx`                      | **Pending decision** (messaging API, open decision 8): the thread starts with the game's card; quick replies and the field are disabled with "Proposed"; "Write to the desk" meanwhile. Reached from Game day and Home's cancelled card.                                                                              | `messages/__tests__/MessageCoachScreen.test.tsx`                               |
+| M 2f You                        | `/account`, `src/screens/account/YouHub.tsx`                                                     | Family card with flags, Due now / Credits tiles, one grouped list, Legends mode, Help & contact the desk (configured contact; DEC-015 otherwise); the older rows stay under it.                                                                                                                                       | `people/__tests__/people.test.tsx`, `account/__tests__/AccountScreen.test.tsx` |
+| M 3e Child profile              | `/people/[id]`, `src/screens/people/ChildProfileScreen.tsx`                                      | Ring in the child's colour, age, colour in words, Edit (PATCH with revision), activities and waitlist, form to renew (Sign sheet), care notes summary, who can pick up (`collect` holders). Photo: **Proposed**.                                                                                                      | `people.test.tsx`                                                              |
+| M 5c Care notes                 | `/people/[id]/care-notes`, `src/screens/people/CareNotesEditorScreen.tsx`, `care-notes-model.ts` | Allergy chips with severity, "If it happens", other notes, who sees them, "Save changes?" on close; saving retires changed notes and records new text. The check-in flag choice: **Proposed**.                                                                                                                        | `people.test.tsx`                                                              |
+| M 3h Add a child                | `/people/new`, `src/screens/people/AddChildScreen.tsx`                                           | Button grey until first name and birth date, "Add Sofia"; creates the child and adds them to the household; the who chips gain them. Choosing a colour and a photo: **Proposed**.                                                                                                                                     | `people.test.tsx`                                                              |
+| M 4a Payments & receipts        | `/payments`, `src/screens/payments/PaymentsHomeScreen.tsx`                                       | Next fee with Pay now (Pay sheet); Manage plan **Pending decision** (instalments); Credits and Paid this year; Tax summary **Proposed**; history with avatars, refunds green with "+"; Filter opens `/payments/all` (the older money views).                                                                          | `payments/__tests__/PaymentsHome.test.tsx`                                     |
+| M 4b Receipt                    | `/payments/receipt/[paymentId]`, `src/screens/payments/ReceiptScreen.tsx`                        | Itemised lines, discount, reference, refunds; refund rule from the cancellation preview; "Cancel a week" sends a payment support request naming the place and the payment (what staff S 4b approves). Download PDF **Proposed**.                                                                                      | `PaymentsHome.test.tsx`                                                        |
+| M 4c Notification settings      | `/notifications`, `src/screens/preferences/NotificationSettingsScreen.tsx`                       | Changes locked on; "New programs" = promotional category, saves at once with Undo. Reminders, coach requests, results, per-child mute, quiet hours: **Proposed** (no API).                                                                                                                                            | `preferences/__tests__/NotificationSettingsScreen.test.tsx`                    |
+| M 5a / 5b Welcome, code, family | `/sign-in` (demo builds), `src/screens/sign-in/WelcomeFlow.tsx`, `features/sign-in`              | Phone or email, code boxes checked on the 6th digit, wrong code shakes and clears, resend countdown, "We found your family", new family to Add a child. Through `CodeSignInPort`: a demo stand-in only (src/demo); release builds keep "not available yet" (**Pending decision** DEC-018). Apple/Google **Proposed**. | `sign-in/__tests__/WelcomeFlow.test.tsx`, `demo/__tests__/demo.test.tsx`       |
+| M 5d Legends mode               | `src/ui/theme.ts`, `src/ui/ThemeProvider.tsx`                                                    | Night green surfaces with floodlight accents; follows the phone's dark mode until the You switch is used.                                                                                                                                                                                                             | `ui/__tests__/theme.test.tsx`, `theme-follows-device.test.tsx`                 |
+
+API change of this work (enrollment module): `FamilyCalendarItem.place` (the session's own place
+label, else the offering's), so the Calendar can name spaces. Demo data:
+`apps/api/src/dev/demo/parent-account.ts` (two more U9 teams and four played rounds with official
+results, next week's game moved from Field 3 to Field 2, Maya's care instruction).
+
+Not built, and why: walk times between spaces (no data: the back-to-back sentence names the
+places only); "Arrive by" and gate on Game day (POL-046); "Enough to play" (players needed per
+game, pending); per-tab stacks; the Calendar's share button and month in the large title (the
+shared tab header draws the title; the month is on the week strip).
+
+## Parent-app redesign: Phase 2, discover and register (handoff M 1d, 3d, 1e, 2a, 1f, 4e, 1g, 2e)
+
+Status legend as above (§6.7). **Verified** = asserted by the named jest tests (test renders, no
+device, §6.2). Demo data: `apps/api/src/dev/demo/parent-register.ts` (Winter Break Camp weeks, Spring
+Rec League · U9 with the `FRIENDS12` code, a uniform and a photo consent form, Futsal Skills Clinic,
+Junior Hoops at the time of Maya's game, a waitlist place offered to Maya for Goalkeeper Basics).
+
+- **M 1d Explore** (`src/screens/discover/DiscoverScreen.tsx`, `ExploreCards.tsx`; models in
+  `src/features/register/fit.ts`, `looking-for.ts`, `explore-facts.ts`, `family-busy.ts`): search sent
+  as `q` after 250 ms; "Looking for" chips with each child's age (date of birth from
+  `GET /v1/people/{id}`, on the facility day) on the shared who-filter, narrowing the list to the
+  published age band; one fit answer per card (✓ fits the child's week, ▲ clashes with a session,
+  booking or team game in the next 8 weeks, ✕ full · waitlist, ✓ already in); "3 left" at five or fewer
+  (`GET /v1/offering-availability`, hidden when the read fails); the promotion as a floodlight tag on
+  "Picked for Maya" tiles; camp weeks of one program as one card; no results with sport chips; when
+  and format behind the tune button. **Verified**: `src/screens/discover/__tests__/DiscoverExtras.test.tsx`,
+  `src/features/register/__tests__/register-model.test.ts`.
+- **M 3d Activity detail** (`OfferingDetailScreen.tsx`): picture with back and Share (an app link,
+  `sportspark://link?to=activity&id=`), fit and places answers, the facts card (when, where, ages with
+  "Maya qualifies · Leo is too young" from the API's eligibility), the earlier folds below, and the
+  bar "$95 · for 8 weeks · ~$12 a session" with "Register Maya" (Who with Maya ticked). **Verified**:
+  `OfferingDetailScreen.test.tsx`.
+- **M 1e / 2a / 1f / 4e Register** (`RegisterFlowScreen.tsx`, `register/*`, `ReviewScreen.tsx`; models
+  `basket-plan.ts`, `useRegisterBasket.ts`, `useRegistrationPayment.ts`, `last-place.ts`, `draft.ts`):
+  Who as a sheet over the activity; Options for camp weeks (live places, a full week joins the
+  waitlist, a week not open yet disabled with its date), extras from the activity's add-ons, a tier
+  with `PurchaseChoices`, and the night price bar (`POST /v1/discounts/evaluate` plus the extras,
+  "estimate"); Review & pay builds the flow's own cart, holds it first ("Maya's place is held for
+  14:52"), prices it, applies or refuses a code inline, takes forms in a sheet, and pays like the Pay
+  sheet (never optimistic, Idempotency-Key, unknown outcome "Do not pay again", a payment already
+  started is never repeated). A place lost while holding or paying opens 4e ("You weren't charged.",
+  re-priced choices, the best pre-selected, a dropped discount named, one-tap waitlist with what the
+  line chose). Back goes one step with the choices kept; leaving from a later step asks "Leave
+  registration? Your choices are kept for 30 min." The old start, forms, price and checkout links open
+  this flow or its Review. **Verified**: `RegisterFlowScreen.test.tsx`, `PurchaseChoices.test.tsx`,
+  `BasketScreen.test.tsx`, `registration-routes.test.tsx`.
+- **M 1g Done** (`register/DoneView.tsx` on the outcome route once the checkout is completed): who is
+  in, the sessions added to Calendar with the first one, team placement (◷ while the API's placement
+  is open, never a date of our own), the uniform to pick up, "Sign forms now" when a form is left, one
+  sibling suggestion (same day first), "Add to phone" (a calendar file) and Done. **Verified**:
+  `CheckoutOutcomeScreen.test.tsx`, `PurchaseReceipt.test.tsx`.
+- **M 2e Waitlist offer** (`register/WaitlistOffer.tsx` in `WaitlistScreen.tsx`): the countdown in
+  hours and minutes (seconds under an hour) with the deadline on the facility clock, "Take the place ·
+  $60" → Review & pay held until the offer ends, "Pass to the next family" with its confirm, the ended
+  state with "Stay on the waitlist", "This offer ended before payment" when the hold lapses while
+  paying. **Verified**: `WaitlistScreen.test.tsx`.
+- **M 1j Pass** (`PassScreen.tsx`, `PassCard.tsx`, `PassPeople.tsx`): the full-screen night view with
+  "Facility pass" and ✕, the person switch, the card with the person, today's activity and status, the
+  code area and the reference (groups of four, monospace, digits in floodlight), "Works offline · show
+  at the front desk". **Verified**: `PassScreen.test.tsx`.
+- **Offline banner** (`ConnectivityBanner.tsx`): "▲ Offline. Showing what was saved at 8:41." with the
+  time of the oldest data shown, on the facility clock. **Verified**: `ConnectivityBanner.test.tsx`.
+
+**Proposed** (not decided): the extras note when an activity sells no add-ons ("Extras proposed");
+"Add to phone" opens a calendar file on the web and shares it on a phone (no calendar module is
+installed; adding straight to the device calendar needs a dependency decision); the 30-minute draft is
+kept in memory only; the "Looking for" age narrowing uses the published age band (the API's
+eligibility still decides on Who).
+
+**Pending decision**: paying in the app (DEC-019: release builds show "Pay at the front desk for
+now", the "In-app payment proposed" tag); the scannable code and Wallet on the pass (DEC-023: the code
+area says "Scannable code proposed", no pattern is drawn, Wallet is hidden).
+
+Not built, and why: the coach row on the activity page (no customer read names a session's coach);
+searching by coach (the catalog search does not index coaches); "Receipt sent to dana@…" on Done (no
+read says a receipt e-mail was sent; Done points to You › Payments); screen brightness on the pass (no
+brightness module is installed); "Gate B" (the API has no gates); per-tab stacks: every detail route is
+on the root stack (`RootNavigator`), and giving each tab its own stack means moving every route under
+`app/(tabs)/<tab>/` with its own `_layout`, which changes every deep link, the link landing and the
+navigation tests; re-tap to pop and scroll is part of that change. It is left for a navigation change
+of its own.
 
 ## Conventions for screen builders
 

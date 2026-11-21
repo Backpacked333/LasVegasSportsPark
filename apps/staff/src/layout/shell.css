@@ -4,8 +4,10 @@
  * content that scrolls beneath them. Everything inside a glass body is flat (labels, rows, the
  * facility select, the switch): no glass inside glass.
  *
- * Below 900 px the sidebar becomes a drawer over a scrim (SPK-UX-007: the workspace on a phone
- * beside a field). On wide screens it can collapse to an icon rail; the links keep their names.
+ * Redesign handoff: the expanded sidebar on desktops, the 84 px icon rail on desk tablets
+ * (601-1279 px, set by the shell as `data-rail`), and under 600 px a drawer over a scrim behind
+ * the Menu button, with the floating glass tab bar at the bottom (SPK-UX-007: on a phone beside a
+ * field). The links keep their names in the rail (tooltips and the accessibility tree).
  */
 .shell {
   --side-gap: 10px;
@@ -273,7 +275,7 @@
 }
 
 /* Icon rail (wide screens only): names stay in the accessibility tree and show as tooltips. */
-@media (min-width: 901px) {
+@media (min-width: 601px) {
   .shell[data-rail='true'] .brand-text,
   .shell[data-rail='true'] .shell-nav a > span,
   .shell[data-rail='true'] .side-link > span,
@@ -323,6 +325,21 @@
     width: 34px;
     padding: 0;
     justify-content: center;
+  }
+  .shell[data-rail='true'] .side-user-button {
+    justify-content: center;
+    padding: 4px 0;
+  }
+  .shell[data-rail='true'] .side-user > .side-icon-button {
+    display: none;
+  }
+  .shell[data-rail='true'] .user-menu {
+    left: 6px;
+    width: 240px;
+  }
+  /* A single facility needs no switcher: the group holds only the phone's Menu button. */
+  .header-group-bare {
+    display: none;
   }
 }
 
@@ -532,8 +549,8 @@ p.facility-switcher {
   display: none;
 }
 
-/* ---------- Phones and narrow tablets: the sidebar is a drawer ---------- */
-@media (max-width: 900px) {
+/* ---------- Phones: the sidebar is a drawer ---------- */
+@media (max-width: 600px) {
   .shell {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -643,5 +660,209 @@ p.facility-switcher {
   }
   .live-pill {
     padding: 0 8px;
+  }
+}
+
+/* ---------- Account menu (rail foot) ---------- */
+.side-user {
+  position: relative;
+}
+.side-user-button {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 14px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.side-user-button:hover,
+.side-user-button[aria-expanded='true'] {
+  background: var(--glass-child);
+}
+.user-menu {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  bottom: calc(100% + 6px);
+  z-index: 40;
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  border-radius: 16px;
+  background: var(--card);
+  color: var(--ink);
+  box-shadow: var(--shadow-pop);
+  border: 1px solid var(--line);
+}
+.user-menu button {
+  width: 100%;
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+.user-menu button .icon {
+  color: var(--pitch);
+}
+.user-menu button:hover,
+.user-menu button:focus-visible {
+  background: var(--track);
+}
+.user-menu-state {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+/* ---------- Centered dialog (PIN set-up) ---------- */
+.ui-overlay-center {
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+.ui-dialog {
+  position: relative;
+  width: min(420px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 22px;
+  border-radius: 24px;
+  background: var(--card);
+  color: var(--ink);
+  box-shadow: var(--shadow-pop);
+  outline: none;
+}
+.ui-dialog h3 {
+  margin: 0;
+  font-size: 19px;
+  font-weight: 650;
+}
+.ui-dialog .caption {
+  margin: 0;
+}
+.ui-dialog .field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.ui-dialog .field input {
+  min-height: 44px;
+  border-radius: 12px;
+  border: 1px solid var(--line-strong);
+  background: var(--field);
+  color: var(--ink);
+  padding: 0 12px;
+  font: inherit;
+  font-size: 15px;
+}
+.ui-dialog .actions-row {
+  justify-content: flex-end;
+}
+
+/* ---------- Phone tab bar (S 1d; under 600 px) ---------- */
+.staff-tabbar {
+  display: none;
+}
+@media (max-width: 600px) {
+  .staff-tabbar {
+    display: block;
+    position: sticky;
+    bottom: 0;
+    z-index: 20;
+    padding: 0 12px calc(12px + env(safe-area-inset-bottom));
+    pointer-events: none;
+  }
+  .staff-tabbar::before {
+    content: '';
+    position: absolute;
+    inset: -22px 0 0 0;
+    background: linear-gradient(transparent, var(--scroll-edge) 70%);
+    pointer-events: none;
+  }
+  .staff-tabbar .glass {
+    pointer-events: auto;
+    max-width: 520px;
+    margin: 0 auto;
+  }
+  .staff-tabbar ul {
+    list-style: none;
+    margin: 0;
+    padding: 5px;
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
+  .staff-tab {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    min-height: 56px;
+    border-radius: 28px;
+    color: var(--glass-ink);
+    text-decoration: none;
+    font-size: 11.5px;
+    font-weight: 700;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .staff-tab:hover {
+    text-decoration: none;
+  }
+  .staff-tab[aria-current='page'] {
+    background: color-mix(in srgb, var(--pitch) 16%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pitch) 26%, transparent);
+    color: var(--accent-ink);
+  }
+  .staff-tab .icon {
+    color: var(--ink);
+  }
+  .staff-tab[aria-current='page'] .icon {
+    color: var(--pitch);
+  }
+  .staff-tab-count {
+    position: absolute;
+    top: 4px;
+    right: calc(50% - 26px);
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 999px;
+    font-size: 10.5px;
+    line-height: 18px;
+    text-align: center;
+    background: var(--tone-warning-bg);
+    color: var(--tone-warning);
+  }
+  .staff-tab-count[data-tone='danger'] {
+    background: var(--tone-danger-bg);
+    color: var(--tone-danger);
+  }
+  /* The menu's group holds Menu and the facility; Live shortens to its glyph. */
+  .header-group-bare .glass__content {
+    padding-right: 6px;
   }
 }

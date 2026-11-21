@@ -38,6 +38,8 @@ export const NotificationKindSchema = z
     // SPK-COMP-006: a place offered to a waiting team, and the team's waiting state (migration 1014)
     'team_place_offer',
     'team_waiting_list',
+    // S 4d (SPK-DISC-001, SPK-COMMS-002): a child's guardians hear about an injury report (migration 1072)
+    'injury_report',
   ])
   .openapi('NotificationKind');
 export type NotificationKindValue = z.infer<typeof NotificationKindSchema>;

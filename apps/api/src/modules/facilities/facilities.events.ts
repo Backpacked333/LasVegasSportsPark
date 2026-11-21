@@ -144,3 +144,17 @@ export const FacilitiesEvents = {
   MaintenanceTaskDueReached,
   PreventiveOccurrencesGenerated,
 };
+
+/**
+ * A pitch was marked ready for the day (migration 0975, SPK-READY-001): Today's field check
+ * reads the record; no handler yet. Identifiers only.
+ */
+export const FieldMarkedReady = defineEvent(
+  'facilities.field_marked_ready',
+  z.object({
+    preparationId: z.uuid(),
+    facilityId: z.uuid(),
+    resourceId: z.uuid(),
+    date: z.string(),
+  }),
+);

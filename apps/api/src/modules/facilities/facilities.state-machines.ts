@@ -1,6 +1,7 @@
 import { defineStateMachine } from '@sportspark/contracts';
 import type {
   AssetStatus,
+  FieldPreparationStatus,
   MaintenanceTaskStatus,
   PreventiveScheduleStatus,
   RestrictionStatus,
@@ -109,6 +110,27 @@ export const PreventiveScheduleMachine = defineStateMachine<
     active: { pause: 'paused', end: 'ended' },
     paused: { resume: 'active', end: 'ended' },
     ended: {},
+  },
+});
+
+export type FieldPreparationEvent = 'mark_ready' | 'reopen';
+/**
+ * A pitch's daily preparation (migration 0975): in progress while the crew ticks the checklist,
+ * ready once every item is ticked and someone marks it ready; unticking an item of a ready pitch
+ * reopens it. The checks `field_preparations_ready_facts` and `field_preparations_ready_complete`
+ * are the guarantee.
+ */
+export const FieldPreparationMachine = defineStateMachine<
+  FieldPreparationStatus,
+  FieldPreparationEvent
+>({
+  name: 'FieldPreparation',
+  initial: 'in_progress',
+  states: ['in_progress', 'ready'],
+  terminal: [],
+  transitions: {
+    in_progress: { mark_ready: 'ready' },
+    ready: { reopen: 'in_progress' },
   },
 });
 

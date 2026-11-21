@@ -1,6 +1,6 @@
 /**
- * SCR-C-20 fixture detail, the game page, with its hero artwork, key facts as tags and the
- * SCR-C-04 RSVP (SPK-UX-004, SPK-CAP-002, SPK-CAP-003, SPK-READY-002, SPK-RESULT-001,
+ * SCR-C-20 fixture detail, the game page: Game day on top (handoff M 1i, see GameDay.test.tsx),
+ * then the details with key facts as tags and the SCR-C-04 RSVP (SPK-UX-004, SPK-CAP-002, SPK-CAP-003, SPK-READY-002, SPK-RESULT-001,
  * SPK-COMMS-005, SPK-SCHED-008, SPK-UX-008, SPK-UX-009, §4.9, §4.10, §4.15; PA-11, ADR-008).
  */
 import { apiErrorBody, fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
@@ -113,12 +113,14 @@ describe('SCR-C-20 FixtureDetailScreen', () => {
     expect(screen.getByText('Decision: POL-046')).toBeOnTheScreen();
   });
 
-  it('ADR-008: the game page opens with its artwork, the key facts as tags and the status', async () => {
+  it('handoff M 1i: the game page opens with Game day; the details below keep the key facts as tags and the status', async () => {
     renderFixture();
+    // Game day's band is the page's picture: the details card draws none of its own.
+    expect(await screen.findByTestId('game-day')).toBeOnTheScreen();
     const card = await screen.findByTestId('fixture-card');
-    // The picture is decorative: hidden from screen readers.
-    const art = within(card).getByTestId('fixture-card-art', { includeHiddenElements: true });
-    expect(art).toHaveProp('importantForAccessibility', 'no-hide-descendants');
+    expect(
+      within(card).queryByTestId('fixture-card-art', { includeHiddenElements: true }),
+    ).toBeNull();
     // The facts are drawn as tags and read once, as one element.
     const facts = await within(card).findByLabelText(
       'For: Lions. Against: Tigers. When: Sun, Oct 25, 10:00 AM to 11:30 AM PDT. Where: Main Park, Pitch 2',

@@ -8,7 +8,12 @@ import { fakeResponse } from '@sportspark/api-client/testing';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
 import { Image } from 'expo-image';
 import { illustrations } from '../../../artwork/manifest';
-import { FIXTURE, notice, scheduleChange } from '../../../features/today/__tests__/fixtures';
+import {
+  eventDetails,
+  FIXTURE,
+  notice,
+  scheduleChange,
+} from '../../../features/today/__tests__/fixtures';
 import { createTestApp, TEST_NOW } from '../../../testing/test-app';
 import { openSheet } from '../../../testing/ui';
 import { pullToRefresh } from '../../../testing/ui-surfaces';
@@ -30,8 +35,8 @@ beforeEach(() => mockPush.mockClear());
 const ZONE = 'America/Los_Angeles';
 const page = (items: unknown[]) => ({ status: 200, body: { items, nextCursor: null } });
 
-describe('SCR-C-06 inbox tabs and day sections (ADR-008)', () => {
-  it('SPK-UX-003: "Needs action" keeps only the notices that ask for something; "All" lists every notice', async () => {
+describe('handoff M 2d inbox segments and sections (ADR-008)', () => {
+  it('SPK-UX-003: "To do" keeps only the notices that ask for something, with its count; "All" lists every notice', async () => {
     const change = scheduleChange({ title: 'Kickoff moved' });
     const broadcast = notice({ title: 'Car park closed', readAt: '2026-10-24T11:30:00.000Z' });
     const promo = notice({ title: 'Spring leagues', category: 'promotional' });
@@ -44,8 +49,9 @@ describe('SCR-C-06 inbox tabs and day sections (ADR-008)', () => {
     expect(screen.getByText('Car park closed')).toBeOnTheScreen();
     expect(screen.getByText('Spring leagues')).toBeOnTheScreen();
 
-    fireEvent.press(within(tabs).getByRole('tab', { name: 'Needs action' }));
-    expect(within(tabs).getByRole('tab', { name: 'Needs action' })).toHaveProp(
+    // The count is part of the segment's name, never only a red number.
+    fireEvent.press(within(tabs).getByRole('tab', { name: 'To do, 1' }));
+    expect(within(tabs).getByRole('tab', { name: 'To do, 1' })).toHaveProp(
       'accessibilityState',
       expect.objectContaining({ selected: true }),
     );
@@ -59,33 +65,47 @@ describe('SCR-C-06 inbox tabs and day sections (ADR-008)', () => {
     expect(screen.getByText('Car park closed')).toBeOnTheScreen();
   });
 
-  it('SPK-UX-003: with nothing to act on, "Needs action" says "You\'re all caught up"', async () => {
+  it('Changes and Results keep their own kinds of notice', async () => {
+    const change = scheduleChange({ title: 'Kickoff moved' });
+    const result = notice({ title: 'Lions 3 – 1 Tigers', kind: 'result_published' });
+    const app = createTestApp({ routes: { 'GET /me/inbox': page([change, result]) } });
+    render(<InboxScreen />, { wrapper: app.wrapper });
+    const tabs = await screen.findByLabelText('Show');
+    fireEvent.press(within(tabs).getByRole('tab', { name: 'Results' }));
+    expect(screen.getByText('Lions 3 – 1 Tigers')).toBeOnTheScreen();
+    expect(screen.queryByText('Kickoff moved')).toBeNull();
+    fireEvent.press(within(tabs).getByRole('tab', { name: 'Changes' }));
+    expect(screen.getByText('Kickoff moved')).toBeOnTheScreen();
+    expect(screen.queryByText('Lions 3 – 1 Tigers')).toBeNull();
+  });
+
+  it('SPK-UX-003: with nothing to act on, "To do" says "You\'re all caught up"', async () => {
     const app = createTestApp({
       routes: { 'GET /me/inbox': page([notice({ title: 'Car park closed' })]) },
     });
     render(<InboxScreen />, { wrapper: app.wrapper });
-    fireEvent.press(await screen.findByRole('tab', { name: 'Needs action' }));
+    fireEvent.press(await screen.findByRole('tab', { name: 'To do' }));
     expect(screen.getByRole('header', { name: "You're all caught up" })).toBeOnTheScreen();
-    expect(
-      screen.getByText('Nothing in your notifications needs you right now.'),
-    ).toBeOnTheScreen();
+    expect(screen.getByText('Nothing in your inbox needs you right now.')).toBeOnTheScreen();
   });
 
-  it('groups notices in sections by the day they arrived: Today, Yesterday, then the date', async () => {
+  it('groups notices under Today, This week and Earlier', async () => {
     const app = createTestApp({
       routes: {
         'GET /me/inbox': page([
           notice({ title: 'This morning', deliveredAt: '2026-10-24T11:00:00.000Z' }),
           notice({ title: 'Last night', deliveredAt: '2026-10-24T05:00:00.000Z' }),
-          notice({ title: 'Earlier', deliveredAt: '2026-10-20T18:00:00.000Z' }),
+          notice({ title: 'Long ago', deliveredAt: '2026-10-10T18:00:00.000Z' }),
         ]),
       },
     });
     render(<InboxScreen />, { wrapper: app.wrapper });
     expect(await screen.findByRole('header', { name: 'Today' })).toBeOnTheScreen();
-    // 05:00 UTC on the 24th is 10:00 PM on the 23rd in Los Angeles.
-    expect(screen.getByRole('header', { name: 'Yesterday' })).toBeOnTheScreen();
-    expect(screen.getByRole('header', { name: 'Tue, Oct 20' })).toBeOnTheScreen();
+    // 05:00 UTC on the 24th is 10:00 PM on the 23rd in Los Angeles: this week, read as "Fri".
+    expect(screen.getByRole('header', { name: 'This week' })).toBeOnTheScreen();
+    expect(screen.getByRole('header', { name: 'Earlier' })).toBeOnTheScreen();
+    expect(screen.getByText('Fri')).toBeOnTheScreen();
+    expect(screen.getByText('Oct 10')).toBeOnTheScreen();
   });
 
   it('needsAction and inboxSections are pure: no guessing from the title, newest first', () => {
@@ -105,9 +125,121 @@ describe('SCR-C-06 inbox tabs and day sections (ADR-008)', () => {
     const days = inboxSections([a, b, c] as never, 'all', TEST_NOW, ZONE);
     expect(days.map((d) => [d.title, d.data.map((i) => i.attemptId)])).toEqual([
       ['Today', [a.attemptId, c.attemptId]],
-      ['Yesterday', [b.attemptId]],
+      ['This week', [b.attemptId]],
     ]);
-    expect(dayTitle('2026-10-21T18:00:00.000Z', TEST_NOW, ZONE)).toBe('Wed, Oct 21');
+    expect(dayTitle('2026-10-10T18:00:00.000Z', TEST_NOW, ZONE)).toBe('Earlier');
+  });
+});
+
+describe('handoff M 2d: changes, marking read (SPK-COMMS-005, INTERACTIONS 2d rows 3 and 4)', () => {
+  /** A notice moving the game from Field 4 to Field 2, same time. */
+  const moved = () =>
+    scheduleChange({
+      title: 'Field change for Saturday',
+      detailsBefore: eventDetails({
+        title: 'Desert Foxes vs Lions',
+        resources: [{ id: '0192f1a0-0000-7000-8000-00000000b704', name: 'Field 4' }],
+      }),
+      detailsAfter: eventDetails({
+        title: 'Desert Foxes vs Lions',
+        resources: [{ id: '0192f1a0-0000-7000-8000-00000000b702', name: 'Field 2' }],
+      }),
+    });
+
+  it('a change says what moved in one line: the old value struck through, the new one in bold', async () => {
+    const app = createTestApp({ routes: { 'GET /me/inbox': page([moved()]) } });
+    render(<InboxScreen />, { wrapper: app.wrapper });
+    const line = await screen.findByLabelText(
+      'Desert Foxes vs Lions: was Field 4, now Field 2. Same time.',
+    );
+    expect(within(line).getByText('Field 4')).toHaveStyle({ textDecorationLine: 'line-through' });
+    expect(within(line).getByText('Field 2')).toBeOnTheScreen();
+    expect(screen.getByLabelText('Change')).toBeOnTheScreen();
+  });
+
+  it('"Mark all read" marks every unread notice at once, one request each, and the dots go', async () => {
+    const one = moved();
+    const two = notice({ title: 'Car park closed' });
+    const app = createTestApp({
+      toasts: true,
+      routes: {
+        'GET /me/inbox': page([one, two]),
+        'POST /me/inbox/{id}/read': (req) =>
+          fakeResponse(200, { ...one, attemptId: req.params.id, readAt: TEST_NOW.toISOString() }),
+      },
+    });
+    render(<InboxScreen />, { wrapper: app.wrapper });
+    fireEvent.press(await screen.findByRole('button', { name: 'Mark all read' }));
+    // Shown at once: no notice says "Unread" any more, and the button goes.
+    expect(screen.queryAllByLabelText('Unread')).toHaveLength(0);
+    await waitFor(() =>
+      expect(app.fake.requests.filter((r) => r.route === '/me/inbox/{id}/read')).toHaveLength(2),
+    );
+    const reads = app.fake.requests.filter((r) => r.route === '/me/inbox/{id}/read');
+    expect(reads.map((r) => r.params.id).sort()).toEqual([one.attemptId, two.attemptId].sort());
+    expect(new Set(reads.map((r) => r.headers['idempotency-key'])).size).toBe(2);
+    expect(await screen.findByTestId('toast')).toHaveTextContent(/Marked 2 as read\.$/);
+  });
+
+  it('a read that does not save puts the unread state back and offers Try again', async () => {
+    const one = moved();
+    const app = createTestApp({
+      toasts: true,
+      routes: {
+        'GET /me/inbox': page([one]),
+        'POST /me/inbox/{id}/read': { status: 500, body: { error: { code: 'INTERNAL_ERROR' } } },
+      },
+    });
+    render(<InboxScreen />, { wrapper: app.wrapper });
+    fireEvent.press(await screen.findByRole('button', { name: 'Mark all read' }));
+    await waitFor(() =>
+      expect(screen.getByTestId('toast')).toHaveTextContent(/That didn't save\.Try again$/),
+    );
+    expect(screen.getAllByLabelText('Unread').length).toBeGreaterThan(0);
+  });
+
+  it('swiping left reveals "Mark read"; screen readers get the same action on the row', async () => {
+    const one = moved();
+    const app = createTestApp({
+      toasts: true,
+      routes: {
+        'GET /me/inbox': page([one]),
+        'POST /me/inbox/{id}/read': {
+          status: 200,
+          body: { ...one, readAt: TEST_NOW.toISOString() },
+        },
+      },
+    });
+    render(<InboxScreen />, { wrapper: app.wrapper });
+    const row = await screen.findByTestId(`inbox-item-${one.attemptId}`);
+    expect(row).toHaveProp('accessibilityActions', [{ name: 'markRead', label: 'Mark read' }]);
+    fireEvent(row, 'accessibilityAction', { nativeEvent: { actionName: 'markRead' } });
+    await waitFor(() =>
+      expect(app.fake.requests.filter((r) => r.route === '/me/inbox/{id}/read')).toHaveLength(1),
+    );
+    expect(await screen.findByTestId('toast')).toHaveTextContent(/Marked as read\.$/);
+    // Opening the row now marks nothing again.
+    expect(screen.queryByRole('button', { name: 'Mark all read' })).toBeNull();
+  });
+
+  it('offline, marking read waits for a connection', async () => {
+    const app = createTestApp({ routes: { 'GET /me/inbox': page([moved()]) } });
+    render(<InboxScreen />, { wrapper: app.wrapper });
+    const button = await screen.findByRole('button', { name: 'Mark all read' });
+    act(() => app.sources.setReachable(false));
+    await waitFor(() => expect(button).toBeDisabled());
+  });
+
+  it('a place offer has "See offer", which opens the offer', async () => {
+    const offer = notice({
+      title: 'A place opened: Goalkeeper Basics',
+      kind: 'waitlist_offer',
+      subject: { type: 'waitlist_entry', id: '0192f1a0-0000-7000-8000-00000000e901' },
+    });
+    const app = createTestApp({ routes: { 'GET /me/inbox': page([offer]) } });
+    render(<InboxScreen />, { wrapper: app.wrapper });
+    fireEvent.press(await screen.findByTestId(`inbox-offer-${offer.attemptId}`));
+    expect(mockPush).toHaveBeenCalled();
   });
 });
 
@@ -120,6 +252,7 @@ describe('SCR-C-06 opening a notice (SPK-COMMS-004, PA-11)', () => {
       revision: 3,
     });
     const app = createTestApp({
+      toasts: true,
       routes: {
         'GET /me/inbox': page([item]),
         'POST /me/inbox/{id}/read': () =>
@@ -162,6 +295,7 @@ describe('SCR-C-06 opening a notice (SPK-COMMS-004, PA-11)', () => {
     const item = notice({ title: 'Bring water', readAt: '2026-10-24T11:30:00.000Z', revision: 2 });
     let current: Record<string, unknown> = { ...item };
     const app = createTestApp({
+      toasts: true,
       routes: {
         'GET /me/inbox': () => fakeResponse(200, { items: [current], nextCursor: null }),
         'POST /me/inbox/{id}/acknowledge': () => {

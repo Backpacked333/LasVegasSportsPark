@@ -7,7 +7,7 @@
 import { apiQueryKey } from '@sportspark/api-client';
 import { fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
-import { AccessibilityInfo, SectionList } from 'react-native';
+import { SectionList } from 'react-native';
 import { calendarWindowQuery } from '../../../features/today/calendar';
 import {
   BOOKING,
@@ -40,14 +40,7 @@ import {
   useCalendarWindow,
   useMyFixtures,
 } from '../../../features/today/queries';
-import {
-  createTestApp,
-  mePermissions,
-  settleQueries,
-  TEST_NOW,
-  waitForAbsent,
-} from '../../../testing/test-app';
-import { openSheet } from '../../../testing/ui';
+import { createTestApp, mePermissions, settleQueries, TEST_NOW } from '../../../testing/test-app';
 import { openSupportDetails, pullToRefresh } from '../../../testing/ui-surfaces';
 import { ScheduleScreen } from '../ScheduleScreen';
 
@@ -116,31 +109,44 @@ beforeEach(() => {
 });
 
 describe('SCR-C-18 Calendar (ScheduleScreen)', () => {
-  it('SPK-SCHED-008: lists activities by local day with the time zone, participant and status', async () => {
+  it('SPK-SCHED-008 (handoff M 1h): lists activities by local day with the time zone, who, place and status', async () => {
     const app = createTestApp({ routes: routes() });
     render(<ScheduleScreen />, { wrapper: app.wrapper });
     const day = await screen.findByTestId('day-2026-10-24');
-    expect(screen.getByRole('header', { name: 'Sat, Oct 24' })).toBeOnTheScreen();
-    // Participant names come from their own reads: wait for them (deterministic, no race). The
-    // next activity (SCR-C-04) is marked on its row, on the facility clock too (SPK-SCHED-008).
+    expect(screen.getByRole('header', { name: 'Today · Saturday 24' })).toBeOnTheScreen();
+    // Participant names come from their own reads: wait for them (deterministic, no race). Times
+    // are on the facility clock (SPK-SCHED-008); a plainly confirmed place says nothing more.
     expect(
       await within(day).findByRole('button', {
-        name: 'Junior Skills, 10:00 AM to 11:00 AM PDT. For: Sam, Confirmed, Next up',
+        name: 'Junior Skills. 10:00 AM to 11:00 AM PDT. For: Sam',
       }),
     ).toBeOnTheScreen();
     expect(
-      await within(day).findByRole('button', {
-        name: 'Adult Pickup Night, 6:00 PM to 7:30 PM PDT. For: You. Pickup session, Booking pending',
+      within(day).getByRole('button', {
+        name: 'Adult Pickup Night. 6:00 PM to 7:30 PM PDT. For: You. Pickup session. Booking pending',
       }),
     ).toBeOnTheScreen();
-    // ADR-008: the start is drawn large on the left, so the line under the title says the end only
-    // (the screen reader still hears the whole range, above).
-    expect(within(day).getByText('Until 11:00 AM PDT. For: Sam')).toBeOnTheScreen();
-    expect(within(day).queryByText('10:00 AM to 11:00 AM PDT. For: Sam')).toBeNull();
+    // The start is drawn large with the end under it ("to 11:00"; "PM to 7:30" after noon).
+    expect(within(day).getByText('to 11:00')).toBeOnTheScreen();
+    expect(within(day).getByText('PM to 7:30')).toBeOnTheScreen();
+    expect(within(day).getByText('Sam')).toBeOnTheScreen();
     // Every item states its facility's zone (ENR-02): no device-clock caveat anywhere.
     expect(screen.queryByTestId('zone-notice')).toBeNull();
     const request = app.fake.requests.find((r) => r.route === '/me/family-calendar');
     expect(request?.query).toEqual(WINDOW_0);
+  });
+
+  it('handoff M 1h row 1: empty days collapse into one line, and each person keeps a dot on the strip', async () => {
+    const app = createTestApp({ routes: routes() });
+    render(<ScheduleScreen />, { wrapper: app.wrapper });
+    await screen.findByTestId('day-2026-10-24');
+    // Monday 19 to Friday 23 have nothing: one line; Sunday 25 is its own run.
+    expect(screen.getByText('Mon 19 – Fri 23 · nothing scheduled')).toBeOnTheScreen();
+    expect(screen.getByText('Sun 25 · nothing scheduled')).toBeOnTheScreen();
+    // The day is read with who has something on it, never by the dots alone.
+    expect(
+      await screen.findByRole('button', { name: 'Saturday 24 October, today, Sam, You' }),
+    ).toBeSelected();
   });
 
   it('SPK-COMMS-005: shows published changes and cancellations as old and new details', async () => {
@@ -191,9 +197,9 @@ describe('SCR-C-18 Calendar (ScheduleScreen)', () => {
     const app = createTestApp({ routes: routes() });
     render(<ScheduleScreen />, { wrapper: app.wrapper });
     const people = await screen.findByLabelText('Show activities for');
-    expect(within(people).getByRole('button', { name: 'Everyone' })).toBeSelected();
-    expect(within(people).getByRole('button', { name: 'You' })).toBeOnTheScreen();
-    expect(await within(people).findByRole('button', { name: 'Sam' })).toBeOnTheScreen();
+    expect(within(people).getByRole('radio', { name: 'Everyone' })).toBeChecked();
+    expect(await within(people).findByRole('radio', { name: 'Sam' })).toBeOnTheScreen();
+    expect(within(people).getByRole('radio', { name: /^Me/ })).toBeOnTheScreen();
     fireEvent.press(screen.getByRole('button', { name: /^Adult Pickup Night/ }));
     expect(mockPush).toHaveBeenLastCalledWith({
       pathname: '/sessions/[sessionId]',
@@ -225,7 +231,7 @@ describe('SCR-C-18 Calendar (ScheduleScreen)', () => {
     ).toBeOnTheScreen();
     expect(
       screen.getByText(
-        'Nothing is scheduled for you this week. Find leagues, classes and camps in Explore.',
+        'Nothing scheduled for you this week. Find leagues, classes and camps in Explore.',
       ),
     ).toBeOnTheScreen();
     fireEvent.press(screen.getByRole('button', { name: 'Explore activities' }));
@@ -263,7 +269,8 @@ describe('SCR-C-18 Calendar (ScheduleScreen)', () => {
     expect(await screen.findByTestId('day-2026-10-24')).toBeOnTheScreen();
     now = new Date('2026-10-24T13:00:00.000Z');
     act(() => app.sources.setReachable(false));
-    expect(screen.getByText(/Showing information from 1 hour ago\./)).toBeOnTheScreen();
+    // The shared banner (handoff 3f): "Offline. Showing what was saved at 5:00."
+    expect(screen.getByText(/Showing what was saved at \d{1,2}:\d{2}\./)).toBeOnTheScreen();
     expect(screen.getByTestId('day-2026-10-24')).toBeOnTheScreen();
   });
 
@@ -306,21 +313,29 @@ describe('SCR-C-18 Calendar (ScheduleScreen)', () => {
     expect(screen.getByTestId('day-2026-10-24')).toBeOnTheScreen();
   });
 
-  it('the day strip selects a day, today first, and names the days with activities', async () => {
+  it('the day strip selects a day, today first, and names who has something on each day', async () => {
     const app = createTestApp({ routes: routes() });
     render(<ScheduleScreen />, { wrapper: app.wrapper });
-    expect(
-      await screen.findByRole('button', { name: 'Saturday 24 October, today, has activities' }),
-    ).toBeSelected();
+    const today = await screen.findByRole('button', {
+      name: 'Saturday 24 October, today, Sam, You',
+    });
+    expect(today).toBeSelected();
+    // INTERACTIONS 1h row 5: "Today" is hidden while today is on screen.
+    expect(screen.queryByRole('button', { name: 'Today' })).toBeNull();
     const sunday = screen.getByRole('button', { name: 'Sunday 25 October' });
     fireEvent.press(sunday);
     expect(sunday).toBeSelected();
     expect(
-      screen.getByRole('button', { name: 'Saturday 24 October, today, has activities' }),
+      screen.getByRole('button', { name: 'Saturday 24 October, today, Sam, You' }),
     ).not.toBeSelected();
+    // Another day picked: "Today" comes back and returns to today.
+    fireEvent.press(screen.getByRole('button', { name: 'Today' }));
+    expect(
+      screen.getByRole('button', { name: 'Saturday 24 October, today, Sam, You' }),
+    ).toBeSelected();
   });
 
-  it('picking a day scrolls the agenda to that day', async () => {
+  it('picking a day scrolls the agenda to that day (or to the line its empty run is in)', async () => {
     const scroll = jest
       .spyOn(SectionList.prototype, 'scrollToLocation')
       .mockImplementation(() => undefined);
@@ -329,10 +344,18 @@ describe('SCR-C-18 Calendar (ScheduleScreen)', () => {
     await screen.findByTestId('day-2026-10-24');
     // Nothing moves until a day is picked: the strip stays in view on arrival.
     expect(scroll).not.toHaveBeenCalled();
-    // The week runs Monday 19 to Sunday 25 October: Sunday is the seventh section.
+    // Blocks: Mon 19 – Fri 23 (empty), Sat 24, Sun 25 (empty): Sunday is the third.
     fireEvent.press(screen.getByRole('button', { name: 'Sunday 25 October' }));
     expect(scroll).toHaveBeenLastCalledWith({
-      sectionIndex: 6,
+      sectionIndex: 2,
+      itemIndex: 0,
+      viewOffset: 0,
+      animated: false,
+    });
+    // Wednesday is inside the first run: the run's line.
+    fireEvent.press(screen.getByRole('button', { name: 'Wednesday 21 October' }));
+    expect(scroll).toHaveBeenLastCalledWith({
+      sectionIndex: 0,
       itemIndex: 0,
       viewOffset: 0,
       animated: false,
@@ -364,9 +387,9 @@ describe('SCR-C-18 Schedule: fixtures and facility clocks (CMP-02, SPK-SCHED-008
     });
     render(<ScheduleScreen />, { wrapper: app.wrapper });
     const sunday = await screen.findByTestId('day-2026-10-25');
-    expect(screen.getByRole('header', { name: 'Sun, Oct 25' })).toBeOnTheScreen();
+    expect(screen.getByRole('header', { name: 'Tomorrow · Sunday 25' })).toBeOnTheScreen();
     const row = await within(sunday).findByRole('button', {
-      name: 'Lions vs Tigers, 10:00 AM to 11:30 AM MDT. For: Sam (Lions). At: North Complex, Field 1, Scheduled',
+      name: 'Lions vs Tigers. 10:00 AM to 11:30 AM MDT. For: Sam. At: Field 1',
     });
     fireEvent.press(row);
     expect(mockPush).toHaveBeenLastCalledWith({
@@ -403,97 +426,52 @@ describe('SCR-C-18 Schedule: fixtures and facility clocks (CMP-02, SPK-SCHED-008
     );
   });
 
-  it("SCR-C-04, SPK-CAP-003: a game's RSVP on Calendar opens in a sheet and is sent with the answer's revision", async () => {
-    const answered = fixtureDetail({
-      responses: [
-        { personId: SELF, state: 'unavailable', revision: 2, respondedAt: '2026-10-23T12:00:00Z' },
-      ],
-    });
-    const app = createTestApp({
-      routes: routes({
-        'GET /me/family-calendar': ok(calendar([])),
-        'GET /me/fixtures': (req) =>
-          fakeResponse(200, req.query.from === WINDOW_0.from ? [answered] : []),
-        'GET /me/team-entries': ok([myTeamEntry({ members: [SELF] })]),
-        'POST /fixtures/{id}/availability': ok({
-          id: '0192f1a0-0000-7000-8000-00000000fa01',
-          fixtureId: FIXTURE,
-          teamEntryId: '0192f1a0-0000-7000-8000-00000000f201',
-          personId: SELF,
-          state: 'available',
-          respondedAt: '2026-10-24T12:00:00.000Z',
-          note: null,
-          revision: 3,
+  it("handoff M 1h row 4: a game's row mirrors the person's answer, as Home and Game day show it", async () => {
+    const answered = (state: string) =>
+      fixtureDetail({
+        responses: [{ personId: CHILD, state, revision: 2, respondedAt: '2026-10-23T12:00:00Z' }],
+      });
+    for (const [state, word] of [
+      ['available', 'Going'],
+      ['tentative', 'Maybe'],
+      ['unavailable', 'Not going'],
+    ] as const) {
+      const app = createTestApp({
+        routes: routes({
+          'GET /me/family-calendar': ok(calendar([])),
+          'GET /me/fixtures': (req) =>
+            fakeResponse(200, req.query.from === WINDOW_0.from ? [answered(state)] : []),
+          'GET /me/team-entries': ok([myTeamEntry({ members: [CHILD] })]),
         }),
-      }),
-    });
-    render(<ScheduleScreen />, { wrapper: app.wrapper });
-    fireEvent.press(
-      await screen.findByRole('button', {
-        name: 'Your availability for Lions vs Tigers: Unavailable',
-      }),
-    );
-    const sheet = await waitFor(() => openSheet(screen));
-    expect(within(sheet).getByRole('header', { name: 'Lions vs Tigers' })).toBeOnTheScreen();
-    // A named radio group (a container, so the radios stay focusable).
-    expect(within(sheet).getByLabelText('Your availability for this game')).toHaveProp(
-      'accessibilityRole',
-      'radiogroup',
-    );
-    expect(within(sheet).getByTestId('rsvp-current')).toHaveProp(
-      'accessibilityLabel',
-      'Unavailable',
-    );
-    const reads = app.fake.requests.filter((r) => r.route === '/me/fixtures').length;
-    fireEvent.press(within(sheet).getByRole('radio', { name: 'Available' }));
-    expect(await within(sheet).findByTestId('rsvp-recorded')).toBeOnTheScreen();
-    const post = app.fake.requests.find((r) => r.route === '/fixtures/{id}/availability');
-    expect(post?.body).toEqual({ state: 'available', expectedRevision: 2 });
-    expect(post?.headers['idempotency-key']).toMatch(/^key-/);
-    // The list that carries the answer is read again.
-    await waitFor(() =>
-      expect(app.fake.requests.filter((r) => r.route === '/me/fixtures').length).toBeGreaterThan(
-        reads,
-      ),
-    );
-    // SPK-UX-009: closing the sheet puts focus back on the availability chip that opened it.
-    const focus = jest.spyOn(AccessibilityInfo, 'sendAccessibilityEvent');
-    fireEvent.press(within(sheet).getByRole('button', { name: 'Close' }));
-    await waitForAbsent(() => screen.queryByTestId('sheet'), 'The answer sheet');
-    const chip = `schedule-answer-${fixtureDetail().id}`;
-    expect(screen.getByTestId(chip)).toBeOnTheScreen();
-    await waitFor(() =>
-      expect(
-        focus.mock.calls.some(
-          ([node, event]) =>
-            (node as { props?: { testID?: string } } | null)?.props?.testID === chip &&
-            event === 'focus',
+      });
+      render(<ScheduleScreen />, { wrapper: app.wrapper });
+      const row = await screen.findByTestId(`schedule-fixture-${FIXTURE}`);
+      await waitFor(() =>
+        expect(row).toHaveProp(
+          'accessibilityLabel',
+          `Lions vs Tigers. 10:00 AM to 11:30 AM PDT. For: Sam. At: Pitch 3. ${word}`,
         ),
-      ).toBe(true),
-    );
-    focus.mockRestore();
+      );
+      expect(within(row).getByText(word)).toBeOnTheScreen();
+      // The answer is given on Home and Game day: the calendar offers no control of its own.
+      expect(screen.queryByRole('button', { name: /^Your availability for/ })).toBeNull();
+      screen.unmount();
+    }
   });
 
-  it('SCR-C-04: on Calendar, an RSVP refused with ACCESS_DENIED is "not available", not an error', async () => {
+  it('a cancelled game says so on its row instead of an answer', async () => {
+    const canceled = fixtureDetail({ status: 'canceled' });
     const app = createTestApp({
       routes: routes({
         'GET /me/family-calendar': ok(calendar([])),
         'GET /me/fixtures': (req) =>
-          fakeResponse(200, req.query.from === WINDOW_0.from ? [fixtureDetail()] : []),
-        'GET /me/team-entries': ok([myTeamEntry({ members: [SELF] })]),
-        'POST /fixtures/{id}/availability': fail(403, 'ACCESS_DENIED'),
+          fakeResponse(200, req.query.from === WINDOW_0.from ? [canceled] : []),
+        'GET /me/team-entries': ok([myTeamEntry({ members: [CHILD] })]),
       }),
     });
     render(<ScheduleScreen />, { wrapper: app.wrapper });
-    fireEvent.press(
-      await screen.findByRole('button', {
-        name: 'Your availability for Lions vs Tigers: No response',
-      }),
-    );
-    const sheet = await waitFor(() => openSheet(screen));
-    fireEvent.press(within(sheet).getByRole('radio', { name: 'Available' }));
-    expect(await within(sheet).findByText("You can't answer for this game.")).toBeOnTheScreen();
-    expect(screen.queryByText(/ACCESS_DENIED/)).toBeNull();
+    const row = await screen.findByTestId(`schedule-fixture-${FIXTURE}`);
+    expect(within(row).getByText('Canceled')).toBeOnTheScreen();
   });
 
   it('a fixture read that fails shows its code and "Try again"; the calendar stays', async () => {
@@ -525,10 +503,9 @@ const OVERLAP = {
   start: '2026-10-24T17:30:00.000Z',
   end: '2026-10-24T18:00:00.000Z',
 };
-const SKILLS_ROW =
-  'Junior Skills, 10:00 AM to 11:00 AM PDT. For: Sam, Confirmed, Next up, Overlaps with Swim club (Sam)';
+const SKILLS_ROW = 'Junior Skills. 10:00 AM to 11:00 AM PDT. For: Sam';
 const PICKUP_ROW =
-  'Adult Pickup Night, 6:00 PM to 7:30 PM PDT. For: You. Pickup session, Booking pending';
+  'Adult Pickup Night. 6:00 PM to 7:30 PM PDT. For: You. Pickup session. Booking pending';
 
 function familyRoutes(overrides: Record<string, FakeHandler> = {}): Record<string, FakeHandler> {
   return {
@@ -559,27 +536,26 @@ describe('SCR-C-19 family calendar in Calendar (PA-11)', () => {
     mockParams = { people: 'everyone' };
   });
 
-  it('SPK-YOUTH-007: shows everyone the API includes in one week, with overlaps highlighted in words', async () => {
+  it('SPK-YOUTH-007: shows everyone the API includes in one week, with a clash called out in red words', async () => {
     const app = createTestApp({ routes: familyRoutes() });
     render(<ScheduleScreen />, { wrapper: app.wrapper });
     const saturday = await screen.findByTestId('day-2026-10-24');
     // Participant names come from their own read: wait for the row's final label (no race).
     expect(await within(saturday).findByRole('button', { name: SKILLS_ROW })).toBeOnTheScreen();
     expect(within(saturday).getByRole('button', { name: PICKUP_ROW })).toBeOnTheScreen();
+    // INTERACTIONS 1h row 2: a true overlap is ✕ red, not ▲ amber.
     expect(
-      screen.getByLabelText(
-        '1 overlapping commitment this week. Overlaps are highlighted so you can plan around them.',
+      await within(saturday).findByLabelText(
+        '✕ Clash: Sam is busy until 11:00, but Sam starts at 10:30.',
       ),
     ).toBeOnTheScreen();
-    // Every day of the week is shown; empty days say so.
-    expect(
-      within(screen.getByTestId('day-2026-10-25')).getByText('Nothing scheduled.'),
-    ).toBeOnTheScreen();
+    // Empty days collapse into one line.
+    expect(screen.getByText('Sun 25 · nothing scheduled')).toBeOnTheScreen();
     // The week runs Monday 19 to Sunday 25 October, today selected.
     expect(screen.getByRole('header', { name: 'October 2026' })).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: 'Monday 19 October' })).toBeOnTheScreen();
     expect(
-      screen.getByRole('button', { name: 'Saturday 24 October, today, has activities' }),
+      screen.getByRole('button', { name: 'Saturday 24 October, today, Sam, You' }),
     ).toBeSelected();
   });
 
@@ -587,22 +563,46 @@ describe('SCR-C-19 family calendar in Calendar (PA-11)', () => {
     const app = createTestApp({ routes: familyRoutes() });
     render(<ScheduleScreen />, { wrapper: app.wrapper });
     const people = await screen.findByLabelText('Show activities for');
-    const sam = await within(people).findByRole('button', { name: 'Sam' });
-    expect(within(people).getByRole('button', { name: 'Everyone' })).toBeSelected();
-    expect(within(people).getByRole('button', { name: 'You' })).toBeOnTheScreen();
+    const sam = await within(people).findByRole('radio', { name: 'Sam' });
+    expect(within(people).getByRole('radio', { name: 'Everyone' })).toBeChecked();
+    expect(within(people).getByRole('radio', { name: /^Me/ })).toBeOnTheScreen();
     // The second child holds a grant in /me but is not in the calendar: no filter, no hint.
-    expect(within(people).getAllByRole('button')).toHaveLength(3);
+    expect(within(people).getAllByRole('radio')).toHaveLength(3);
     fireEvent.press(sam);
-    expect(sam).toBeSelected();
+    expect(within(people).getByRole('radio', { name: 'Sam' })).toBeChecked();
     expect(screen.getByRole('button', { name: /^Swim club/ })).toBeOnTheScreen();
     expect(screen.queryByRole('button', { name: /^Adult Pickup Night/ })).toBeNull();
+  });
+
+  it('handoff M 1h: the who filter is the household one, shared with Home and remembered', async () => {
+    const app = createTestApp({ routes: familyRoutes() });
+    render(<ScheduleScreen />, { wrapper: app.wrapper });
+    const people = await screen.findByLabelText('Show activities for');
+    fireEvent.press(await within(people).findByRole('radio', { name: 'Sam' }));
+    expect(app.personFilterStore.read()).toBe(CHILD);
+  });
+
+  it('handoff M 1h "Screen states": an empty week for one person names them, with Explore', async () => {
+    mockParams = { person: CHILD };
+    const app = createTestApp({
+      routes: familyRoutes({
+        'GET /me/family-calendar': ok(calendar([BOOKING_ITEM])),
+      }),
+    });
+    render(<ScheduleScreen />, { wrapper: app.wrapper });
+    expect(
+      await screen.findByText(
+        'Nothing scheduled for Sam this week. Find leagues, classes and camps in Explore.',
+      ),
+    ).toBeOnTheScreen();
+    expect(screen.getByRole('button', { name: 'Explore activities' })).toBeOnTheScreen();
   });
 
   it('PA-11: reads the "Everyone" link and a person id to preselect the chip', async () => {
     const app = createTestApp({ routes: familyRoutes() });
     render(<ScheduleScreen />, { wrapper: app.wrapper });
     const people = await screen.findByLabelText('Show activities for');
-    expect(within(people).getByRole('button', { name: 'Everyone' })).toBeSelected();
+    expect(within(people).getByRole('radio', { name: 'Everyone' })).toBeChecked();
 
     for (const params of [{ person: CHILD }, { people: CHILD }] as Record<string, string>[]) {
       screen.unmount();
@@ -610,7 +610,7 @@ describe('SCR-C-19 family calendar in Calendar (PA-11)', () => {
       const one = createTestApp({ routes: familyRoutes() });
       render(<ScheduleScreen />, { wrapper: one.wrapper });
       const chips = await screen.findByLabelText('Show activities for');
-      expect(await within(chips).findByRole('button', { name: 'Sam' })).toBeSelected();
+      await waitFor(() => expect(within(chips).getByRole('radio', { name: 'Sam' })).toBeChecked());
       expect(screen.getByRole('button', { name: /^Swim club/ })).toBeOnTheScreen();
       expect(screen.queryByRole('button', { name: /^Adult Pickup Night/ })).toBeNull();
     }
@@ -621,7 +621,7 @@ describe('SCR-C-19 family calendar in Calendar (PA-11)', () => {
     const other = createTestApp({ routes: familyRoutes() });
     render(<ScheduleScreen />, { wrapper: other.wrapper });
     const chips = await screen.findByLabelText('Show activities for');
-    expect(within(chips).getByRole('button', { name: 'Everyone' })).toBeSelected();
+    expect(within(chips).getByRole('radio', { name: 'Everyone' })).toBeChecked();
   });
 
   it('moves week by week from local midnight', async () => {
@@ -695,6 +695,7 @@ describe('SCR-C-19 family calendar in Calendar: pickup sessions, team fixtures a
     // The child's name arrives with its own read (`GET /person-names`), after the calendar: wait
     // for it rather than assume the two answers landed together.
     expect(await screen.findByRole('button', { name: SKILLS_ROW })).toBeOnTheScreen();
+    expect(screen.getByText('You · Pickup session')).toBeOnTheScreen();
     // The label comes from the calendar item itself: no offering is read for it.
     expect(app.fake.requests.some((r) => r.route === '/offerings/{id}')).toBe(false);
   });
@@ -724,7 +725,7 @@ describe('SCR-C-19 family calendar in Calendar: pickup sessions, team fixtures a
     expect(screen.queryByLabelText('Pickup sessions turned off')).toBeNull();
   });
 
-  it("CMP-02, SPK-YOUTH-007: a child's team fixture is on the calendar and its overlap with another commitment is marked", async () => {
+  it("CMP-02, SPK-YOUTH-007: a child's team fixture is on the calendar and its clash with another commitment is called out", async () => {
     // Saturday 10:30 to 12:00 in Los Angeles: overlaps Sam's 10:00 Junior Skills session.
     const game = fixtureDetail({
       scheduledStart: '2026-10-24T17:30:00.000Z',
@@ -742,23 +743,16 @@ describe('SCR-C-19 family calendar in Calendar: pickup sessions, team fixtures a
     await waitFor(() =>
       expect(row).toHaveProp(
         'accessibilityLabel',
-        'Lions vs Tigers, 10:30 AM to 12:00 PM PDT. For: Sam (Lions). At: Main Park, Pitch 3, Scheduled, Overlaps with Junior Skills (Sam), Swim club (Sam)',
+        'Lions vs Tigers. 10:30 AM to 12:00 PM PDT. For: Sam. At: Pitch 3',
       ),
     );
     expect(
-      screen.getByRole('button', {
-        name: 'Junior Skills, 10:00 AM to 11:00 AM PDT. For: Sam, Confirmed, Next up, Overlaps with Swim club (Sam), Lions vs Tigers (Sam)',
-      }),
-    ).toBeOnTheScreen();
-    expect(
       screen.getByLabelText(
-        '3 overlapping commitments this week. Overlaps are highlighted so you can plan around them.',
+        '✕ Clash: Sam is busy until 11:00, but Sam starts at 10:30 on Pitch 3.',
       ),
     ).toBeOnTheScreen();
-    // A child's game: the parent is not offered an answer for the child (DEC-090).
-    expect(screen.queryByRole('button', { name: /^Your availability for/ })).toBeNull();
     // The per-person filter keeps the child's fixture and drops the adult's booking.
-    fireEvent.press(screen.getByRole('button', { name: 'Sam' }));
+    fireEvent.press(screen.getByRole('radio', { name: 'Sam' }));
     expect(screen.getByTestId(`schedule-fixture-${FIXTURE}`)).toBeOnTheScreen();
     expect(screen.queryByRole('button', { name: /^Adult Pickup Night/ })).toBeNull();
     fireEvent.press(screen.getByTestId(`schedule-fixture-${FIXTURE}`));
@@ -767,6 +761,59 @@ describe('SCR-C-19 family calendar in Calendar: pickup sessions, team fixtures a
       params: { id: FIXTURE },
     });
     expect(app.fake.requests.find((r) => r.route === '/me/fixtures')?.query).toEqual(WINDOW_0);
+  });
+
+  it('handoff M 1h row 2: back to back at different spaces is one amber sentence naming both places', async () => {
+    const skills = calendarItem({ place: 'Field 2' });
+    // 11:20 to 12:00 at another space: 20 minutes after Junior Skills ends.
+    const swim = calendarItem({
+      id: 'enrollment:swim',
+      title: 'Swim club',
+      place: 'Indoor court 1',
+      personId: SELF,
+      start: '2026-10-24T18:20:00.000Z',
+      end: '2026-10-24T19:00:00.000Z',
+    });
+    const app = createTestApp({
+      routes: familyRoutes({ 'GET /me/family-calendar': ok(calendar([skills, swim])) }),
+    });
+    render(<ScheduleScreen />, { wrapper: app.wrapper });
+    expect(
+      await screen.findByLabelText(
+        '▲ Back to back: Sam finishes at 11:00 on Field 2. You start at 11:20 on Indoor court 1.',
+      ),
+    ).toBeOnTheScreen();
+    expect(screen.getByText('Sam · Field 2')).toBeOnTheScreen();
+
+    // The same space, or 45 minutes or more apart: nothing to call out.
+    screen.unmount();
+    const same = createTestApp({
+      routes: familyRoutes({
+        'GET /me/family-calendar': ok(calendar([skills, { ...swim, place: 'Field 2' }])),
+      }),
+    });
+    render(<ScheduleScreen />, { wrapper: same.wrapper });
+    await screen.findByRole('button', { name: /^Swim club/ });
+    expect(screen.queryByLabelText(/Back to back/)).toBeNull();
+  });
+
+  it('handoff M 1h: a session shows "Waiver needed" while the person has a form to sign', async () => {
+    const app = createTestApp({
+      routes: familyRoutes({
+        'GET /people/{id}/waivers': (req) =>
+          fakeResponse(200, {
+            personId: req.params.id,
+            evaluated: true,
+            waivers:
+              req.params.id === CHILD
+                ? [{ policyKey: 'liability', status: 'missing', title: 'Liability waiver' }]
+                : [],
+          }),
+      }),
+    });
+    render(<ScheduleScreen />, { wrapper: app.wrapper });
+    const row = await screen.findByTestId(`schedule-item-${SKILLS.id}`);
+    await waitFor(() => expect(within(row).getByText('Waiver needed')).toBeOnTheScreen());
   });
 
   it('SPK-SCHED-008: an activity without a facility zone is on the device clock, and the screen says so', async () => {
@@ -802,7 +849,7 @@ describe('SCR-C-19 family calendar in Calendar: pickup sessions, team fixtures a
     const sunday = await screen.findByTestId('day-2026-10-25');
     expect(
       await within(sunday).findByRole('button', {
-        name: 'Night futsal, 12:30 AM to 1:30 AM MDT. For: Sam, Confirmed, Next up',
+        name: 'Night futsal. 12:30 AM to 1:30 AM MDT. For: Sam',
       }),
     ).toBeOnTheScreen();
     expect(screen.queryByTestId('zone-notice')).toBeNull();

@@ -125,8 +125,9 @@ export const MatchActions = defineActions({
   },
   reportIncident: {
     id: 'competition.report_incident',
-    description: 'Record a restricted incident (officials and league management)',
-    staffRoles: ['official', ...DISCIPLINE_MANAGERS],
+    description:
+      'Record a restricted incident (officials of their fixture, coaches of their session for an injury or operational incident, and league management)',
+    staffRoles: ['official', 'coach', ...DISCIPLINE_MANAGERS],
     requirements: ['SPK-DISC-001', 'SPK-DISC-005', 'SPK-STAFF-005'],
   },
   readDiscipline: {

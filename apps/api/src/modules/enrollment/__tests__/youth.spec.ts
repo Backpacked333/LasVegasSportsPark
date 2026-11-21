@@ -1253,6 +1253,30 @@ describe('pickup, makeups, trials and the family calendar (SPK-PLACE-004, SPK-YO
     expect(canceled.body).toMatchObject({ status: 'canceled' });
   });
 
+  it("SPK-YOUTH-007 (handoff M 1h): each calendar item names its space, the session's own place first", async () => {
+    const term = await offering(t);
+    const kid = await child(t, [parent]);
+    await createOfferingSessionFixture(t, {
+      offeringId: term.offeringId,
+      scheduledStart: new Date('2026-12-02T17:00:00Z'),
+      scheduledEnd: new Date('2026-12-02T18:00:00Z'),
+      location: { label: 'Indoor court 1' },
+    });
+    await createEnrollmentFixture(t, {
+      offeringId: term.offeringId,
+      participantPersonId: kid,
+      payerPersonId: parent.personId,
+    });
+    const res = await t.http
+      .get('/v1/me/family-calendar?from=2026-12-01T00:00:00Z&to=2026-12-03T00:00:00Z')
+      .set(parent.header);
+    expect(res.status).toBe(200);
+    const places = res.body.items
+      .filter((i: { personId: string }) => i.personId === kid)
+      .map((i: { place: string | null }) => i.place);
+    expect(places).toEqual(['Indoor court 1']);
+  });
+
   it('SPK-YOUTH-007: one calendar for all authorized children, overlaps highlighted but not prevented; each booking says its kind (ENR-15)', async () => {
     const term = await offering(t);
     const trialProgram = await createProgramFixture(t, {

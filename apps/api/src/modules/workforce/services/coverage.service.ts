@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import type { AssignmentKind, AssignmentTargetType } from '@sportspark/contracts';
+import { DomainError, type AssignmentKind, type AssignmentTargetType } from '@sportspark/contracts';
 import type { Db } from '@sportspark/db';
 import { sql } from 'kysely';
 import {
@@ -34,6 +34,7 @@ import {
 import { settleIfStillOpen } from './exception-settlement';
 import { QualificationsService } from './qualifications.service';
 import { lockRequirementKey, lockRequirementShared } from './requirement-locks';
+import { TargetResolver } from './target-resolver';
 
 export interface UncoveredNotice {
   exceptionId: string;
@@ -123,6 +124,7 @@ export class CoverageService implements AssignmentCheckPort, AssignmentCoverageP
     private readonly exceptions: OperationalExceptions,
     private readonly outbox: Outbox,
     private readonly qualifications: QualificationsService,
+    private readonly targets: TargetResolver,
   ) {}
 
   /** The target's requirements in force (WRK-02: retired requirements are skipped). */
@@ -343,6 +345,35 @@ export class CoverageService implements AssignmentCheckPort, AssignmentCoverageP
       .where(notOfRetiredRequirement('a'));
     if (kind) q = q.where('a.kind', '=', kind);
     return (await q.execute()).map((r) => r.person_id).sort();
+  }
+
+  /**
+   * ASSIGNMENT_CHECK_PORT (competition, S 4d): a program session's facility, resolved through the
+   * owning modules (outside any transaction), and whether the person holds an accepted (or
+   * completed) coach assignment for it. Null when the session is not a scheduled session of the
+   * offering.
+   */
+  async sessionCoverage(
+    organizationId: string,
+    offeringId: string,
+    sessionId: string,
+    personId: string | null,
+    trx?: Trx,
+  ): Promise<{ facilityId: string; acceptedCoach: boolean } | null> {
+    const target = await this.targets
+      .resolve(organizationId, { targetType: 'session', targetId: sessionId, offeringId })
+      .catch((error: unknown) => {
+        if (DomainError.is(error)) return null;
+        throw error;
+      });
+    if (!target) return null;
+    const coaches = personId
+      ? await this.acceptedAssignees(organizationId, 'session', sessionId, 'coach', trx)
+      : [];
+    return {
+      facilityId: target.facilityId,
+      acceptedCoach: personId !== null && coaches.includes(personId),
+    };
   }
 
   /** ASSIGNMENT_CHECK_PORT (competition): an accepted (or completed) official assignment for the fixture. */

@@ -2,7 +2,7 @@
  * Design tokens of the park visual system (SPK-UX-010: clear hierarchy, strong readability in busy
  * facilities, restrained animation), shared with the staff dashboard, in two themes with the same
  * token names: classic (a calm warm white, white cards, pitch green as the accent) and Legends
- * mode (neutral black with one gold accent). Archivo for everything, at one width and in sentence
+ * mode (night green surfaces with floodlight accents, handoff M 5d). Archivo for everything, at one width and in sentence
  * case: nothing is set in capitals.
  *
  * Colours are read through the theme in use, never statically: `useTheme()` in a component and
@@ -21,7 +21,7 @@
  * Tokens v2 (ADR-008, **Proposed** customer visual system v2) add, in both themes: raised, sheet,
  * toast, tonal and count-badge surfaces with their own text colours; a scrim for text over artwork;
  * skeleton fills; initials-avatar tones; four elevation levels (`elevation`: a shadow on classic, a
- * lighter surface and a hairline border in Legends mode, where shadows do not show on black); more
+ * lighter surface and a hairline border in Legends mode, where shadows do not show on night); more
  * type, spacing, layout, radius and button-height steps; and the motion tokens that
  * `src/ui/motion.tsx` reads. Tokens with alpha are `#RRGGBBAA`; their contrast is computed after
  * compositing (`__tests__/theme.test.tsx`).
@@ -108,6 +108,8 @@ const classicColors = {
   /** A tonal button and a selected tonal chip. */
   tonal: '#E2F0E7',
   onTonal: '#0A5C35',
+  /** A chosen card or row (Who, the camp weeks): a whisper of the accent behind its border. */
+  selectedSurface: '#F5FAF6',
   /** Toasts: a dark capsule over the light page. */
   toast: '#1B2420',
   onToast: '#FFFFFF',
@@ -122,62 +124,65 @@ const classicColors = {
 export type ThemeColors = { readonly [K in keyof typeof classicColors]: string };
 
 /**
- * Legends mode: a dark theme with one gold accent (the same palette as the staff dashboard's
- * Legends mode). Pairings checked for contrast (SPK-UX-009; see __tests__/theme.test.tsx): body
- * text on every surface 4.5:1 or more, the label on a gold button 4.5:1 or more.
+ * Legends mode (redesign handoff M 5d): the same layout on night green surfaces with floodlight
+ * accents. The page is night pitch, cards one step lighter with a hairline in the night line
+ * colour, primary actions and the selected tab pill in floodlight with night text on them. Pairings
+ * checked for contrast (SPK-UX-009; see __tests__/theme.test.tsx): body text on every surface
+ * 4.5:1 or more, the label on a floodlight button 4.5:1 or more.
  */
 const legendsColors: ThemeColors = {
-  page: '#0A0A0B',
-  background: '#131314',
-  surface: '#1D1D20',
-  text: '#F5F5F7',
-  textMuted: '#A6A6AD',
-  border: '#242427',
-  divider: '#1C1C1F',
-  control: '#37373C',
-  primary: '#E8B84A',
-  primaryPressed: '#D4A337',
-  primaryText: '#17120A',
-  night: '#000000',
-  nightRaised: '#101011',
-  nightLine: '#34343A',
-  nightMuted: '#A1A1A8',
-  nightText: '#C7C7CC',
-  onNight: '#F5F5F7',
-  onNightBody: '#D6D6DB',
-  pitch: '#211C0E',
-  floodlight: '#F0C75A',
-  onFloodlight: '#000000',
-  tabActive: '#F0C75A',
-  chipSelected: '#E8B84A',
-  onChipSelected: '#17120A',
-  chipSelectedIcon: '#17120A',
-  focus: '#F0C75A',
-  success: '#5FD38D',
-  warning: '#FF9F4A',
-  warningBorder: '#5A3A16',
-  danger: '#FF7B72',
-  info: '#7DB2FF',
-  neutral: '#B4B4BB',
-  pending: '#B9A2FF',
+  page: '#0C2219',
+  background: '#122C21',
+  surface: '#16352A',
+  text: '#FFFFFF',
+  textMuted: '#9DB3A7',
+  border: '#24473A',
+  divider: '#1B3A2E',
+  control: '#2F5444',
+  primary: '#C6F36B',
+  primaryPressed: '#B2DE57',
+  primaryText: '#0C2219',
+  night: '#081912',
+  nightRaised: '#122C21',
+  nightLine: '#2F5444',
+  nightMuted: '#9DB3A7',
+  nightText: '#B9CBC1',
+  onNight: '#FFFFFF',
+  onNightBody: '#E3F1E8',
+  pitch: '#0A5131',
+  floodlight: '#C6F36B',
+  onFloodlight: '#0C2219',
+  tabActive: '#FFFFFF',
+  chipSelected: '#C6F36B',
+  onChipSelected: '#0C2219',
+  chipSelectedIcon: '#0C2219',
+  focus: '#C6F36B',
+  success: '#7FE0A6',
+  warning: '#F5B85C',
+  warningBorder: '#5A4416',
+  danger: '#FF8A80',
+  info: '#8FB5FF',
+  neutral: '#B4C4BB',
+  pending: '#C4B2FF',
   // Tokens v2 (ADR-008): lighter surfaces instead of shadows.
-  elevated: '#1B1B1E',
-  sheet: '#1C1C1F',
-  onSheet: '#F5F5F7',
+  elevated: '#16352A',
+  sheet: '#16352A',
+  onSheet: '#FFFFFF',
   backdrop: '#000000B3',
-  scrimStart: '#00000000',
-  scrimEnd: '#000000B8',
-  onMedia: '#F5F5F7',
-  onMediaMuted: '#D6D6DB',
-  skeleton: '#1F1F22',
-  skeletonHighlight: '#2A2A2E',
-  tonal: '#2B2413',
-  onTonal: '#F0C75A',
-  toast: '#2C2C30',
-  onToast: '#F5F5F7',
+  scrimStart: '#0C221900',
+  scrimEnd: '#0C2219B8',
+  onMedia: '#FFFFFF',
+  onMediaMuted: '#E3F1E8',
+  skeleton: '#16352A',
+  skeletonHighlight: '#1E4334',
+  tonal: '#1E4334',
+  onTonal: '#C6F36B',
+  selectedSurface: '#1E4334',
+  toast: '#24473A',
+  onToast: '#FFFFFF',
   shadow: '#000000',
-  countBadge: '#FF7B72',
-  onCountBadge: '#17120A',
+  countBadge: '#FF8A80',
+  onCountBadge: '#0C2219',
 };
 
 /** Tint behind each status tone (pills, notices, icon tiles); the tone colour is the text. */
@@ -195,12 +200,12 @@ export type ThemeToneBackgrounds = {
 };
 
 const legendsToneBackgrounds: ThemeToneBackgrounds = {
-  success: '#14291D',
-  warning: '#33210F',
-  danger: '#361816',
-  info: '#152238',
-  neutral: '#222225',
-  pending: '#221B38',
+  success: '#173A29',
+  warning: '#3A2C10',
+  danger: '#3D1C19',
+  info: '#18284A',
+  neutral: '#1E3A2E',
+  pending: '#2A2248',
 };
 
 /** Activity kinds (schedule stripes, list tiles): a colour always next to the kind's name. */
@@ -216,12 +221,12 @@ const classicKindColors = {
 export type ThemeKindColors = { readonly [K in keyof typeof classicKindColors]: string };
 
 const legendsKindColors: ThemeKindColors = {
-  league: '#5FD38D',
-  program: '#7DA2FF',
-  rental: '#E8A34F',
-  party: '#F07CB1',
-  basketball: '#FF8A5C',
-  dropin: '#A6A6AD',
+  league: '#7FE0A6',
+  program: '#9DBBFF',
+  rental: '#E8B860',
+  party: '#F59AC3',
+  basketball: '#FF9E73',
+  dropin: '#B4C4BB',
 };
 
 /**
@@ -263,7 +268,41 @@ export interface Theme {
   readonly kindColors: ThemeKindColors;
   /** Initials-avatar tones; the same number in both themes, so a person keeps their slot. */
   readonly avatarTones: readonly AvatarTone[];
+  /** Household person colours, children in order (`src/ui/person-colors.ts`). */
+  readonly personColors: readonly PersonColor[];
+  /** The account holder's own person colour. */
+  readonly selfPersonColor: PersonColor;
 }
+
+/**
+ * Person colours (redesign handoff, "Person colours"): each member of a household keeps one colour
+ * everywhere it appears: the filter chip, the calendar stripe and week-strip dot, the avatar ring
+ * and the initials fallback. `accent` draws stripes, dots and rings; `tint` is the initials fill
+ * and `onTint` the initials on it (4.5:1 or more). The colour is never the only cue: the person's
+ * name or initials are always beside it (SPK-UX-009). `src/ui/person-colors.ts` assigns them.
+ */
+export interface PersonColor {
+  readonly accent: string;
+  readonly tint: string;
+  readonly onTint: string;
+}
+
+/** The children's colours in order: pink, blue, orange, teal, purple (then they repeat). */
+const classicPersonColors: readonly PersonColor[] = [
+  { accent: '#B0306B', tint: '#F8DDE8', onTint: '#8E2152' },
+  { accent: '#1D409E', tint: '#E0E8FB', onTint: '#1D409E' },
+  { accent: '#E08A1E', tint: '#FBEBCB', onTint: '#734600' },
+  { accent: '#0E8A8A', tint: '#D9EEF0', onTint: '#0E5A62' },
+  { accent: '#5B3FA8', tint: '#E9E2F8', onTint: '#4E3497' },
+];
+
+const legendsPersonColors: readonly PersonColor[] = [
+  { accent: '#F07CB1', tint: '#3A1828', onTint: '#F59AC3' },
+  { accent: '#7DA2FF', tint: '#18264A', onTint: '#9DBBFF' },
+  { accent: '#E8A34F', tint: '#3A2810', onTint: '#F2B865' },
+  { accent: '#5FC9C9', tint: '#123236', onTint: '#7FD6DE' },
+  { accent: '#B9A2FF', tint: '#272044', onTint: '#C4B2FF' },
+];
 
 export const classicTheme: Theme = {
   name: 'classic',
@@ -272,6 +311,8 @@ export const classicTheme: Theme = {
   toneBackgrounds: classicToneBackgrounds,
   kindColors: classicKindColors,
   avatarTones: classicAvatarTones,
+  personColors: classicPersonColors,
+  selfPersonColor: { accent: '#0B5A33', tint: '#DCEFE3', onTint: '#0B5A33' },
 };
 
 export const legendsTheme: Theme = {
@@ -281,6 +322,8 @@ export const legendsTheme: Theme = {
   toneBackgrounds: legendsToneBackgrounds,
   kindColors: legendsKindColors,
   avatarTones: legendsAvatarTones,
+  personColors: legendsPersonColors,
+  selfPersonColor: { accent: '#5FD38D', tint: '#173322', onTint: '#7FE0A6' },
 };
 
 export const THEMES: Readonly<Record<ThemeName, Theme>> = {

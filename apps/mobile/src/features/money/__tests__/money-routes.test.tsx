@@ -35,6 +35,7 @@ function renderAt(initialUrl: string) {
           ? fakeResponse(200, obligation({ orderId: null }))
           : fakeResponse(404, apiErrorBody('NOT_FOUND')),
       'GET /credits': page([]),
+      'GET /me/payments': page([]),
       'GET /makeup-entitlements': { status: 200, body: [] },
       'GET /makeup-entitlements/{id}': { status: 200, body: makeup() },
     },
@@ -54,7 +55,9 @@ function renderAt(initialUrl: string) {
 describe('SCR-C-32 to SCR-C-38 routes', () => {
   it.each([
     ['/enrollments', 'No registrations yet'],
-    ['/payments', 'No payments'],
+    // Handoff M 4a: Payments & receipts; the older money views moved to /payments/all.
+    ['/payments', 'No payments yet'],
+    ['/payments/all', 'No payments'],
     ['/credits', 'No credits'],
   ])('%s opens its screen', async (url, header) => {
     const { router } = renderAt(url);

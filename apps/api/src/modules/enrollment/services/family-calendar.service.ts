@@ -79,18 +79,30 @@ export class FamilyCalendarService {
     }
 
     const items: FamilyCalendarItem[] = [];
-    const titles = new Map<string, string>();
-    const titleOf = async (offeringId: string): Promise<string> => {
+    const titles = new Map<string, { name: string; place: string | null }>();
+    const offeringOf = async (offeringId: string) => {
       if (!titles.has(offeringId)) {
         const snapshot = await this.offerings.getOffering(
           organizationId,
           offeringId,
           this.clock.now(),
         );
-        titles.set(offeringId, snapshot?.offering.name ?? 'Activity');
+        titles.set(offeringId, {
+          name: snapshot?.offering.name ?? 'Activity',
+          place: snapshot?.offering.locationLabel?.trim() || null,
+        });
       }
-      return titles.get(offeringId) as string;
+      return titles.get(offeringId) as { name: string; place: string | null };
     };
+    const titleOf = async (offeringId: string): Promise<string> =>
+      (await offeringOf(offeringId)).name;
+    // Handoff M 1h (SPK-YOUTH-007): the space a commitment is in, so back-to-back events at
+    // different spaces can be named: the session's own place, else the offering's.
+    const placeOf = async (
+      offeringId: string,
+      session: { location: { label?: string } | null } | undefined,
+    ): Promise<string | null> =>
+      session?.location?.label?.trim() || (await offeringOf(offeringId)).place;
 
     const enrollments = await this.enrollments.activeEnrollmentsOf(
       this.db,
@@ -125,6 +137,7 @@ export class FamilyCalendarService {
           offeringId: enrollment.offering_id,
           sessionId: session.id,
           title: await titleOf(enrollment.offering_id),
+          place: await placeOf(enrollment.offering_id, session),
           start: start.toISOString(),
           end: end.toISOString(),
           status: enrollment.status,
@@ -168,6 +181,7 @@ export class FamilyCalendarService {
           offeringId: booking.offering_id,
           sessionId: booking.session_id,
           title: await titleOf(booking.offering_id),
+          place: await placeOf(booking.offering_id, session),
           start: new Date(booking.scheduled_start).toISOString(),
           end: new Date(booking.scheduled_end).toISOString(),
           status: booking.status,

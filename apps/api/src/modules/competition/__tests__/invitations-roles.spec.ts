@@ -201,6 +201,54 @@ describe('team invitations and team roles (CMP-03, CMP-07, CMP-13; SPK-CAP-001, 
     expect(declined.body.status).toBe('declined');
   });
 
+  it('CMP-03, §4.10: the signed-in recipient accepts from their invitation list without the link token; anyone else gets NOT_FOUND', async () => {
+    const team = await teamOf('Kites');
+    const player = await adultCustomer(t);
+    const stranger = await adultCustomer(t);
+    const invited = await invite(team, { recipientPersonId: player.personId });
+    // Someone the invitation does not name learns nothing, with or without naming the player.
+    expect((await post(`/team-invitations/${invited.id}/accept`, stranger, {})).status).toBe(404);
+    expect(
+      (
+        await post(`/team-invitations/${invited.id}/accept`, stranger, {
+          personId: player.personId,
+        })
+      ).status,
+    ).toBe(404);
+    const accepted = await post(`/team-invitations/${invited.id}/accept`, player, {});
+    expect(accepted.status).toBe(200);
+    expect(accepted.body.invitation).toMatchObject({ status: 'accepted' });
+    expect(accepted.body.membership).toMatchObject({ personId: player.personId });
+    expect((await invitationRow(invited.id)).status).toBe('accepted');
+
+    // By verified contact point: its holder may accept without the token; an unverified copy may not.
+    const other = await teamOf('Swifts');
+    const holder = await adultCustomer(t);
+    await createContactPointFixture(t, {
+      personId: holder.personId,
+      kind: 'email',
+      value: 'swift@example.test',
+      verified: true,
+    });
+    const unverified = await adultCustomer(t);
+    await createContactPointFixture(t, {
+      personId: unverified.personId,
+      kind: 'email',
+      value: 'swift@example.test',
+      verified: false,
+      isPrimary: false,
+    });
+    const byContact = await invite(other, {
+      recipientContact: { kind: 'email', value: 'swift@example.test' },
+    });
+    expect((await post(`/team-invitations/${byContact.id}/accept`, unverified, {})).status).toBe(
+      404,
+    );
+    const viaList = await post(`/team-invitations/${byContact.id}/accept`, holder, {});
+    expect(viaList.status).toBe(200);
+    expect(viaList.body.membership).toMatchObject({ personId: holder.personId });
+  });
+
   it('CMP-03: a captain reads an invitation of their entry; a stranger gets NOT_FOUND', async () => {
     const team = await teamOf('Owls');
     const other = await teamOf('Ravens');

@@ -6,6 +6,13 @@ export const registrationRoutes = {
   discover: () => '/discover' as const,
   offering: (offeringId: string) => `/registration/offering/${offeringId}` as const,
   start: (offeringId: string) => `/registration/start/${offeringId}` as const,
+  /** Who (1e) with one person ticked (an opaque person id, as the pass's `?person=`). */
+  startFor: (offeringId: string, personId: string) =>
+    `/registration/start/${offeringId}?person=${personId}` as const,
+  /** Review & pay (1f) of a cart that already holds its lines. */
+  review: (basketId: string) => `/registration/review/${basketId}` as const,
+  /** Review & pay of a taken waitlist place (2e → 1f): held until the offer ends. */
+  offerReview: (basketId: string) => `/registration/review/${basketId}?offer=1` as const,
   placement: (basketId: string, lineId: string) =>
     `/registration/placement/${lineId}?basketId=${basketId}` as const,
   basket: (basketId: string) => `/registration/basket/${basketId}` as const,

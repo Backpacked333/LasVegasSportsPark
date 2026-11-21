@@ -43,6 +43,7 @@ import {
 import { BracketsController } from './controllers/brackets.controller';
 import { CompetitionOperationsController } from './controllers/competition-operations.controller';
 import { CompetitionFieldController } from './controllers/competition-field.controller';
+import { LineupsController } from './controllers/lineups.controller';
 import { CompetitionsController } from './controllers/competitions.controller';
 import { DisciplineController } from './controllers/discipline.controller';
 import { DisputesController } from './controllers/disputes.controller';
@@ -84,6 +85,7 @@ import { DisputesService } from './services/disputes.service';
 import { EligibilityService } from './services/eligibility.service';
 import { FixtureGenerationService } from './services/fixture-generation.service';
 import { FixtureAttendanceService } from './services/fixture-attendance.service';
+import { LineupsService } from './services/lineups.service';
 import { FixtureObligationsService } from './services/fixture-obligations.service';
 import { FixturesService } from './services/fixtures.service';
 import { MatchSheetService } from './services/match-sheet.service';
@@ -237,6 +239,7 @@ const providers: Provider[] = [
   CompetitionImportService,
   PlayerProfilesService,
   FixtureAttendanceService,
+  LineupsService,
   ResultsAwaitingService,
   TeamWaitlistService,
   PublicCompetitionService,
@@ -281,6 +284,7 @@ const providers: Provider[] = [
     TeamWorkspaceController,
     CompetitionOperationsController,
     CompetitionFieldController,
+    LineupsController,
   ],
   exports: [
     CompetitionsService,

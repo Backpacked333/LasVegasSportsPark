@@ -54,6 +54,7 @@ import { StateView } from '../../ui/StateView';
 import { Section } from '../../ui/Section';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { Text } from '../../ui/Text';
+import { OfferView } from './register/WaitlistOffer';
 import { layout, makeStyles, spacing } from '../../ui/theme';
 
 type WaitlistEntry = Schema<'WaitlistEntry'>;
@@ -130,6 +131,17 @@ function EntryContent({ entry, refetch }: { entry: WaitlistEntry; refetch: () =>
   };
 
   const active = entry.status === 'waiting' || entry.status === 'offered';
+  // 2e: an open offer is its own full-screen decision (the countdown, take or pass).
+  if (offer && !switchedOff) {
+    return (
+      <OfferView
+        entry={entry}
+        offer={offer}
+        childName={name === 'You' ? 'you' : name}
+        refetch={refetch}
+      />
+    );
+  }
   return (
     <View>
       <Section title={name === 'You' ? 'Your place on the waitlist' : `Waitlist for ${name}`}>
@@ -242,14 +254,17 @@ export function WaitlistScreen({ entryId }: { entryId: string }) {
     request: { path: { id: entryId } },
     enabled: session.status === 'signed_in',
   });
+  // An open offer fills the screen (its buttons stay at the bottom): no scrolling frame.
+  const hasOffer = entry.data ? openOffer(entry.data) !== null : false;
   return (
-    <Screen>
+    <Screen scroll={!hasOffer}>
       <RequireSession what="your waitlist">
         <QueryBoundary
           query={entry}
           label="waitlist"
           empty={{ title: 'Not available', description: '' }}
           unavailableOffline={['Accepting an offer', 'Leaving the waitlist']}
+          hideUpdated={hasOffer}
         >
           {(e) => <EntryContent entry={e} refetch={() => void entry.refetch()} />}
         </QueryBoundary>
@@ -261,9 +276,17 @@ export function WaitlistScreen({ entryId }: { entryId: string }) {
 /** Route component for app/registration/waitlist/[entryId].tsx. */
 export function WaitlistRoute() {
   const entryId = param(useLocalSearchParams<{ entryId: string }>().entryId) ?? '';
+  const { session } = useApp();
+  // 2e: an open offer draws its own picture, close button and title (the same read as the screen).
+  const entry = useApiQuery({
+    path: '/waitlist-entries/{id}',
+    request: { path: { id: entryId } },
+    enabled: session.status === 'signed_in',
+  });
+  const hasOffer = entry.data ? openOffer(entry.data) !== null : false;
   return (
     <>
-      <Stack.Screen options={{ title: 'Waitlist' }} />
+      <Stack.Screen options={{ title: 'Waitlist', headerShown: !hasOffer }} />
       <WaitlistScreen entryId={entryId} />
     </>
   );

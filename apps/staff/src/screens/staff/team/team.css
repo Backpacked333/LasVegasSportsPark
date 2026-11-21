@@ -1,0 +1,290 @@
+/* Staff S 5b "Team" week (desktop 1440). Role colours from styles.css kind tokens (manager
+ * program blue, coach league green, referee rental amber); the role is always written too. */
+
+.team {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.team-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.team-kicker {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+.shell-main .team-title,
+.team-title {
+  margin: 2px 0 0;
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+.team-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.team-add {
+  min-height: 44px;
+  padding: 0 18px;
+  border-radius: 999px;
+  border: 0;
+  background: var(--track);
+  color: var(--muted);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.team-proposed {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--tone-pending);
+}
+.team-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  gap: 14px;
+  align-items: start;
+}
+@media (max-width: 1180px) {
+  .team-grid {
+    grid-template-columns: 1fr;
+  }
+}
+.team-card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+.team-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 13px;
+}
+.team-table thead th {
+  text-align: left;
+  font-weight: 600;
+  font-size: 12.5px;
+  color: var(--muted);
+  padding: 10px 6px;
+  background: var(--sunk, var(--track));
+}
+.team-table thead th:first-child {
+  width: 190px;
+  padding-left: 14px;
+}
+.team-table thead th[data-today] {
+  color: var(--pitch);
+  font-weight: 700;
+}
+.team-table tbody th,
+.team-table tbody td {
+  padding: 6px 4px;
+  border-top: 1px solid var(--line-soft);
+  vertical-align: middle;
+  height: 46px;
+}
+.team-table tbody th {
+  text-align: left;
+  padding-left: 14px;
+  font-weight: 600;
+}
+.team-person {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.team-person[data-open] {
+  color: var(--tone-danger);
+}
+.team-open-icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 1px dashed var(--tone-danger-line);
+  display: grid;
+  place-items: center;
+}
+.team-chips {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.team-chip b {
+  overflow-wrap: anywhere;
+}
+.team-chip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-height: 32px;
+  padding: 0 8px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  line-height: 1.2;
+  border: 1.5px solid transparent;
+}
+.team-chip[data-tone='manager'] {
+  background: var(--kind-program-bg);
+  color: var(--kind-program);
+}
+.team-chip[data-tone='coach'] {
+  background: var(--kind-league-bg);
+  color: var(--kind-league);
+}
+.team-chip[data-tone='referee'] {
+  background: var(--kind-rental-bg);
+  color: var(--warning-ink, var(--kind-rental));
+}
+.team-chip[data-today] {
+  border-color: var(--ink);
+}
+.team-chip[data-offered] {
+  border-style: dashed;
+  border-color: currentColor;
+}
+.team-chip[data-swap] {
+  border: 1.5px dashed var(--tone-pending);
+  background: var(--tone-pending-bg);
+  color: var(--tone-pending);
+}
+.team-open-chip {
+  width: 100%;
+  border: 1.5px dashed var(--tone-danger);
+  background: var(--danger-wash);
+  color: var(--tone-danger);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  white-space: normal;
+  text-align: left;
+}
+.team-swap {
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow: visible;
+}
+.shell-main .team-swap h2 {
+  margin: 0;
+  font-size: 18px;
+}
+.team-swap-who {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.team-swap-text {
+  display: flex;
+  flex-direction: column;
+  margin-left: 4px;
+}
+.team-swap-text small {
+  color: var(--muted);
+  font-size: 13px;
+}
+.team-swap-note {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--sunk, var(--track));
+  font-size: 14px;
+}
+.team-checks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+}
+.team-checks li[data-tone='success'] {
+  color: var(--tone-success);
+}
+.team-checks li[data-tone='danger'] {
+  color: var(--tone-danger);
+}
+.team-checks li[data-tone='pending'] {
+  color: var(--tone-pending);
+}
+.team-swap-actions {
+  display: flex;
+  gap: 10px;
+}
+.team-primary,
+.team-secondary {
+  min-height: 46px;
+  border-radius: 999px;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  padding: 0 18px;
+  cursor: pointer;
+}
+.team-swap-actions > * {
+  flex: 1;
+}
+.team-primary {
+  border: 0;
+  background: var(--pitch);
+  color: var(--on-primary);
+}
+.team-primary:disabled,
+.team-secondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.team-secondary {
+  border: 1px solid var(--line-strong);
+  background: var(--card);
+  color: var(--ink);
+}
+.team-drawer {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.team-candidates {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.team-candidates li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+.team-candidate-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+.team-candidate-text small {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.team-candidates li[data-eligible] .team-candidate-text small {
+  color: var(--tone-success);
+}

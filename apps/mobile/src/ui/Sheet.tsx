@@ -56,6 +56,7 @@ import { useMotion } from './motion';
 import {
   continuousCorners,
   elevation,
+  fonts,
   layout,
   makeStyles,
   MIN_TOUCH_SIZE,
@@ -125,19 +126,40 @@ export interface SheetProps {
   onClose: () => void;
   /** The sheet's title: a header, and where focus goes on open. */
   title: string;
+  /** A short line above the title ("For Leo · needed before Junior Skills"). */
+  eyebrow?: string;
+  /**
+   * Drawn in place of the title text (an activity tile with its name): the header keeps `title` as
+   * its accessible name, so focus and screen readers land on the same words.
+   */
+  headerContent?: ReactNode;
   children: ReactNode;
   /** Actions pinned under the content ("Apply", "Done"). */
   footer?: ReactNode;
   /** The control that opened the sheet: focus goes back to it on close. */
   returnFocusTo?: RefObject<unknown>;
   closeLabel?: string;
+  /**
+   * Processing (a payment on its way, handoff "Sheets ... except while processing"): the grabber
+   * is hidden, the close button is disabled, and the backdrop, a drag, back and escape do nothing.
+   */
+  locked?: boolean;
   testID?: string;
 }
 
 export function Sheet(props: SheetProps) {
   const presentation = useSheetPresentation();
   useSheetFocus(props.open, props.returnFocusTo);
-  return presentation === 'native' ? <NativeSheet {...props} /> : <ModalSheet {...props} />;
+  const { locked = false, onClose } = props;
+  // Every way of closing goes through here, so a locked sheet ignores them all.
+  const close = useCallback(() => {
+    if (!locked) onClose();
+  }, [locked, onClose]);
+  return presentation === 'native' ? (
+    <NativeSheet {...props} onClose={close} />
+  ) : (
+    <ModalSheet {...props} onClose={close} />
+  );
 }
 
 /** Focus back to the trigger on close (SPK-UX-009); the header moves it to the title on open. */
@@ -155,19 +177,25 @@ function useSheetFocus(open: boolean, returnFocusTo: RefObject<unknown> | undefi
 
 function SheetHeader({
   title,
+  eyebrow,
+  headerContent,
   onClose,
   closeLabel,
   open,
+  locked,
 }: {
   title: string;
+  eyebrow?: string;
+  headerContent?: ReactNode;
   onClose: () => void;
   closeLabel: string;
   open: boolean;
+  locked: boolean;
 }) {
   const styles = useStyles();
   const { colors } = useTheme();
   const motion = useMotion();
-  const titleRef = useRef<Text>(null);
+  const titleRef = useRef<View>(null);
   const delay = motion.duration('base');
   useEffect(() => {
     if (!open) return undefined;
@@ -175,23 +203,49 @@ function SheetHeader({
     const id = setTimeout(() => moveFocusTo(titleRef.current), delay);
     return () => clearTimeout(id);
   }, [open, delay]);
+  const webFocus = Platform.OS === 'web' ? { tabIndex: -1 as const } : {};
   return (
     <View style={styles.header}>
-      <Text
-        ref={titleRef}
-        style={styles.title}
-        accessibilityRole="header"
-        {...(Platform.OS === 'web' ? { tabIndex: -1 as const } : {})}
-      >
-        {title}
-      </Text>
+      {headerContent ? (
+        <View
+          ref={titleRef}
+          style={styles.titleBox}
+          accessible
+          accessibilityRole="header"
+          accessibilityLabel={title}
+          {...webFocus}
+        >
+          {headerContent}
+        </View>
+      ) : (
+        <View style={styles.titleBox}>
+          {eyebrow ? <Text style={styles.eyebrow}>{eyebrow}</Text> : null}
+          <Text
+            ref={titleRef as unknown as RefObject<Text>}
+            style={[styles.title, eyebrow ? styles.titleLarge : null]}
+            accessibilityRole="header"
+            {...webFocus}
+          >
+            {title}
+          </Text>
+        </View>
+      )}
       <Pressable
         onPress={onClose}
+        disabled={locked}
         accessibilityRole="button"
         accessibilityLabel={closeLabel}
-        style={({ pressed }) => [styles.close, pressed ? styles.pressed : null]}
+        accessibilityState={{ disabled: locked }}
+        style={({ pressed }) => [
+          styles.close,
+          pressed ? styles.pressed : null,
+          locked ? styles.closeLocked : null,
+        ]}
+        testID="sheet-close"
       >
-        <Icon name="close" size={22} color={colors.onSheet} />
+        <View style={styles.closeDisc}>
+          <Icon name="close" size={22} color={colors.onSheet} />
+        </View>
       </Pressable>
     </View>
   );
@@ -201,9 +255,12 @@ function ModalSheet({
   open,
   onClose,
   title,
+  eyebrow,
+  headerContent,
   children,
   footer,
   closeLabel = 'Close',
+  locked = false,
   testID,
 }: SheetProps) {
   const styles = useStyles();
@@ -231,8 +288,16 @@ function ModalSheet({
           onAccessibilityEscape={onClose}
           testID={testID ?? 'sheet'}
         >
-          <View style={styles.grabber} />
-          <SheetHeader title={title} onClose={onClose} closeLabel={closeLabel} open={open} />
+          <View style={[styles.grabber, locked ? styles.grabberHidden : null]} />
+          <SheetHeader
+            title={title}
+            eyebrow={eyebrow}
+            headerContent={headerContent}
+            onClose={onClose}
+            closeLabel={closeLabel}
+            open={open}
+            locked={locked}
+          />
           <ScrollView style={styles.body} contentContainerStyle={styles.bodyContent}>
             {children}
           </ScrollView>
@@ -247,9 +312,12 @@ function NativeSheet({
   open,
   onClose,
   title,
+  eyebrow,
+  headerContent,
   children,
   footer,
   closeLabel = 'Close',
+  locked = false,
   testID,
 }: SheetProps) {
   const styles = useStyles();
@@ -273,11 +341,11 @@ function NativeSheet({
         appearsOnIndex={0}
         disappearsOnIndex={-1}
         opacity={1}
-        pressBehavior="close"
+        pressBehavior={locked ? 'none' : 'close'}
         style={[backdrop.style, { backgroundColor: colors.backdrop }]}
       />
     ),
-    [colors.backdrop],
+    [colors.backdrop, locked],
   );
 
   return (
@@ -290,7 +358,8 @@ function NativeSheet({
       }}
       backdropComponent={renderBackdrop}
       backgroundStyle={styles.nativeBackground}
-      handleIndicatorStyle={{ backgroundColor: colors.control }}
+      handleIndicatorStyle={{ backgroundColor: locked ? 'transparent' : colors.control }}
+      enablePanDownToClose={!locked}
       animationConfigs={motion.reduced ? instant : spring}
       accessibilityViewIsModal
     >
@@ -299,7 +368,15 @@ function NativeSheet({
         onAccessibilityEscape={onClose}
         testID={testID ?? 'sheet'}
       >
-        <SheetHeader title={title} onClose={onClose} closeLabel={closeLabel} open={open} />
+        <SheetHeader
+          title={title}
+          eyebrow={eyebrow}
+          headerContent={headerContent}
+          onClose={onClose}
+          closeLabel={closeLabel}
+          open={open}
+          locked={locked}
+        />
         <View style={styles.bodyContent}>{children}</View>
         {footer ? <View style={styles.footer}>{footer}</View> : null}
       </BottomSheetScrollView>
@@ -325,15 +402,19 @@ const useStyles = makeStyles(({ colors }) => ({
     borderRadius: radius.pill,
     backgroundColor: colors.control,
   },
+  grabberHidden: { backgroundColor: 'transparent' },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,
     paddingLeft: layout.gutter,
-    paddingRight: spacing.sm,
+    paddingRight: spacing.md,
     paddingTop: spacing.sm,
   },
-  title: { ...type.title3, color: colors.onSheet, flex: 1 },
+  titleBox: { flex: 1, gap: spacing.xxs },
+  eyebrow: { ...type.footnote, ...fonts.semibold, color: colors.textMuted },
+  title: { ...type.title3, color: colors.onSheet },
+  titleLarge: { ...type.title1 },
   close: {
     minWidth: MIN_TOUCH_SIZE,
     minHeight: MIN_TOUCH_SIZE,
@@ -341,6 +422,15 @@ const useStyles = makeStyles(({ colors }) => ({
     justifyContent: 'center',
     borderRadius: radius.pill,
   },
+  closeDisc: {
+    width: 40,
+    height: 40,
+    borderRadius: radius.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surface,
+  },
+  closeLocked: { opacity: 0.4 },
   pressed: { opacity: 0.7 },
   body: { flexGrow: 0 },
   bodyContent: { paddingHorizontal: layout.gutter, paddingTop: spacing.md, gap: spacing.md },

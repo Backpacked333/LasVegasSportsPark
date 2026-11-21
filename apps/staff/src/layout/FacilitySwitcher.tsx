@@ -6,7 +6,8 @@
  * Today feed: that read computes every operational source and belongs to the Today screen alone
  * (§4.5 bounded reads). While the directory has not answered, or when it fails, the scope from
  * `GET /v1/me` (`principal.facilityIds`, empty = the whole organization) is offered, and an
- * unnamed facility shows a short reference.
+ * unnamed facility shows a short reference. With a single facility in scope it is hidden (redesign
+ * handoff, staff shell row 3); changing it re-reads the current area for that site.
  */
 import { useEffect, useId, useMemo } from 'react';
 import { hasAnswered, useFacilityDirectory } from '../api/facility-directory';
@@ -69,14 +70,8 @@ export function FacilitySwitcher() {
   }, [facilityId, scopeKnown, options, setFacilityId]);
 
   if (!isStaff) return null;
-  if (options.length === 1 && scoped.length === 1) {
-    return (
-      <p className="facility-switcher">
-        <Icon name="location_on" size={18} />
-        Facility: {facilityLabel(options[0] as string, names)}
-      </p>
-    );
-  }
+  // Redesign handoff (shell row 3): a single facility needs no switcher; the page names it.
+  if (options.length <= 1 && scopeKnown) return null;
   return (
     <div className="facility-switcher">
       <Icon name="location_on" size={18} />

@@ -41,6 +41,11 @@ const ROUTES: Record<string, FakeHandler> = {
   'GET /operations/{id}': { status: 200, body: operation() },
   'GET /enrollments/{id}': NOT_FOUND,
   'GET /waitlist-entries/{id}': { status: 200, body: waitlistEntry() },
+  'GET /offerings/{id}/purchase-options': NOT_FOUND,
+  'GET /enrollments': { status: 200, body: { items: [], nextCursor: null } },
+  'GET /people/{id}': NOT_FOUND,
+  'POST /baskets/{id}/hold': { status: 200, body: basket({ status: 'held' }) },
+  'POST /registration-quotes': { status: 201, body: quote() },
 };
 
 /** Rendering the whole router tree is slow on a shared machine; allow it time. */
@@ -65,16 +70,19 @@ describe('registration routes (SCR-C-07 to SCR-C-16)', () => {
     const { router } = renderApp('/discover');
     fireEvent.press(await screen.findByRole('button', { name: /^Autumn Youth Program, / }, SLOW));
     expect(router.getPathname()).toBe(`/registration/offering/${IDS.offering}`);
-    expect(await screen.findByRole('button', { name: 'Register' }, SLOW)).toBeOnTheScreen();
+    expect(await screen.findByRole('button', { name: /^Register/ }, SLOW)).toBeOnTheScreen();
   });
 
   it.each([
-    [`/registration/start/${IDS.offering}`, "Who's going?"],
+    // Register (1e Who); the replaced price, forms and checkout links open Review & pay (1f).
+    [`/registration/start/${IDS.offering}`, "Who's playing?"],
     [`/registration/basket/${IDS.basket}`, 'Your cart'],
-    [`/registration/quote/${IDS.quote}`, 'Price summary'],
-    [`/registration/forms?basketId=${IDS.basket}`, 'Signing progress'],
-    [`/registration/checkout/${IDS.quote}`, 'Save your spots'],
-    [`/registration/outcome/${IDS.checkout}`, 'Registration and payment'],
+    [`/registration/review/${IDS.basket}`, 'Review'],
+    [`/registration/quote/${IDS.quote}`, 'Review'],
+    [`/registration/forms?basketId=${IDS.basket}`, 'Review'],
+    [`/registration/checkout/${IDS.quote}`, 'Review'],
+    // Done (1g) once the API reports the checkout completed.
+    [`/registration/outcome/${IDS.checkout}`, /is in\.$|are in\.$/u],
     [`/registration/waitlist/${IDS.entry}`, 'Waitlist for Ada'],
     ['/registration/waitlists', 'No waitlists'],
   ])('%s resolves to its screen', async (url, heading) => {

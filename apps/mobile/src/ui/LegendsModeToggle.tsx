@@ -1,5 +1,5 @@
 /**
- * The Legends mode switch: turns the whole app dark with a gold accent, at once, and keeps the
+ * The Legends mode switch: turns the whole app night green with floodlight accents (M 5d), at once, and keeps the
  * choice on this device between launches (`ThemeProvider`). It is a display preference of the
  * device, not of the account: offered signed in or out, and not sent to the API.
  *
@@ -30,7 +30,7 @@ export function LegendsModeToggle({ testID = 'legends-mode-toggle' }: { testID?:
     <Pressable
       accessibilityRole="switch"
       accessibilityLabel={LEGENDS_MODE_LABEL}
-      accessibilityHint="Switches the app between the classic look and a dark look with gold accents"
+      accessibilityHint="Switches the app between the classic look and a dark look with floodlight accents"
       accessibilityState={{ checked: legends }}
       onPress={() => setLegends(!legends)}
       android_ripple={{ color: colors.surface }}
@@ -48,8 +48,8 @@ export function LegendsModeToggle({ testID = 'legends-mode-toggle' }: { testID?:
         <Text style={styles.title}>{LEGENDS_MODE_LABEL}</Text>
         <Text style={styles.detail} testID={`${testID}-state`}>
           {legends
-            ? 'On. Dark with gold accents.'
-            : 'Off. Turn on for a dark look with gold accents.'}
+            ? 'On. Night green with floodlight accents.'
+            : 'Off. Turn on for a dark look with floodlight accents.'}
         </Text>
       </View>
       {/* Drawn by the platform; the row above is the control, so this is not focusable or touchable. */}

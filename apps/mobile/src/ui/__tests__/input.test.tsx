@@ -37,7 +37,7 @@ describe('text field focus and theme', () => {
     expect(flat(screen.getByTestId('field')).borderColor).toBe(classicTheme.colors.danger);
   });
 
-  it('in Legends mode the keyboard is dark and the caret and focus are gold', () => {
+  it('in Legends mode the keyboard is dark and the caret and focus are floodlight', () => {
     render(
       <ThemeProvider store={new MemoryThemeStore('legends')}>
         <TextField label="Email" value="" onChangeText={() => undefined} testID="field" />

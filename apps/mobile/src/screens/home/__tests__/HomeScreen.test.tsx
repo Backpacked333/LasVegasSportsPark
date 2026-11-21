@@ -38,7 +38,6 @@ import {
   LA,
   myTeamEntry,
 } from '../../../features/today/__tests__/fixtures';
-import { HeaderActions } from '../../../navigation/HeaderActions';
 import { createTestApp } from '../../../testing/test-app';
 import { HomeScreen } from '../HomeScreen';
 import { openSupportDetails } from '../../../testing/ui-surfaces';
@@ -253,15 +252,15 @@ describe('SCR-C-03 Home', () => {
     });
   });
 
-  it('shows the empty state "You\'re all caught up" with Explore when nothing is scheduled and nothing is needed', async () => {
+  it('handoff 1b "no activities at all": the Explore prompt "Find something for Sam" when nothing is scheduled and nothing is needed', async () => {
     const app = createTestApp({
       routes: routes({ 'GET /me/family-calendar': ok(calendar([], { participants: [SELF] })) }),
     });
     render(<HomeScreen />, { wrapper: app.wrapper });
-    expect(await screen.findByRole('header', { name: "You're all caught up" })).toBeOnTheScreen();
+    expect(await screen.findByRole('header', { name: 'Find something for Sam' })).toBeOnTheScreen();
     expect(
       screen.getByText(
-        'Your next activity, changes and anything you need to do will show up here.',
+        "Classes, camps and leagues that fit your family's week show up here, with anything you need to do.",
       ),
     ).toBeOnTheScreen();
     fireEvent.press(screen.getByRole('button', { name: 'Explore activities' }));
@@ -329,7 +328,8 @@ describe('SCR-C-03 Home', () => {
     now = new Date('2026-10-24T12:45:00.000Z');
     act(() => app.sources.setReachable(false));
     expect(screen.getByLabelText('You are offline')).toBeOnTheScreen();
-    expect(screen.getByText(/Showing information from 45 minutes ago\./)).toBeOnTheScreen();
+    // The shared banner (handoff 3f): "Offline. Showing what was saved at 5:00."
+    expect(screen.getByText(/Showing what was saved at \d{1,2}:\d{2}\./)).toBeOnTheScreen();
     expect(screen.getByTestId('next-activity-card')).toBeOnTheScreen();
   });
 
@@ -337,7 +337,8 @@ describe('SCR-C-03 Home', () => {
     const app = createTestApp({ session: null, routes: routes() });
     render(<HomeScreen />, { wrapper: app.wrapper });
     expect(await screen.findByRole('button', { name: 'Sign in' })).toBeOnTheScreen();
-    expect(screen.getByRole('button', { name: 'Show facility pass' })).toBeOnTheScreen();
+    // The pass stays one tap away beside the greeting (handoff 1b).
+    expect(screen.getByRole('button', { name: 'Facility pass' })).toBeOnTheScreen();
     expect(app.fake.requests).toHaveLength(0);
   });
 
@@ -349,17 +350,10 @@ describe('SCR-C-03 Home', () => {
         'GET /me/baskets': ok({ items: [], nextCursor: null }),
       }),
     });
-    // Home as the tab shows it: the header's actions (pass, inbox) above the page.
-    render(
-      <>
-        <HeaderActions />
-        <HomeScreen />
-      </>,
-      { wrapper: app.wrapper },
-    );
-    expect(await screen.findByRole('button', { name: 'Show facility pass' })).toBeOnTheScreen();
-    expect(screen.getByRole('button', { name: 'Calendar' })).toBeOnTheScreen();
-    expect(screen.getByRole('button', { name: 'Explore' })).toBeOnTheScreen();
+    // Handoff 1b: the pass and the inbox sit beside the greeting; "Calendar" heads "This week".
+    render(<HomeScreen />, { wrapper: app.wrapper });
+    expect(await screen.findByRole('button', { name: 'Facility pass' })).toBeOnTheScreen();
+    expect(await screen.findByRole('link', { name: 'Calendar' })).toBeOnTheScreen();
     expect(
       await screen.findByRole('button', { name: 'Notification inbox, 1 unread' }),
     ).toBeOnTheScreen();
@@ -404,11 +398,9 @@ describe('SCR-C-03 / SCR-C-04 Home: fixtures, facility clock, reasons and partic
     const card = screen.getByTestId('next-activity-card');
     // The venue states its zone: no device-clock caveat, although the device is in Los Angeles.
     expect(screen.queryByText(/device's time zone/)).toBeNull();
-    // A guardian not on the roster is not offered the RSVP choices (DEC-090 for a child).
-    expect(within(card).getByTestId('rsvp-not-on-roster')).toHaveTextContent(
-      "You're not on this game's roster. Tell your team manager whether your child can come.",
-    );
-    expect(within(card).queryByRole('radio', { name: 'Going' })).toBeNull();
+    // Handoff 1b: the guardian (holding `register`) answers for the child (**Proposed**, DEC-090).
+    expect(within(card).getByText('Is Sam going?')).toBeOnTheScreen();
+    expect(within(card).getByRole('radio', { name: 'Going' })).toBeOnTheScreen();
     fireEvent.press(hero);
     expect(mockPush).toHaveBeenLastCalledWith({
       pathname: '/fixtures/[id]',
@@ -456,16 +448,16 @@ describe('SCR-C-03 / SCR-C-04 Home: fixtures, facility clock, reasons and partic
         name: 'Lions vs Tigers. For: You (Lions). Against: Tigers. When: Sun, Oct 25, 10:00 AM to 11:30 AM PDT. Where: Main Park, Pitch 3. Scheduled',
       }),
     ).toBeOnTheScreen();
-    expect(within(card).getByTestId('rsvp-current')).toHaveProp(
-      'accessibilityLabel',
-      'Unavailable',
-    );
+    expect(within(card).getByRole('radio', { name: 'Not going', checked: true })).toBeOnTheScreen();
     const reads = app.fake.requests.filter((r) => r.route === '/me/fixtures').length;
-    // "Going" sends `available` (SPK-CAP-003).
+    // "Going" sends `available` (SPK-CAP-003) and shows at once (handoff 3a, optimistic).
     fireEvent.press(within(card).getByRole('radio', { name: 'Going' }));
-    expect(await within(card).findByTestId('rsvp-recorded')).toBeOnTheScreen();
+    expect(within(card).getByRole('radio', { name: 'Going', checked: true })).toBeOnTheScreen();
+    await waitFor(() =>
+      expect(app.fake.requests.some((r) => r.route === '/fixtures/{id}/availability')).toBe(true),
+    );
     const post = app.fake.requests.find((r) => r.route === '/fixtures/{id}/availability');
-    expect(post?.body).toEqual({ state: 'available', expectedRevision: 2 });
+    expect(post?.body).toEqual({ personId: SELF, state: 'available', expectedRevision: 2 });
     expect(post?.headers['idempotency-key']).toMatch(/^key-/);
     await waitFor(() =>
       expect(app.fake.requests.filter((r) => r.route === '/me/fixtures').length).toBeGreaterThan(
@@ -682,9 +674,9 @@ describe('SCR-C-03 / SCR-C-04 Home: fixtures, facility clock, reasons and partic
     expect(within(failed).getByText('Error code: INTERNAL_ERROR')).toBeOnTheScreen();
     expect(within(failed).getByText('Reference: corr-co')).toBeOnTheScreen();
     // Nothing is called empty while it is not known whether a payment is being completed.
-    expect(screen.queryByRole('header', { name: "You're all caught up" })).toBeNull();
+    expect(screen.queryByRole('header', { name: 'Find something for Sam' })).toBeNull();
     fireEvent.press(within(failed).getByRole('button', { name: 'Try again' }));
-    expect(await screen.findByRole('header', { name: "You're all caught up" })).toBeOnTheScreen();
+    expect(await screen.findByRole('header', { name: 'Find something for Sam' })).toBeOnTheScreen();
     expect(screen.queryByTestId('home-recovery-error')).toBeNull();
   });
 
@@ -701,7 +693,7 @@ describe('SCR-C-03 / SCR-C-04 Home: fixtures, facility clock, reasons and partic
     await waitFor(() =>
       expect(app.fake.requests.some((r) => r.route === '/me/registration-checkouts')).toBe(true),
     );
-    expect(screen.queryByRole('header', { name: "You're all caught up" })).toBeNull();
+    expect(screen.queryByRole('header', { name: 'Find something for Sam' })).toBeNull();
   });
 
   it('SPK-PAY-007: a payment reason whose basket cannot be read, or is still being read, never says "payment outstanding"', async () => {
@@ -808,11 +800,8 @@ describe('SCR-C-03 / SCR-C-04 Home: fixtures, facility clock, reasons and partic
       }),
     ).toBeOnTheScreen();
     const next = screen.getByTestId('next-activity-card');
-    expect(within(next).getByTestId('rsvp-current')).toHaveProp(
-      'accessibilityLabel',
-      'No response',
-    );
-    expect(within(next).queryByTestId('rsvp-recorded')).toBeNull();
+    // No answer yet on the second game: nothing selected.
+    expect(within(next).queryByRole('radio', { checked: true })).toBeNull();
     fireEvent.press(within(next).getByRole('radio', { name: 'Going' }));
     await waitFor(() =>
       expect(
@@ -822,7 +811,7 @@ describe('SCR-C-03 / SCR-C-04 Home: fixtures, facility clock, reasons and partic
     const posts = app.fake.requests.filter((r) => r.route === '/fixtures/{id}/availability');
     expect(posts[1]?.params.id).toBe(OTHER);
     // The second fixture has no answer yet: no revision of the first is sent with it.
-    expect(posts[1]?.body).toEqual({ state: 'available' });
+    expect(posts[1]?.body).toEqual({ personId: SELF, state: 'available' });
   });
 
   it('COM-06, SPK-UX-003: an availability request is an action required, and the card says so, until answered', async () => {
@@ -876,10 +865,9 @@ describe('SCR-C-03 / SCR-C-04 Home: fixtures, facility clock, reasons and partic
     });
     render(<HomeScreen />, { wrapper: done.wrapper });
     const answeredCard = await screen.findByTestId('next-activity-card');
-    expect(within(answeredCard).getByTestId('rsvp-current')).toHaveProp(
-      'accessibilityLabel',
-      'Available',
-    );
+    expect(
+      await within(answeredCard).findByRole('radio', { name: 'Going', checked: true }),
+    ).toBeOnTheScreen();
     expect(screen.queryByTestId('home-actions')).toBeNull();
     expect(within(answeredCard).queryByLabelText(/^Action needed/)).toBeNull();
   });

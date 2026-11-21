@@ -1,51 +1,64 @@
 /**
- * SCR-C-07 Discover, shown as Explore (SPK-UX-002, SPK-CAT-001, SPK-CAT-002, SPK-CAT-004,
- * SPK-SCHED-008, §4.14; journey A1; PA-11 **Proposed** label and customer words; ADR-008 visual
- * system v2). Browses the public catalog `GET /v1/offerings`: published activities with child-safe
- * fields only, each as a picture card with its registration window ("Registration opens <date>" in
- * the facility's time zone, "Registration open", "Registration paused", never a paused activity
- * shown as closed). Private or draft activities are simply absent: the API does not return them.
+ * SCR-C-07 Discover, shown as Explore: "shop for one child" (redesign handoff M 1d; INTERACTIONS
+ * "1d · Explore"; SPK-UX-002, SPK-CAT-001, SPK-CAT-002, SPK-CAT-004, SPK-SCHED-008, SPK-REG-005,
+ * §4.14; ADR-008 visual system v2, PA-11 customer words, both **Proposed**).
  *
- * Finding something. Every filter is applied by the API, each change is a new read of the list
- * (its loading state while it answers), and the chips always show what is applied:
- * - Search: free text (`q`, 2 to 100 characters; every word must appear in the activity's name,
- *   description, activity type, format, location or program name, as the API matches it), sent
- *   after a short pause in typing or at once on the keyboard's search key.
- * - Category chips (`kind`): Leagues, Classes, Camps, Trials, Coaching. Pickup, rentals, parties,
- *   class packs and memberships are conditional capabilities (K-12, DEC-016, DEC-072 to DEC-082):
- *   a signed-in customer gets their chip only while the organization's switch is on
- *   (`GET /v1/me/permissions`); with the switch off there is no chip and no note (PA-11).
- * - Sport chips add their word to `q` (with the search text, if any), so no other parameter is
- *   needed. "Format" (`format`, as the facility writes it) is a sheet at the end of that row.
- * - When chips: "This week" (today to Sunday) and "This month" (today to its last day), from
- *   today in the facility's zone (SPK-SCHED-008), and "Pick dates" (a range sheet). A range is
- *   sent as `from` (activities ending on or after it starts) and `to` (starting on or before it
- *   ends), so every activity that runs on any day of it is listed. A range that ends before it
- *   starts cannot be applied.
- * Filtering by age waits on DEC-003; no age filter is offered and each card shows its age band.
+ * - **Search** (row 1): free text sent to `GET /v1/offerings?q=` after a 250 ms pause in typing
+ *   (or at once on the keyboard's search key). The API matches the activity's name, description,
+ *   activity type (the sport), format, location and program; it does not index coaches, so a
+ *   coach's name finds nothing yet (**Proposed** follow-up for the catalog). No results: "Nothing
+ *   matches. Try a sport or a day." with chips for popular sports.
+ * - **Looking for** (row 2): the household as chips with each child's age ("Maya · 8"), on the
+ *   shared who-filter (Home and Calendar use the same choice, remembered on the device). With a
+ *   child chosen the list keeps only activities whose published age band includes their age, and
+ *   the hint says so; tapping the chosen chip again shows everyone. Registration still asks the
+ *   API's eligibility (Who step).
+ * - **One fit answer per card** (row 3): ✕ "Full · waitlist", ▲ "Clashes with Desert Foxes"
+ *   (the activity's sessions against the child's calendar for eight weeks: sessions, bookings and
+ *   team games) or ✓ "Fits Maya's week"; nothing while unknown.
+ * - **Places** (row 4): "3 left" at five or fewer from `GET /v1/offering-availability`; hidden when
+ *   that read fails, never guessed.
+ * - **Promotions**: the automatic discount the API lists now, as a floodlight tag on the picture.
+ * - Camp weeks of one program are one card (the weeks are chosen on Options, 2a).
+ * - Category chips (All, Camps, Leagues, Classes, …; conditional capabilities only while their
+ *   switch is on), and a filters sheet behind the tune button: This week, This month, Pick dates
+ *   and the facility's format words.
  *
- * States: loading; empty (nothing published for the filter, with the search illustration and
- * "Show all activities", shown right under the search so it is on the first screen); ready; validation failure (search or a filter sheet); offline (cached
- * list with its age); unavailable (catalog not reachable, retry, the code in "Details for
- * support"); paged with "Load more activities"; pull to refresh. A signed-out visitor browses the
- * organization configured for this build (deployment setting), and is also offered today's
- * schedule and the public standings when the organization has made them public (SPK-SCHED-010,
- * proposed amendment PA-06; PublicViews.tsx); without an organization they are asked to sign in.
- * Signed in, "In progress" lists what the customer can come back to, from the API (SPK-UX-001),
- * and "Picked for <child>" (PickedFor.tsx) shows activities whose age band fits a family member
- * (`GET /v1/me/offering-suggestions`) while no filter is applied, by age only, never as
- * eligibility. Promotions: each card shows the automatic discounts the API lists for it now
- * (`promotions`, never promo codes) as tags; the review decides what is applied.
+ * States: loading (skeleton rows), empty, no results, error with code and "Try again", offline
+ * (cached list with its age in the shared banner), paged with "Load more activities", pull to
+ * refresh. Signed out: the configured organization's catalog with the public schedule links, no
+ * "Looking for". Signed in, "In progress" lists what the customer can come back to.
  */
 import { presentationForError, type Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
-import { useRef, useState, type RefObject } from 'react';
-import { View } from 'react-native';
+import { useMemo, useRef, useState, type RefObject } from 'react';
+import { Pressable, ScrollView, useWindowDimensions, View } from 'react-native';
 import { usePermissions } from '../../api/permissions';
 import { useApiPages } from '../../api/useApiPages';
-import { artworkFor } from '../../artwork/artworkFor';
+import { useApiQuery } from '../../api/useApiQuery';
 import { illustrations } from '../../artwork/manifest';
+import { useBusyTimes } from '../../features/register/family-busy';
+import { useExploreFacts } from '../../features/register/explore-facts';
+import {
+  ageFits,
+  campName,
+  cardPrice,
+  fitAnswer,
+  groupForExplore,
+  lengthWords,
+  meetingPattern,
+  placesBadge,
+  shortRange,
+  wholeMoney,
+  type ExploreItem,
+} from '../../features/register/fit';
+import {
+  chipLabel,
+  lookingForHint,
+  useLookingFor,
+  type LookingForPerson,
+} from '../../features/register/looking-for';
 import type { OfferingKind } from '../../features/registration/format';
 import {
   MY_BASKETS_KEY,
@@ -54,40 +67,39 @@ import {
 } from '../../features/registration/in-progress';
 import { InProgressCard } from '../../features/registration/InProgressCard';
 import { registrationRoutes } from '../../features/registration/routes';
+import { useKnownFacilityZone } from '../../features/today/known-zone';
 import { useApp, useNow } from '../../providers/AppProviders';
+import { Avatar } from '../../ui/Avatar';
 import { Button } from '../../ui/Button';
 import { Chip, ChipRow } from '../../ui/Chip';
 import { addIsoDays, DateRangeField, type DateRange } from '../../ui/DateField';
 import { todayIn, weekStartOf } from '../../ui/DateStrip';
 import { EmptyState } from '../../ui/EmptyState';
 import { FieldError, SearchField, TextField } from '../../ui/Field';
+import { IconButton } from '../../ui/IconButton';
 import { LoadMore } from '../../ui/LoadMore';
-import { MediaCard } from '../../ui/MediaCard';
+import { personColorOf } from '../../ui/person-colors';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { Sheet } from '../../ui/Sheet';
+import { Skeleton } from '../../ui/Skeleton';
 import { StateView } from '../../ui/StateView';
-import { layout, makeStyles, spacing } from '../../ui/theme';
+import { Text } from '../../ui/Text';
+import { fonts, layout, makeStyles, radius, spacing, useTheme } from '../../ui/theme';
 import { PublicLinks } from '../public/PublicViews';
-import {
-  CONDITIONAL_CATEGORIES,
-  EXPLORE_CATEGORIES,
-  EXPLORE_SPORTS,
-  KIND_WORD,
-  offeringCardLabel,
-  offeringCardLine,
-  offeringPlaceLine,
-  offeringTags,
-  shortDates,
-} from './offering-look';
-import { PickedFor } from './PickedFor';
+import { ActivityRow, PickedCard, type CardFacts } from './ExploreCards';
+import { CONDITIONAL_CATEGORIES, EXPLORE_CATEGORIES, EXPLORE_SPORTS } from './offering-look';
 
 type OfferingListItem = Schema<'OfferingListItem'>;
+type PublicOffering = Schema<'PublicOffering'>;
 
 export const DISCOVER_PAGE_SIZE = 50;
 
-/** How long the search waits after the last keystroke before it is sent. */
-export const SEARCH_DEBOUNCE_MS = 400;
+/** How long the search waits after the last keystroke before it is sent (handoff 1d row 1). */
+export const SEARCH_DEBOUNCE_MS = 250;
+
+/** How many "Picked for" tiles are asked for. */
+export const PICKED_COUNT = 6;
 
 export interface DiscoverFilter {
   format: string;
@@ -150,19 +162,9 @@ export function whenRange(when: 'week' | 'month', today: string): { from: string
 /** What the screen has applied, as the list read sends it. */
 export interface ExploreSelection {
   kind: OfferingKind | null;
-  /** The sport chip's word, added to `q`. */
-  sport: string | null;
   /** The applied search text. */
   search: string;
   filter: DiscoverFilter;
-}
-
-/** The `q` sent: the search text, then the sport's word. Empty when neither is applied. */
-export function searchQuery(selection: Pick<ExploreSelection, 'search' | 'sport'>): string {
-  return [selection.search.trim(), selection.sport ?? '']
-    .filter((part) => part !== '')
-    .join(' ')
-    .slice(0, 100);
 }
 
 /** The query of `GET /v1/offerings` for a selection (only parameters the API accepts). */
@@ -170,7 +172,7 @@ export function exploreQuery(
   selection: ExploreSelection,
   context: { signedIn: boolean; organizationSlug: string | null },
 ) {
-  const q = searchQuery(selection);
+  const q = selection.search.trim().slice(0, 100);
   const { filter, kind } = selection;
   return {
     limit: DISCOVER_PAGE_SIZE,
@@ -185,24 +187,133 @@ export function exploreQuery(
   };
 }
 
-function ActivityCard({ offering }: { offering: OfferingListItem }) {
-  const router = useRouter();
+/** Keeps what the chosen person's age fits (everything without a person or an age). */
+export function forPerson<T extends Pick<PublicOffering, 'ageBand'>>(
+  items: readonly T[],
+  person: Pick<LookingForPerson, 'age'> | null,
+): T[] {
+  if (!person || person.age === null) return [...items];
+  const age = person.age;
+  return items.filter((o) => ageFits(o.ageBand, age));
+}
+
+/** "Picked for Maya", "All for Maya"; "Picked for you"; "All activities" for everyone. */
+export function listTitle(person: LookingForPerson | null): string {
+  if (!person) return 'All activities';
+  return person.self ? 'All for you' : `All for ${person.givenName}`;
+}
+
+/** The card's words and answers for one grouped item. */
+function factsFor(
+  item: ExploreItem<PublicOffering>,
+  facts: ReturnType<typeof useExploreFacts>,
+  busy: ReturnType<typeof useBusyTimes>['busy'],
+  person: LookingForPerson | null,
+): CardFacts {
+  const lead = item.lead;
+  const zone = lead.facility.timezone;
+  const sessions = facts.sessionsOf(lead.id);
+  const camp = item.members.length > 1 || lead.kind === 'camp';
+  const first = item.members[0] ?? lead;
+  const last = item.members[item.members.length - 1] ?? lead;
+  const pattern = sessions ? meetingPattern(sessions, zone, { range: camp }) : null;
+  const length = sessions ? lengthWords(sessions, zone) : null;
+  const when = camp
+    ? [shortRange(first.startsOn, last.endsOn), pattern?.replace(/^Weekdays /u, '')]
+        .filter(Boolean)
+        .join(' · ')
+    : pattern
+      ? [pattern, length].filter(Boolean).join(' · ')
+      : shortRange(lead.startsOn, lead.endsOn);
+  const price = lead.price && !lead.price.notQuotable ? lead.price : null;
+  const availability = facts.availabilityOf(lead.id);
+  return {
+    name: camp ? campName(item.name) : item.name,
+    when,
+    price:
+      camp && price
+        ? `${wholeMoney(price.basePriceMinor, price.currency)} / week`
+        : cardPrice(lead.price),
+    fit: fitAnswer({
+      offeringIds: item.members.map((m) => m.id),
+      availability,
+      sessions,
+      busy,
+      childName: person ? (person.self ? 'your' : person.givenName) : null,
+    }),
+    places: placesBadge(availability),
+    promotion: lead.promotions[0]?.name ?? null,
+  };
+}
+
+function LookingFor({
+  people,
+  selected,
+  onSelect,
+}: {
+  people: readonly LookingForPerson[];
+  selected: LookingForPerson | null;
+  onSelect: (personId: string | null) => void;
+}) {
   const styles = useStyles();
+  const theme = useTheme();
+  if (people.length === 0) return null;
   return (
-    <MediaCard
-      form="hero"
-      source={artworkFor(offering, 'wide').source}
-      aspectRatio={16 / 9}
-      eyebrow={KIND_WORD[offering.kind]}
-      title={offering.name}
-      meta={[offeringCardLine(offering), offeringPlaceLine(offering)].filter(Boolean)}
-      tags={offeringTags(offering)}
-      accessibilityLabel={offeringCardLabel(offering)}
-      accessibilityHint="Opens the activity"
-      onPress={() => router.push(registrationRoutes.offering(offering.id))}
-      style={styles.card}
-      testID={`offering-${offering.id}`}
-    />
+    <View style={styles.lookingFor} testID="looking-for">
+      <Text variant="label" tone="muted">
+        Looking for
+      </Text>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.lookingChips}
+        accessibilityRole="radiogroup"
+        accessibilityLabel="Looking for"
+      >
+        {people.map((person) => {
+          const on = selected?.id === person.id;
+          return (
+            <Pressable
+              key={person.id}
+              accessibilityRole="radio"
+              accessibilityState={{ checked: on, selected: on }}
+              accessibilityLabel={
+                person.self
+                  ? `Me (${person.givenName})`
+                  : person.age !== null
+                    ? `${person.givenName}, ${person.age}`
+                    : person.givenName
+              }
+              accessibilityHint={on ? 'Tap again to show everyone' : undefined}
+              hitSlop={{ top: 2, bottom: 2 }}
+              onPress={() => onSelect(on ? null : person.id)}
+              style={[
+                styles.personChip,
+                person.self ? styles.meChip : null,
+                on ? styles.personChipOn : styles.personChipOff,
+              ]}
+              testID={`looking-for-${person.self ? 'me' : person.id}`}
+            >
+              {person.self ? null : (
+                <Avatar
+                  name={person.givenName}
+                  id={person.id}
+                  personColor={personColorOf(theme, person.slot)}
+                  size={30}
+                  decorative
+                />
+              )}
+              <Text style={[styles.personLabel, on ? styles.personLabelOn : null]}>
+                {chipLabel(person)}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </ScrollView>
+      <Text variant="footnote" tone="muted" testID="looking-for-hint">
+        {lookingForHint(selected)}
+      </Text>
+    </View>
   );
 }
 
@@ -258,42 +369,51 @@ function DatesSheet({
   );
 }
 
-/** "Format": the facility's own words for it ("7v7"), sent as `format`. */
-function FormatSheet({
+/** The tune button's sheet: when, and the facility's format words ("7v7"). */
+function FiltersSheet({
   open,
-  applied,
-  onApply,
+  filter,
+  when,
+  onWhen,
+  onPickDates,
+  onFormat,
   onClose,
   returnFocusTo,
 }: {
   open: boolean;
-  applied: string;
-  onApply: (format: string) => void;
+  filter: DiscoverFilter;
+  when: WhenChoice | null;
+  onWhen: (choice: 'week' | 'month') => void;
+  onPickDates: () => void;
+  onFormat: (format: string) => void;
   onClose: () => void;
   returnFocusTo: RefObject<View | null>;
 }) {
-  const [draft, setDraft] = useState(applied);
+  const [draft, setDraft] = useState(filter.format);
   const [problem, setProblem] = useState<string | null>(null);
   const apply = () => {
     const found = filterProblems({ ...EMPTY_FILTER, format: draft }).format ?? null;
     setProblem(found);
-    if (!found) onApply(draft.trim());
+    if (!found) onFormat(draft.trim());
   };
   return (
     <Sheet
       open={open}
       onClose={onClose}
-      title="Format"
+      title="Filters"
       returnFocusTo={returnFocusTo}
-      footer={
-        <View style={{ gap: spacing.sm }}>
-          <Button label="Apply" size="lg" block onPress={apply} />
-          {applied ? (
-            <Button label="Clear format" variant="secondary" block onPress={() => onApply('')} />
-          ) : null}
-        </View>
-      }
+      footer={<Button label="Show activities" size="lg" block onPress={apply} />}
     >
+      <ChipRow label="When" testID="discover-when" inset={0}>
+        <Chip label="This week" selected={when === 'week'} onPress={() => onWhen('week')} />
+        <Chip label="This month" selected={when === 'month'} onPress={() => onWhen('month')} />
+        <Chip
+          label={when === 'dates' ? shortRange(filter.from, filter.to) : 'Pick dates'}
+          icon="calendar_today"
+          selected={when === 'dates'}
+          onPress={onPickDates}
+        />
+      </ChipRow>
       <TextField
         label="Format"
         hint="As the facility writes it, for example 7v7"
@@ -307,43 +427,80 @@ function FormatSheet({
   );
 }
 
+function RowSkeletons() {
+  const styles = useStyles();
+  return (
+    <View style={styles.skeletons} testID="discover-loading" accessible={false}>
+      {[0, 1, 2].map((i) => (
+        <Skeleton key={i} shape="block" height={88} />
+      ))}
+    </View>
+  );
+}
+
 export function DiscoverScreen() {
   const styles = useStyles();
   const { session, services } = useApp();
   const router = useRouter();
   const now = useNow();
+  const { width } = useWindowDimensions();
   const queryClient = useQueryClient();
+  const signedIn = session.status === 'signed_in';
   const [kind, setKind] = useState<OfferingKind | null>(null);
-  const [sport, setSport] = useState<string | null>(null);
   const [filter, setFilter] = useState<DiscoverFilter>(EMPTY_FILTER);
   const [when, setWhen] = useState<WhenChoice | null>(null);
   const [draft, setDraft] = useState('');
   const [search, setSearch] = useState('');
   const [searchError, setSearchError] = useState<string | null>(null);
-  const [sheet, setSheet] = useState<'dates' | 'format' | null>(null);
+  const [sheet, setSheet] = useState<'filters' | 'dates' | null>(null);
   const [refreshing, setRefreshing] = useState(false);
-  const datesTrigger = useRef<View>(null);
-  const formatTrigger = useRef<View>(null);
-  const signedIn = session.status === 'signed_in';
+  const filtersTrigger = useRef<View>(null);
   const permissions = usePermissions({ enabled: signedIn });
   const slug = services.config.organizationSlug ?? null;
   const canBrowse = signedIn || slug !== null;
   const categories = [
-    ...EXPLORE_CATEGORIES,
+    EXPLORE_CATEGORIES.find((c) => c.kind === 'camp'),
+    EXPLORE_CATEGORIES.find((c) => c.kind === 'season'),
+    EXPLORE_CATEGORIES.find((c) => c.kind === 'term'),
+    ...EXPLORE_CATEGORIES.filter((c) => !['camp', 'season', 'term'].includes(c.kind)),
     ...CONDITIONAL_CATEGORIES.filter(
       (c) => signedIn && permissions.isCapabilityEnabled(c.capability) === true,
     ),
-  ];
-  const selection: ExploreSelection = { kind, sport, search, filter };
-  const q = searchQuery(selection);
+  ].filter((c): c is (typeof EXPLORE_CATEGORIES)[number] => c !== undefined);
   const pages = useApiPages({
     path: '/offerings',
-    request: { query: exploreQuery(selection, { signedIn, organizationSlug: slug }) },
+    request: {
+      query: exploreQuery({ kind, search, filter }, { signedIn, organizationSlug: slug }),
+    },
     enabled: session.status !== 'loading' && canBrowse,
   });
-  const dated = filter.from !== '' || filter.to !== '';
-  const chipsApplied = kind !== null || sport !== null || filter.format !== '' || dated;
-  const filtered = chipsApplied || search !== '';
+  const zone = useKnownFacilityZone(pages.data?.[0]?.facility.timezone).zone;
+  const lookingFor = useLookingFor(zone);
+  const person = signedIn ? lookingFor.selected : null;
+  const busy = useBusyTimes(person?.id ?? null, zone).busy;
+
+  // §4.10: once the API answers NOT_FOUND or ACCESS_DENIED, cached items are no longer shown.
+  const unavailable = pages.error !== null && presentationForError(pages.error) === 'unavailable';
+  const items = useMemo(
+    () => groupForExplore(forPerson(unavailable ? [] : (pages.data ?? []), person)),
+    [pages.data, unavailable, person],
+  );
+  const picked = useApiQuery({
+    path: '/me/offering-suggestions',
+    request: { query: { participantPersonId: person?.id ?? '', limit: PICKED_COUNT } },
+    enabled: signedIn && person !== null && !person.self,
+    staleTime: 60_000,
+  });
+  const filtered = kind !== null || search !== '' || filter.format !== '' || when !== null;
+  const pickedItems = useMemo(
+    () =>
+      filtered || !person || person.self
+        ? []
+        : groupForExplore((picked.data?.items ?? []).map((s) => s.offering)),
+    [picked.data, filtered, person],
+  );
+  const leads = [...items, ...pickedItems].map((i) => i.lead.id);
+  const facts = useExploreFacts(leads, leads, signedIn);
 
   const runSearch = (text: string) => {
     const problem = searchProblem(text);
@@ -352,18 +509,11 @@ export function DiscoverScreen() {
   };
   const showAll = () => {
     setKind(null);
-    setSport(null);
     setFilter(EMPTY_FILTER);
     setWhen(null);
     setDraft('');
     setSearch('');
     setSearchError(null);
-  };
-  const clearChips = () => {
-    setKind(null);
-    setSport(null);
-    setFilter(EMPTY_FILTER);
-    setWhen(null);
   };
   const chooseWhen = (choice: 'week' | 'month') => {
     if (when === choice) {
@@ -372,7 +522,7 @@ export function DiscoverScreen() {
       return;
     }
     // SPK-SCHED-008: "today" is the facility's day, read from the injected clock.
-    const today = todayIn(now, pages.data?.[0]?.facility.timezone ?? null);
+    const today = todayIn(now, zone);
     setWhen(choice);
     setFilter((f) => ({ ...f, ...whenRange(choice, today) }));
   };
@@ -382,6 +532,7 @@ export function DiscoverScreen() {
       await Promise.all([
         Promise.resolve(pages.refetch()),
         queryClient.invalidateQueries({ queryKey: ['api', '/me/offering-suggestions'] }),
+        queryClient.invalidateQueries({ queryKey: ['api', '/offering-availability'] }),
         ...(signedIn
           ? [MY_BASKETS_KEY, MY_CHECKOUTS_KEY, MY_WAITLIST_KEY].map((queryKey) =>
               queryClient.invalidateQueries({ queryKey }),
@@ -396,7 +547,7 @@ export function DiscoverScreen() {
   if (session.status === 'loading') {
     return (
       <Screen>
-        <StateView variant="loading" label="activities" />
+        <RowSkeletons />
       </Screen>
     );
   }
@@ -414,141 +565,185 @@ export function DiscoverScreen() {
     );
   }
 
-  // §4.10: once the API answers NOT_FOUND or ACCESS_DENIED, cached items are no longer shown.
-  const unavailable = pages.error !== null && presentationForError(pages.error) === 'unavailable';
-  const items = unavailable ? [] : (pages.data ?? []);
-  const emptyTitle = q
-    ? `No activities match "${q}"`
-    : kind
-      ? `No ${KIND_WORD[kind].toLowerCase()} activities`
-      : filtered
-        ? 'No activities match these filters'
-        : 'No activities';
-  const empty =
-    pages.data !== undefined && !unavailable ? (
-      <EmptyState
-        source={illustrations['empty-search']}
-        title={emptyTitle}
-        message={
-          filtered
-            ? 'Nothing matching this filter is published right now. Show all activities to see everything.'
-            : 'Leagues, classes, camps and other activities appear here when the facility publishes them.'
-        }
-        action={filtered ? { label: 'Show all activities', onPress: showAll } : undefined}
-        testID="discover-empty"
-      />
+  const open = (item: ExploreItem<PublicOffering>) =>
+    router.push(registrationRoutes.offering(item.lead.id));
+  const noResults =
+    pages.data !== undefined && !unavailable && items.length === 0 ? (
+      filtered || person ? (
+        <View style={styles.noResults}>
+          <EmptyState
+            source={illustrations['empty-search']}
+            title="Nothing matches. Try a sport or a day."
+            message={
+              person && person.age !== null && !filtered
+                ? `Nothing published fits age ${person.age} right now.`
+                : 'Search for a sport, or clear the filters to see everything.'
+            }
+            announce
+            testID="discover-empty"
+          />
+          <ChipRow label="Popular sports" testID="discover-sports">
+            {EXPLORE_SPORTS.map((s) => (
+              <Chip
+                key={s.word}
+                label={s.label}
+                onPress={() => {
+                  setDraft(s.label);
+                  runSearch(s.word);
+                }}
+              />
+            ))}
+          </ChipRow>
+          {filtered ? (
+            <Button label="Show all activities" variant="secondary" onPress={showAll} />
+          ) : null}
+        </View>
+      ) : (
+        <EmptyState
+          source={illustrations['empty-search']}
+          title="No activities"
+          message="Leagues, classes, camps and other activities appear here when the facility publishes them."
+          testID="discover-empty"
+        />
+      )
     ) : null;
 
-  const pickedDates: DateRange =
-    when === 'dates'
-      ? { start: filter.from, end: filter.to }
-      : {
-          start: null,
-          end: null,
-        };
-
+  const tileWidth = Math.min(240, Math.round(width * 0.56));
   return (
-    <Screen<OfferingListItem>
+    <Screen<ExploreItem<OfferingListItem>>
       onRefresh={() => void refresh()}
       refreshing={refreshing}
       list={{
-        data: items,
-        keyExtractor: (offering) => offering.id,
-        renderItem: ({ item }) => <ActivityCard offering={item} />,
+        data: items as ExploreItem<OfferingListItem>[],
+        keyExtractor: (item) => item.lead.id,
+        renderItem: ({ item }) => (
+          <View style={styles.rowWrap}>
+            <ActivityRow
+              offering={item.lead}
+              facts={factsFor(item, facts, busy, person)}
+              onPress={() => open(item)}
+              testID={`offering-${item.lead.id}`}
+            />
+          </View>
+        ),
         ListFooterComponent: <LoadMore pages={pages} label="activities" />,
       }}
     >
-      {signedIn ? <InProgressCard /> : null}
       {/* SPK-SCHED-010: today's schedule and public standings need no sign-in. */}
       {!signedIn ? <PublicLinks /> : null}
-      <View style={styles.search}>
+      <View style={styles.searchRow}>
         <SearchField
           label="Search activities"
-          placeholder="Leagues, camps, classes, fields…"
+          placeholder="Camps, leagues, classes…"
           value={draft}
           onChangeText={setDraft}
           onSearch={runSearch}
           debounceMs={SEARCH_DEBOUNCE_MS}
+          style={styles.searchField}
           testID="discover-q"
         />
+        <View ref={filtersTrigger} collapsable={false}>
+          <IconButton
+            icon="tune"
+            label={filter.format || when ? 'Filters, some applied' : 'Filters'}
+            onPress={() => setSheet('filters')}
+            testID="discover-filters"
+          />
+        </View>
+      </View>
+      <View style={styles.gutter}>
         <FieldError error={searchError} />
       </View>
-      {/*
-        No results: the answer comes straight under the search, above the filter rows, so it is on
-        the first screen even on a small phone (375 x 667); the filters stay below to change.
-      */}
-      {items.length === 0 ? empty : null}
-      <View style={styles.chips}>
-        <ChipRow
-          mode="single"
-          label="Activity type"
-          allowEmpty
-          options={categories.map((c) => ({ value: c.kind, label: c.label, icon: c.icon }))}
-          value={kind}
-          onChange={setKind}
-          testID="discover-categories"
+      {signedIn ? (
+        <LookingFor
+          people={lookingFor.people}
+          selected={person}
+          onSelect={(id) => lookingFor.select(id)}
         />
-        <ChipRow label="Sport" testID="discover-sports">
-          {EXPLORE_SPORTS.map((s) => (
+      ) : null}
+      <View style={styles.categories}>
+        <ChipRow label="Activity type" testID="discover-categories">
+          <Chip label="All" selected={kind === null} onPress={() => setKind(null)} />
+          {categories.map((c) => (
             <Chip
-              key={s.word}
-              label={s.label}
-              selected={sport === s.word}
-              onPress={() => setSport(sport === s.word ? null : s.word)}
+              key={c.kind}
+              label={c.label}
+              selected={kind === c.kind}
+              onPress={() => setKind(kind === c.kind ? null : c.kind)}
             />
           ))}
-          <View ref={formatTrigger} collapsable={false}>
-            <Chip
-              label={filter.format ? `Format: ${filter.format}` : 'Format'}
-              icon="tune"
-              selected={filter.format !== ''}
-              accessibilityHint="Choose a format, such as 7v7"
-              onPress={() => setSheet('format')}
-            />
-          </View>
-        </ChipRow>
-        <ChipRow label="When" testID="discover-when">
-          <Chip label="This week" selected={when === 'week'} onPress={() => chooseWhen('week')} />
-          <Chip
-            label="This month"
-            selected={when === 'month'}
-            onPress={() => chooseWhen('month')}
-          />
-          <View ref={datesTrigger} collapsable={false}>
-            <Chip
-              label={
-                when === 'dates'
-                  ? shortDates({ startsOn: filter.from, endsOn: filter.to })
-                  : 'Pick dates'
-              }
-              accessibilityLabel={
-                when === 'dates'
-                  ? `Pick dates, ${shortDates({ startsOn: filter.from, endsOn: filter.to })}`
-                  : 'Pick dates'
-              }
-              icon="calendar_today"
-              selected={when === 'dates'}
-              onPress={() => setSheet('dates')}
-            />
-          </View>
-          {chipsApplied ? <Chip label="Clear filters" icon="close" onPress={clearChips} /> : null}
         </ChipRow>
       </View>
-      {signedIn && !filtered ? <PickedFor /> : null}
+      {signedIn ? <InProgressCard /> : null}
+      {pickedItems.length > 0 && person ? (
+        <View style={styles.section} testID="discover-picked">
+          <Text variant="title3" heading style={styles.gutter}>
+            {`Picked for ${person.givenName}`}
+          </Text>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.pickedRow}
+          >
+            {pickedItems.map((item) => (
+              <PickedCard
+                key={item.lead.id}
+                offering={item.lead}
+                facts={factsFor(item, facts, busy, person)}
+                width={tileWidth}
+                onPress={() => open(item)}
+                testID={`picked-${item.lead.id}`}
+              />
+            ))}
+          </ScrollView>
+        </View>
+      ) : null}
+      {noResults}
       {/* The list's own state (loading, failure, offline with its age); the items follow. */}
-      <QueryBoundary
-        query={pages}
-        label="activities"
-        empty={{ title: emptyTitle, description: '' }}
-        unavailableOffline={['Registration']}
-      >
-        {() => null}
-      </QueryBoundary>
+      {pages.data === undefined && pages.error === null ? (
+        <RowSkeletons />
+      ) : (
+        <QueryBoundary
+          query={pages}
+          label="activities"
+          empty={{ title: 'No activities', description: '' }}
+          unavailableOffline={['Registration']}
+        >
+          {() => null}
+        </QueryBoundary>
+      )}
+      {items.length > 0 ? (
+        <View style={[styles.listHead, styles.gutter]}>
+          <Text variant="title3" heading>
+            {listTitle(person)}
+          </Text>
+          <Text variant="footnote" tone="muted" testID="discover-count">
+            {`${items.length} ${items.length === 1 ? 'result' : 'results'}`}
+          </Text>
+        </View>
+      ) : null}
+      {sheet === 'filters' ? (
+        <FiltersSheet
+          open
+          filter={filter}
+          when={when}
+          onWhen={chooseWhen}
+          onPickDates={() => setSheet('dates')}
+          onFormat={(format) => {
+            setSheet(null);
+            setFilter((f) => ({ ...f, format }));
+          }}
+          onClose={() => setSheet(null)}
+          returnFocusTo={filtersTrigger}
+        />
+      ) : null}
       {sheet === 'dates' ? (
         <DatesSheet
           open
-          applied={pickedDates}
-          returnFocusTo={datesTrigger}
+          applied={
+            when === 'dates' ? { start: filter.from, end: filter.to } : { start: null, end: null }
+          }
+          returnFocusTo={filtersTrigger}
           onClose={() => setSheet(null)}
           onApply={(range) => {
             setSheet(null);
@@ -557,24 +752,60 @@ export function DiscoverScreen() {
           }}
         />
       ) : null}
-      {sheet === 'format' ? (
-        <FormatSheet
-          open
-          applied={filter.format}
-          returnFocusTo={formatTrigger}
-          onClose={() => setSheet(null)}
-          onApply={(format) => {
-            setSheet(null);
-            setFilter((f) => ({ ...f, format }));
-          }}
-        />
-      ) : null}
     </Screen>
   );
 }
 
-const useStyles = makeStyles(() => ({
-  search: { paddingHorizontal: layout.gutter, paddingTop: spacing.sm, gap: spacing.xs },
-  chips: { gap: spacing.sm, paddingVertical: spacing.md },
-  card: { marginHorizontal: layout.gutter, marginBottom: layout.cardGap },
+const useStyles = makeStyles(({ colors }) => ({
+  gutter: { paddingHorizontal: layout.gutter },
+  searchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    paddingLeft: layout.gutter,
+    paddingRight: layout.gutter - spacing.xs,
+    paddingTop: spacing.sm,
+  },
+  searchField: { flex: 1 },
+  lookingFor: {
+    marginHorizontal: layout.gutter,
+    marginTop: 14,
+    padding: 14,
+    paddingTop: spacing.md,
+    gap: 10,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.background,
+    borderCurve: 'continuous',
+  },
+  lookingChips: { flexDirection: 'row', gap: spacing.sm },
+  personChip: {
+    minHeight: 40,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingLeft: 5,
+    paddingRight: 14,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+  },
+  meChip: { paddingLeft: 14 },
+  personChipOn: { backgroundColor: colors.chipSelected, borderColor: colors.chipSelected },
+  personChipOff: { backgroundColor: colors.background, borderColor: colors.control },
+  personLabel: { ...fonts.semibold, fontSize: 14, lineHeight: 18, color: colors.text },
+  personLabelOn: { color: colors.onChipSelected },
+  categories: { paddingTop: spacing.md },
+  section: { marginTop: 20, gap: spacing.sm },
+  pickedRow: { gap: spacing.md, paddingHorizontal: layout.gutter, paddingBottom: spacing.xs },
+  listHead: {
+    marginTop: 20,
+    marginBottom: spacing.sm,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'baseline',
+  },
+  rowWrap: { paddingHorizontal: layout.gutter, marginBottom: spacing.sm },
+  noResults: { gap: spacing.md, paddingVertical: spacing.lg },
+  skeletons: { gap: spacing.sm, paddingHorizontal: layout.gutter, paddingTop: spacing.sm },
 }));

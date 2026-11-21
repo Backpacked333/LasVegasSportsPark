@@ -116,7 +116,10 @@ export function NightCard({
   const { height } = useWindowDimensions();
   return (
     <View
-      style={[styles.card, fill ? { minHeight: Math.round(height * CARD_HEIGHT_SHARE) } : null]}
+      style={[
+        styles.nightCard,
+        fill ? { minHeight: Math.round(height * CARD_HEIGHT_SHARE) } : null,
+      ]}
       testID={testID}
     >
       <PitchLines color={colors.nightLine} />
@@ -125,65 +128,92 @@ export function NightCard({
   );
 }
 
-/** The pass itself: the reference, where to show it, and that it works offline. */
-export function PassCard({ reference, issued }: { reference: string; issued: string }) {
+/**
+ * The pass itself (handoff 1j): who it is shown for (`who`, from `PassPeople`), the code area and
+ * the reference in groups of four, monospace, digits in floodlight. The scannable code is
+ * **Pending decision** DEC-023: the area says so ("Scannable code proposed") and draws no pattern,
+ * so nothing that looks like a working code is shown. Under the card: "Works offline · show at the
+ * front desk" and when the pass was issued.
+ */
+export function PassCard({
+  reference,
+  issued,
+  who,
+}: {
+  reference: string;
+  issued: string;
+  who?: ReactNode;
+}) {
   const styles = useStyles();
   const { colors } = useTheme();
   return (
-    <NightCard fill testID="pass-card">
-      <View style={[styles.top, styles.plate]}>
-        <Icon name="sports_soccer" size={22} color={colors.floodlight} />
-        <Text variant="label" tone="inverse">
-          Facility pass
-        </Text>
+    <View>
+      <View style={styles.card} testID="pass-card">
+        {who}
+        <View style={styles.codeArea} testID="pass-code-area">
+          <Icon name="qr_code_2" size={96} color={colors.skeleton} />
+          <View style={styles.proposed}>
+            <Text style={styles.proposedText}>◷ Scannable code proposed</Text>
+          </View>
+        </View>
+        <View
+          style={styles.reference}
+          accessible
+          // Spelled out, so VoiceOver and TalkBack read the reference itself (SPK-UX-009).
+          accessibilityLabel={referenceLabel(reference)}
+          testID="pass-reference"
+        >
+          <Text tabular selectable style={styles.referenceText}>
+            {groupReference(reference)
+              .split(' ')
+              .map((group, g) => (
+                // Plain nested spans: they inherit the reference's face and colour.
+                <RNText key={`${group}-${g}`}>
+                  {g > 0 ? '  ' : ''}
+                  {referenceRuns(group).map(([run, digits], r) =>
+                    digits ? (
+                      <RNText key={r} style={styles.digits}>
+                        {run}
+                      </RNText>
+                    ) : (
+                      run
+                    ),
+                  )}
+                </RNText>
+              ))}
+          </Text>
+        </View>
       </View>
-      <View
-        style={[styles.reference, styles.plate]}
-        accessible
-        // Spelled out, so VoiceOver and TalkBack read the reference itself (SPK-UX-009).
-        accessibilityLabel={referenceLabel(reference)}
-        testID="pass-reference"
-      >
-        <Text tabular selectable style={styles.referenceText}>
-          {groupReference(reference)
-            .split(' ')
-            .map((group, g) => (
-              // Plain nested spans: they inherit the reference's face and colour.
-              <RNText key={`${group}-${g}`}>
-                {g > 0 ? ' ' : ''}
-                {referenceRuns(group).map(([run, digits], r) =>
-                  digits ? (
-                    <RNText key={r} style={styles.digits}>
-                      {run}
-                    </RNText>
-                  ) : (
-                    run
-                  ),
-                )}
-              </RNText>
-            ))}
-        </Text>
-      </View>
-      <View style={[styles.bottom, styles.plate]} testID="pass-words">
-        <Text variant="title3" tone="inverse">
-          Show this at the front desk
-        </Text>
+      <View style={styles.bottom} testID="pass-words">
         <View style={styles.chip}>
-          <Icon name="wifi_off" size={18} color={colors.floodlight} />
+          <Icon name="wifi_off" size={16} color={colors.floodlight} />
           <Text variant="footnote" tone="inverse" style={styles.chipText}>
-            Works offline
+            Works offline · show at the front desk
           </Text>
         </View>
         <Text variant="footnote" style={styles.issued} testID="pass-issued">
           {issued}
         </Text>
       </View>
-    </NightCard>
+    </View>
   );
 }
 
-const useStyles = makeStyles(({ colors, dark }) => ({
+const useStyles = makeStyles(({ colors, dark, toneBackgrounds }) => ({
   card: {
+    marginHorizontal: layout.gutter,
+    marginTop: spacing.lg,
+    paddingVertical: spacing.xl,
+    paddingHorizontal: spacing.lg,
+    gap: spacing.lg,
+    borderRadius: radius.xl,
+    ...continuousCorners,
+    overflow: 'hidden',
+    backgroundColor: colors.nightRaised,
+    borderWidth: 1,
+    borderColor: dark ? colors.nightLine : colors.nightLine,
+  },
+  nightCard: {
     marginHorizontal: layout.gutter,
     marginTop: spacing.sm,
     padding: spacing.xl,
@@ -192,10 +222,8 @@ const useStyles = makeStyles(({ colors, dark }) => ({
     ...continuousCorners,
     overflow: 'hidden',
     backgroundColor: colors.night,
-    // A hairline keeps the pass's edge on a page that is itself dark (Legends mode).
     borderWidth: 1,
-    borderColor: dark ? colors.nightLine : colors.night,
-    justifyContent: 'space-between',
+    borderColor: colors.nightLine,
   },
   top: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   // A solid plate of the card's colour behind words, so no pitch line crosses them.
@@ -207,18 +235,36 @@ const useStyles = makeStyles(({ colors, dark }) => ({
     paddingVertical: spacing.xs,
     marginHorizontal: -spacing.sm,
   },
-  reference: { paddingVertical: spacing.md },
+  reference: { alignItems: 'center', paddingTop: spacing.xs },
   referenceText: {
     ...tabular(type.largeTitle),
     fontFamily: REFERENCE_FONT,
     fontWeight: '700',
-    fontSize: 40,
-    lineHeight: 50,
-    letterSpacing: 0.5,
+    fontSize: 26,
+    lineHeight: 34,
+    letterSpacing: 1,
     color: colors.onNight,
+    textAlign: 'center',
   },
+  codeArea: {
+    alignSelf: 'center',
+    width: '78%',
+    aspectRatio: 1,
+    maxWidth: 280,
+    borderRadius: radius.lg,
+    backgroundColor: colors.onNight,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+  },
+  proposed: {
+    paddingHorizontal: spacing.sm,
+    borderRadius: radius.pill,
+    backgroundColor: toneBackgrounds.pending,
+  },
+  proposedText: { ...fonts.bold, fontSize: 11, lineHeight: 18, color: colors.pending },
   digits: { color: colors.floodlight },
-  bottom: { gap: spacing.md },
+  bottom: { gap: spacing.sm, alignItems: 'center', marginTop: spacing.lg },
   chip: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -232,5 +278,5 @@ const useStyles = makeStyles(({ colors, dark }) => ({
     borderColor: colors.nightLine,
   },
   chipText: { ...fonts.semibold },
-  issued: { color: colors.onNightBody },
+  issued: { color: colors.nightText, textAlign: 'center' },
 }));

@@ -92,6 +92,16 @@ export const SUSPENSION_CARD_REMOVED = {
   severity: 'warning',
 } as const;
 
+/**
+ * S 4d (SPK-DISC-001, SPK-UX-006): a reported injury is an issue on Today until a manager reviews
+ * it. A fixture's goes to league management; a program session's to the program managers (the
+ * service names that queue). The title carries the reporter's safe summary, never the narrative.
+ */
+export const INJURY_REPORTED = {
+  category: 'competition.injury_incident',
+  ownerQueue: 'league_manager',
+} as const;
+
 /** CMP-12: the reason recorded when a correction overturns a proposed card suspension. */
 export const CARD_REMOVED_OVERTURN_REASON = 'card removed by correction';
 

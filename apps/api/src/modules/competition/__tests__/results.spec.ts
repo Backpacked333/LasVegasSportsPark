@@ -49,6 +49,7 @@ describe('results, standings and brackets (SPK-RESULT-001..004, SPK-STAFF-005, Â
   const assignments: AssignmentCheckPort = {
     isAcceptedOfficial: async (_organizationId, fixtureId, personId) =>
       accepted.has(`${fixtureId}:${personId}`),
+    sessionCoverage: async () => null,
   };
 
   async function teamOf(name: string): Promise<Team> {

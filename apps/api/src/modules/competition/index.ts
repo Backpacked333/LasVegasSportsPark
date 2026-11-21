@@ -9,6 +9,8 @@ export * from './competition-matches.ports';
 export * from './competition-matches.state-machines';
 export * from './competition-field.actions';
 export * from './competition-field.events';
+export * from './competition-lineups.actions';
+export * from './competition-lineups.events';
 export {
   proposedRuleSetContent,
   TEAM_INVITATION_DEFAULT_HOURS,
@@ -44,6 +46,7 @@ export { FixturesService } from './services/fixtures.service';
 export { TeamAuthority } from './services/team-authority.service';
 export { InMemoryReadinessCheckRegistry } from './services/readiness-check.registry';
 export { ResultsService } from './services/results.service';
+export { LineupsService } from './services/lineups.service';
 export { StandingsService } from './services/standings.service';
 export { BracketsService, type CorrectionImpact } from './services/brackets.service';
 export { DisciplineService } from './services/discipline.service';

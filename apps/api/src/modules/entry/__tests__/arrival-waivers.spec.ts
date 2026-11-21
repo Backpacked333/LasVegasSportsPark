@@ -188,6 +188,102 @@ describe('arrival checks with required waivers (SPK-REG-011, proposed)', () => {
     ]);
   });
 
+  it("S 2a SPK-ENTRY-004 / SPK-ENTRY-003: the pass scan answers each activity's arrival checks (a blocking missing waiver) before anyone is checked in, and records nothing", async () => {
+    const policyKey = waiverKey();
+    const version = await waiver(policyKey, { enforcement: 'block' });
+    const p = await programRequiring(policyKey);
+    const blocked = await createPersonFixture(t, { kind: 'child' });
+    const clear = await createPersonFixture(t, { kind: 'child' });
+    const household = await post(t, '/v1/households', desk, { name: 'Desk household' });
+    expect(household.status, JSON.stringify(household.body)).toBe(201);
+    for (const child of [blocked, clear]) {
+      await createRelationshipFixture(t, {
+        actorPersonId: fam.guardian.personId,
+        subjectPersonId: child,
+      });
+      await enroll(t, p, child, fam.guardian.personId);
+      const added = await post(t, `/v1/households/${household.body.id as string}/members`, desk, {
+        personId: child,
+      });
+      expect(added.status, JSON.stringify(added.body)).toBe(201);
+    }
+    // The second child's waiver is accepted by the guardian: nothing blocks them.
+    const accepted = await t.http
+      .post('/v1/waiver-acceptances')
+      .set(fam.guardian.header)
+      .set('Idempotency-Key', key())
+      .send({ subjectPersonId: clear, policyKey });
+    expect(accepted.status, JSON.stringify(accepted.body)).toBe(201);
+    const issued = await post(t, '/v1/passes', desk, {
+      holder: { kind: 'household', householdId: household.body.id },
+    });
+    expect(issued.status, JSON.stringify(issued.body)).toBe(201);
+
+    const scan = await post(t, '/v1/passes/scan', desk, {
+      reference: issued.body.reference,
+      facilityId: t.facilityId,
+    });
+    expect(scan.status, JSON.stringify(scan.body)).toBe(200);
+    expect(scan.body.recorded).toBe('nothing');
+    const issuesOf = (personId: string) =>
+      (
+        scan.body.people as Array<{
+          personId: string;
+          activities: Array<{ activity: { id: string }; issues: Issue[] }>;
+        }>
+      ).find((person) => person.personId === personId)?.activities[0]?.issues ?? [];
+    expect(issuesOf(blocked).filter((i) => i.severity === 'blocking')).toEqual([
+      {
+        code: 'waiver_missing',
+        severity: 'blocking',
+        message: '"Liability waiver" has not been accepted for this participant.',
+        nextAction: 'accept_waiver',
+        reference: { type: 'policy_version', id: version },
+      },
+    ]);
+    // Cleared: only the not-yet-arrived warning, which never blocks.
+    expect(issuesOf(clear).filter((i) => i.severity === 'blocking')).toEqual([]);
+    expect(issuesOf(clear).map((i) => i.code)).toContain('not_on_site');
+    // The scan recorded nothing: no check-in exists for either child.
+    const checkins = await t.db
+      .selectFrom('session_checkins')
+      .select('id')
+      .where('person_id', 'in', [blocked, clear])
+      .execute();
+    expect(checkins).toEqual([]);
+
+    // S 2a "search by name instead": the household found by name opens the same selection and the
+    // same checks as its pass, and records nothing either.
+    const lookup = await post(t, '/v1/arrival-lookups', desk, {
+      facilityId: t.facilityId,
+      holder: { kind: 'household', householdId: household.body.id },
+    });
+    expect(lookup.status, JSON.stringify(lookup.body)).toBe(200);
+    expect(lookup.body.recorded).toBe('nothing');
+    expect(lookup.body.holder).toEqual({ kind: 'household', householdId: household.body.id });
+    expect(lookup.body.people).toEqual(scan.body.people);
+    // A person found by name opens themselves and the people they may view.
+    const byPerson = await post(t, '/v1/arrival-lookups', desk, {
+      facilityId: t.facilityId,
+      holder: { kind: 'person', personId: fam.guardian.personId },
+    });
+    expect(byPerson.status, JSON.stringify(byPerson.body)).toBe(200);
+    const ids = (byPerson.body.people as Array<{ personId: string }>).map((x) => x.personId);
+    expect(ids).toEqual(expect.arrayContaining([fam.guardian.personId, blocked, clear]));
+    // Authorized as a scan: a customer may not open the desk selection, and an unknown household
+    // reads as not found.
+    const denied = await post(t, '/v1/arrival-lookups', fam.guardian, {
+      facilityId: t.facilityId,
+      holder: { kind: 'household', householdId: household.body.id },
+    });
+    expect(denied.status).toBe(403);
+    const unknown = await post(t, '/v1/arrival-lookups', desk, {
+      facilityId: t.facilityId,
+      holder: { kind: 'household', householdId: newId() },
+    });
+    expect(unknown.status).toBe(404);
+  });
+
   it('SPK-REG-011: check-in shows a lapsed waiver under both renewal rules, and nothing for a current one', async () => {
     // rule 1: the version in force requires re-acceptance of a new version
     const versionKey = waiverKey();

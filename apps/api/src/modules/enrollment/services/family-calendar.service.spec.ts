@@ -12,6 +12,7 @@ const item = (id: string, personId: string, start: string, end: string): FamilyC
   offeringId: '01a16c09-0000-7000-8000-0000000000aa',
   sessionId: null,
   title: 'Activity',
+  place: null,
   start,
   end,
   status: 'confirmed',

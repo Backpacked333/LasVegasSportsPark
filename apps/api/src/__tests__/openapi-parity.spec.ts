@@ -27,6 +27,8 @@ const HEADER_FREE = [
   // Read-only: counts the recipients an audience resolves to (communications composer).
   'POST /notification-audience-counts',
   'POST /passes/scan',
+  // Read-only: a family found by name at the desk opens what a scan of their pass would (S 2a).
+  'POST /arrival-lookups',
   'POST /releases/collector-checks',
   'POST /webhooks/payments/{provider}',
   'POST /webhooks/messaging/{provider}',

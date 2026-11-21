@@ -2,6 +2,8 @@ import { Inject, Injectable } from '@nestjs/common';
 import {
   errors,
   newId,
+  type AuthorizedCollectors,
+  type AuthorizedCollectorsQuery,
   type CollectorCheck,
   type CollectorCheckBody,
   type CollectorRestriction,
@@ -364,6 +366,90 @@ export class ReleasesService {
       return {
         mayCollect: true,
         collector: { personId: holder.id, displayName: name?.displayName ?? '' },
+        checkedAt: checkedAt.toISOString(),
+        restrictions,
+      };
+    });
+  }
+
+  /**
+   * GET /v1/releases/authorized-collectors (S 3g, SPK-ENTRY-007, SCR-W-09). The assigned coach
+   * (an accepted assignment, StaffScope) or the pickup desk lists the adults who hold `collect`
+   * over one participant of the activity now, to match the person in front of them; the family
+   * manages that list (identity grants). Names only: no contact, relationship or other permission
+   * is returned, and a participant outside the activity reads as not found, so the read reveals
+   * nothing about anyone else's child (§4.10, §4.14). Reading it records nothing; the release
+   * re-checks authority when it is recorded (`POST /v1/releases`), so an adult removed from the
+   * list in the meantime is denied then.
+   */
+  async authorizedCollectors(
+    principal: Principal,
+    query: AuthorizedCollectorsQuery,
+  ): Promise<AuthorizedCollectors> {
+    const organizationId = organizationOf(principal);
+    const ref =
+      query.activityType === 'session'
+        ? query.offeringId
+          ? { type: 'session' as const, offeringId: query.offeringId, sessionId: query.activityId }
+          : null
+        : { type: 'event' as const, eventId: query.activityId };
+    if (!ref) throw errors.validation('offeringId is required for a session activity.');
+    const activity = await this.resolver.resolve(organizationId, ref);
+    await this.scope.requireForActivity(
+      principal,
+      EntryActions.recordRelease,
+      EntryActions.recordAssignedRelease,
+      activity,
+    );
+    const checkedAt = this.clock.now();
+    return this.uow.run(async ({ trx }) => {
+      const participant = await this.people.findPerson(
+        organizationId,
+        query.participantPersonId,
+        trx,
+      );
+      if (
+        !participant ||
+        participant.status !== 'active' ||
+        !(await this.takesPart(trx, organizationId, participant.id, activity))
+      ) {
+        throw errors.protectedNotFound('person');
+      }
+      const restrictions: CollectorRestriction[] = [
+        {
+          code: 'authority_rechecked_at_release',
+          message: 'Pickup authority is checked again when the release is recorded.',
+        },
+      ];
+      if (participant.kind !== 'child') {
+        restrictions.push({
+          code: 'not_a_child',
+          message: 'Supervised release applies to a child; this participant is not one.',
+        });
+      }
+      const holders = (
+        await this.authority.actorsWithPermission(organizationId, participant.id, 'collect', trx)
+      ).filter((id) => id !== participant.id);
+      const names = await this.people.displayNames(organizationId, holders, trx);
+      const collectors: AuthorizedCollectors['collectors'] = [];
+      for (const personId of holders) {
+        const person = await this.people.findPerson(organizationId, personId, trx);
+        const name = names.get(personId);
+        if (!person || person.status !== 'active' || !name) continue;
+        collectors.push({
+          personId,
+          givenName: name.givenName,
+          familyName: name.familyName,
+          displayName: name.displayName,
+        });
+      }
+      collectors.sort(
+        (a, b) =>
+          a.familyName.localeCompare(b.familyName) || a.givenName.localeCompare(b.givenName),
+      );
+      return {
+        participantPersonId: participant.id,
+        collectors,
         checkedAt: checkedAt.toISOString(),
         restrictions,
       };

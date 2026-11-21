@@ -84,6 +84,20 @@ export interface DateStripProps {
   firstDayOfWeek?: 0 | 1;
   /** The shown week changed (to fetch its items): its first day. */
   onWeekChange?: (weekStart: string) => void;
+  /**
+   * Coloured dots per day instead of the single dot (handoff M 1h: one dot per person in their
+   * person colour). Each day maps to its dots' colours, and to the words read with the day
+   * (`dayWords`, "Maya, Leo"), so a dot is never the only cue.
+   */
+  dayDots?: Readonly<Record<string, readonly { color: string; selectedColor: string }[]>>;
+  dayWords?: Readonly<Record<string, string>>;
+  /**
+   * `card` (handoff M 1h): the days sit in one white card, the selected day night-filled with its
+   * weekday letter in floodlight. `plain` (default) is the original strip.
+   */
+  variant?: 'plain' | 'card';
+  /** Hide "Today" while the shown week holds today and today is selected (handoff M 1h row 5). */
+  hideTodayWhenShown?: boolean;
   /** The strip's accessible name. */
   label?: string;
   previousLabel?: string;
@@ -102,6 +116,10 @@ export function DateStrip({
   markedLabel = 'has activities',
   firstDayOfWeek = 0,
   onWeekChange,
+  dayDots,
+  dayWords,
+  variant = 'plain',
+  hideTodayWhenShown = false,
   label = 'Choose a day',
   previousLabel = 'Previous week',
   nextLabel = 'Next week',
@@ -150,6 +168,7 @@ export function DateStrip({
   }, [start, direction, duration, motion.reduced, offset]);
   const slide = useAnimatedStyle(() => ({ transform: [{ translateX: offset.value }] }));
 
+  const card = variant === 'card';
   const marked = new Set(markedDates);
   const days = Array.from({ length: 7 }, (_, i) => addIsoDays(start, i));
 
@@ -165,17 +184,20 @@ export function DateStrip({
         <Text style={styles.month} accessibilityRole="header">
           {weekTitle(start)}
         </Text>
-        <Pressable
-          onPress={() => {
-            showWeek(weekStartOf(todayIso, firstDayOfWeek));
-            pick(todayIso);
-          }}
-          accessibilityRole="button"
-          accessibilityLabel={todayLabel}
-          style={({ pressed }) => [styles.todayButton, pressed ? styles.pressed : null]}
-        >
-          <Text style={styles.todayText}>{todayLabel}</Text>
-        </Pressable>
+        {hideTodayWhenShown && value === todayIso && days.includes(todayIso) ? null : (
+          <Pressable
+            onPress={() => {
+              showWeek(weekStartOf(todayIso, firstDayOfWeek));
+              pick(todayIso);
+            }}
+            accessibilityRole="button"
+            accessibilityLabel={todayLabel}
+            style={({ pressed }) => [styles.todayButton, pressed ? styles.pressed : null]}
+            testID={testID ? `${testID}-today` : undefined}
+          >
+            <Text style={styles.todayText}>{todayLabel}</Text>
+          </Pressable>
+        )}
         <Pressable
           onPress={() => showWeek(addIsoDays(start, -7))}
           accessibilityRole="button"
@@ -194,18 +216,19 @@ export function DateStrip({
         </Pressable>
       </View>
       <Animated.View
-        style={[styles.days, slide]}
+        style={[styles.days, card ? styles.daysCard : null, slide]}
         accessibilityLabel={label}
         testID={testID ? `${testID}-days` : 'date-strip-days'}
       >
         {days.map((day) => {
           const selected = day === value;
           const isToday = day === todayIso;
-          const hasItems = marked.has(day);
+          const dots = dayDots?.[day] ?? [];
+          const hasItems = marked.has(day) || dots.length > 0;
           const name = [
             fullDateName(day, false),
             isToday ? 'today' : null,
-            hasItems ? markedLabel : null,
+            dayWords?.[day] ?? (hasItems ? markedLabel : null),
           ]
             .filter(Boolean)
             .join(', ');
@@ -219,23 +242,48 @@ export function DateStrip({
               accessibilityState={{ selected }}
               style={({ pressed }) => [
                 styles.day,
-                isToday && !selected ? styles.today : null,
-                selected ? styles.selected : null,
+                card ? styles.dayCard : null,
+                isToday && !selected && !card ? styles.today : null,
+                selected ? (card ? styles.selectedCard : styles.selected) : null,
                 pressed && !selected ? styles.pressed : null,
               ]}
             >
-              <Text style={[styles.weekday, selected ? styles.onSelected : null]}>
-                {weekday.slice(0, 3)}
+              <Text
+                style={[
+                  styles.weekday,
+                  selected ? (card ? styles.weekdayOnNight : styles.onSelected) : null,
+                ]}
+              >
+                {card ? weekday.slice(0, 1) : weekday.slice(0, 3)}
               </Text>
-              <Text style={[styles.date, selected ? styles.onSelected : null]}>
+              <Text
+                style={[
+                  styles.date,
+                  selected ? (card ? styles.dateOnNight : styles.onSelected) : null,
+                ]}
+              >
                 {Number(day.slice(8, 10))}
               </Text>
-              <View
-                style={[
-                  styles.dot,
-                  hasItems ? (selected ? styles.dotOnSelected : styles.dotOn) : null,
-                ]}
-              />
+              {dayDots ? (
+                <View style={styles.dots}>
+                  {dots.slice(0, 3).map((dot, index) => (
+                    <View
+                      key={index}
+                      style={[
+                        styles.dot,
+                        { backgroundColor: selected ? dot.selectedColor : dot.color },
+                      ]}
+                    />
+                  ))}
+                </View>
+              ) : (
+                <View
+                  style={[
+                    styles.dot,
+                    hasItems ? (selected ? styles.dotOnSelected : styles.dotOn) : null,
+                  ]}
+                />
+              )}
             </Pressable>
           );
         })}
@@ -284,6 +332,18 @@ const useStyles = makeStyles(({ colors }) => ({
   date: { ...tabular(type.heading), color: colors.text },
   onSelected: { color: colors.primaryText },
   dot: { width: 6, height: 6, borderRadius: 3 },
+  dots: { flexDirection: 'row', gap: 2, height: 6 },
+  daysCard: {
+    padding: 6,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.background,
+  },
+  dayCard: { minHeight: 66, gap: spacing.xs, paddingVertical: spacing.sm, borderWidth: 0 },
+  selectedCard: { backgroundColor: colors.night },
+  weekdayOnNight: { ...fonts.semibold, color: colors.floodlight },
+  dateOnNight: { color: colors.onNight },
   dotOn: { backgroundColor: colors.primary },
   dotOnSelected: { backgroundColor: colors.primaryText },
 }));

@@ -509,12 +509,12 @@ describe('SCR-C-05 the pass card (ADR-008, PA-11)', () => {
       { stored: STORED },
     );
     expect(await screen.findByText(groupReference(REF_ONE))).toBeOnTheScreen();
-    expect(screen.getByText('Show this at the front desk')).toBeOnTheScreen();
+    expect(screen.getByText('Works offline · show at the front desk')).toBeOnTheScreen();
     expect(truncatedTexts(screen)).toEqual([]);
     fontScale.mockRestore();
   });
 
-  it('SPK-ENTRY-002 ADR-008: shows the reference in large tabular figures on a night card, with "Show this at the front desk" and "Works offline"', async () => {
+  it('handoff 1j, SPK-ENTRY-002: the full-screen night pass: title and ✕, the reference in groups of four, monospace, digits in floodlight, the scannable code proposed, "Works offline · show at the front desk"', async () => {
     setup(
       { 'GET /me': ok(me()), 'GET /me/passes': myPasses(listed(PASS_ONE)) },
       { stored: STORED },
@@ -522,7 +522,7 @@ describe('SCR-C-05 the pass card (ADR-008, PA-11)', () => {
     const reference = await screen.findByText(groupReference(REF_ONE));
     const style = StyleSheet.flatten(reference.props.style) as TextStyle;
     expect(style.fontVariant).toEqual(['tabular-nums']);
-    expect(style.fontSize).toBeGreaterThanOrEqual(40);
+    expect(style.fontSize).toBeGreaterThanOrEqual(26);
     // A monospaced face (distinct l, I, 1 and O, 0), in groups of four; the digits stand out.
     expect(style.fontFamily).toBe('Menlo');
     expect(groupReference('spp_OQ0lI1x')).toBe('spp_ OQ0l I1x');
@@ -531,24 +531,18 @@ describe('SCR-C-05 the pass card (ADR-008, PA-11)', () => {
       ['0', true],
       ['l', false],
     ]);
+    expect(screen.getByRole('header', { name: 'Facility pass' })).toBeOnTheScreen();
+    expect(screen.getByRole('button', { name: 'Close' })).toBeOnTheScreen();
+    const page = StyleSheet.flatten(screen.getByTestId('pass-content').props.style) as ViewStyle;
+    expect(page.backgroundColor).toBe(classicTheme.colors.night);
     const card = screen.getByTestId('pass-card');
-    // Solid plates of the card's colour behind the words: no pitch line runs through the
-    // reference or the "Issued" line.
-    const plateColour = (id: string) =>
-      (StyleSheet.flatten(within(card).getByTestId(id).props.style) as ViewStyle).backgroundColor;
-    expect(plateColour('pass-reference')).toBe(classicTheme.colors.night);
-    expect(plateColour('pass-words')).toBe(classicTheme.colors.night);
-    expect(within(screen.getByTestId('pass-words')).getByTestId('pass-issued')).toBeOnTheScreen();
-    expect(within(card).getByText('Show this at the front desk')).toBeOnTheScreen();
-    expect(within(card).getByText('Works offline')).toBeOnTheScreen();
-    expect(within(card).getByTestId('pass-issued')).toHaveTextContent(
+    // DEC-023: no pattern that looks like a working code, only the proposed note.
+    expect(within(card).getByText('◷ Scannable code proposed')).toBeOnTheScreen();
+    expect(within(screen.getByTestId('pass-words')).getByTestId('pass-issued')).toHaveTextContent(
       'Issued Thu, Oct 22, 10:00 AM PDT (1 day ago).',
     );
-    // The pitch lines are decorative: hidden from screen readers.
-    expect(
-      within(card).getByTestId('pass-pitch-lines', { includeHiddenElements: true }),
-    ).toHaveProp('importantForAccessibility', 'no-hide-descendants');
-    // Nothing on the card names the holder (SPK-ENTRY-002).
+    expect(screen.getByText('Works offline · show at the front desk')).toBeOnTheScreen();
+    // Nothing on the card names a holder who has no household to choose from (SPK-ENTRY-002).
     expect(within(card).queryByText(/Alex|Morgan/)).toBeNull();
   });
 

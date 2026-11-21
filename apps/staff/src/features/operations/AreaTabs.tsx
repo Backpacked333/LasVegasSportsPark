@@ -32,13 +32,15 @@ export function AreaTabs({ label, tabs }: { label: string; tabs: readonly AreaTa
 }
 
 export const ARRIVAL_TABS: readonly AreaTab[] = [
-  { path: '/arrival', title: 'Arrival scanner', end: true },
+  { path: '/arrival', title: 'Arrival desk', end: true },
+  { path: '/arrival/select', title: 'One by one' },
   { path: '/arrival/attendance', title: 'Session attendance' },
   { path: '/arrival/release', title: 'Supervised release' },
   { path: '/arrival/offline', title: 'Offline queue' },
 ];
 
 export const STAFF_TABS: readonly AreaTab[] = [
+  { path: '/staff/week', title: 'Team week' },
   { path: '/staff', title: 'Assignments and replacement', end: true },
   { path: '/staff/availability', title: 'Availability and qualifications' },
   { path: '/staff/fees', title: 'Fee and hours approvals' },

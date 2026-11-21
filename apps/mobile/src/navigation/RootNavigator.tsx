@@ -67,7 +67,7 @@ export function RootNavigator() {
         <Stack screenOptions={screenOptions}>
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
           <Stack.Screen name="pass" options={{ title: 'Facility pass', presentation: 'modal' }} />
-          <Stack.Screen name="inbox" options={{ title: 'Notifications' }} />
+          <Stack.Screen name="inbox" options={{ title: 'Inbox' }} />
           <Stack.Screen name="sign-in" options={{ title: 'Sign in' }} />
           <Stack.Screen name="onboarding" options={{ title: 'Account setup' }} />
           <Stack.Screen name="recovery" options={{ title: 'Account recovery' }} />
@@ -82,7 +82,8 @@ export function RootNavigator() {
           <Stack.Screen name="registration/checkout/[quoteId]" options={{ title: 'Checkout' }} />
           <Stack.Screen name="payments/index" options={{ title: 'Payments' }} />
           <Stack.Screen name="enrollments/index" options={{ title: 'Registrations' }} />
-          <Stack.Screen name="fixtures/[id]" options={{ title: 'Game' }} />
+          {/* Game day draws its own back button and title on the team's band (handoff M 1i). */}
+          <Stack.Screen name="fixtures/[id]" options={{ title: 'Game', headerShown: false }} />
           <Stack.Screen name="sessions/[sessionId]" options={{ title: 'Activity' }} />
           {/* Package G (conditional, behind their capability switches; reached from Account). */}
           <Stack.Screen name="bookings/index" options={{ title: 'Rentals and parties' }} />
@@ -91,6 +92,17 @@ export function RootNavigator() {
           <Stack.Screen name="memberships/index" options={{ title: 'Memberships' }} />
           <Stack.Screen name="session-packages/index" options={{ title: 'Class packs' }} />
           <Stack.Screen name="pos-receipts/index" options={{ title: 'In-person receipts' }} />
+          {/* Parent-app redesign Phase 3 (handoff M 3e, 5c, 3h, 4c, 4d, 4a, 4b). */}
+          <Stack.Screen name="people/[id]/index" options={{ title: '' }} />
+          <Stack.Screen
+            name="people/[id]/care-notes"
+            options={{ headerShown: false, presentation: 'modal', gestureEnabled: false }}
+          />
+          <Stack.Screen name="people/new" options={{ headerShown: false, presentation: 'modal' }} />
+          <Stack.Screen name="notifications" options={{ title: 'Notifications' }} />
+          <Stack.Screen name="messages/coach" options={{ headerShown: false }} />
+          <Stack.Screen name="payments/receipt/[paymentId]" options={{ title: '' }} />
+          <Stack.Screen name="payments/all" options={{ title: 'All payments' }} />
           <Stack.Screen name="+not-found" options={{ title: 'Not available' }} />
         </Stack>
         {DemoOverlay ? <DemoOverlay /> : null}

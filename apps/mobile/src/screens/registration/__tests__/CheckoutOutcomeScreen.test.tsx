@@ -19,6 +19,7 @@ import {
   familyRoutes,
   line,
   offering,
+  offeringSession,
   operation,
   payment,
 } from '../../../features/registration/testing/fixtures';
@@ -73,48 +74,57 @@ function renderOutcome(options: Parameters<typeof createRegistrationTestApp>[0] 
 }
 
 describe('SCR-C-15 CheckoutOutcomeScreen', () => {
-  it('SPK-UX-004: names each line\'s confirmed state, keeping "awaiting placement" distinct from "confirmed"', async () => {
+  it('handoff 1g, SPK-UX-004: Done says who is in and what happens next: the calendar, team placement still to come, Done goes Home', async () => {
     const app = renderOutcome({
       progress: { pendingCheckoutQuoteId: IDS.quote },
-      routes: routes(),
+      routes: routes({
+        'GET /offerings/{id}/sessions': {
+          status: 200,
+          body: [
+            offeringSession({
+              scheduledStart: '2026-11-07T17:00:00.000Z',
+              scheduledEnd: '2026-11-07T18:00:00.000Z',
+            }),
+            offeringSession({
+              id: IDS.lineB,
+              sequence: 2,
+              scheduledStart: '2026-11-14T17:00:00.000Z',
+              scheduledEnd: '2026-11-14T18:00:00.000Z',
+            }),
+          ],
+        },
+      }),
     });
-    expect(await screen.findByLabelText('Registration complete')).toBeOnTheScreen();
+    expect(await screen.findByTestId('register-done')).toBeOnTheScreen();
+    expect(screen.getByLabelText('Confirmed')).toBeOnTheScreen();
+    expect(screen.getByRole('header', { name: 'Ada and Ben are in.' })).toBeOnTheScreen();
     expect(
-      await screen.findByLabelText(
-        'Ada: Autumn Youth Program. Confirmed in Autumn Youth Program. Awaiting placement.',
-      ),
+      await screen.findByLabelText('2 Saturdays added to Calendar. First: Sat, Nov 7, 9:00 AM'),
     ).toBeOnTheScreen();
+    // The API's placement is still open: no date of our own, only "before the first game".
     expect(
-      screen.getByLabelText('Ben: Autumn Youth Program. Confirmed in Autumn Youth Program'),
+      await screen.findByLabelText("Team placement. ◷ We'll tell you before the first game"),
     ).toBeOnTheScreen();
-    expect(screen.getByLabelText('Request status: Done')).toBeOnTheScreen();
-    expect(screen.getByLabelText('Payment received')).toBeOnTheScreen();
-    expect(screen.getByLabelText('Received: $226.00')).toBeOnTheScreen();
     // The API has this checkout: the device forgets the request it remembered for its quote.
     await waitFor(() => expect(app.progressStore.snapshot().pendingCheckoutQuoteId).toBeNull());
-    fireEvent.press(screen.getByRole('button', { name: 'See it in Calendar' }));
-    expect(mockRouter.push).toHaveBeenCalledWith('/schedule');
+    expect(screen.queryByRole('button', { name: 'Sign forms now' })).toBeNull();
+    fireEvent.press(screen.getByRole('button', { name: 'Done' }));
+    expect(mockRouter.replace).toHaveBeenCalledWith('/');
   });
 
-  it('PA-11 ADR-008: a completed registration shows the success illustration, the exact status, "See it in Calendar" and plays one success haptic', async () => {
+  it('handoff 1g: Done shows the success illustration and plays one success haptic, never again on a re-read', async () => {
     const app = renderOutcome({ routes: routes() });
-    expect(await screen.findByLabelText('Registration complete')).toBeOnTheScreen();
+    expect(await screen.findByLabelText('Confirmed')).toBeOnTheScreen();
     expect(
       screen.getByTestId('outcome-success-art', { includeHiddenElements: true }),
     ).toBeOnTheScreen();
-    // ADR-008: a headline under the picture says what happened.
-    expect(screen.getByRole('header', { name: "You're registered" })).toBeOnTheScreen();
-    expect(screen.getByText("You'll find it in Calendar and under You.")).toBeOnTheScreen();
     await waitFor(() => expect(app.haptics.events).toEqual(['success']));
-    // Re-reads of the same completed checkout never play it again.
     await act(async () => {
       await app.queryClient.invalidateQueries();
     });
     await app.settle();
     expect(app.haptics.events).toEqual(['success']);
-    fireEvent.press(screen.getByRole('button', { name: 'See it in Calendar' }));
-    expect(mockRouter.push).toHaveBeenCalledWith('/schedule');
-    expect(screen.getByRole('button', { name: 'Explore more activities' })).toBeOnTheScreen();
+    expect(screen.getByRole('button', { name: 'Add to phone' })).toBeOnTheScreen();
   });
 
   it('PA-11 ADR-008: before the API reports it complete there is no success illustration, haptic or calendar link', async () => {
@@ -131,8 +141,7 @@ describe('SCR-C-15 CheckoutOutcomeScreen', () => {
       'Payment processing',
     );
     expect(screen.queryByTestId('outcome-success-art', { includeHiddenElements: true })).toBeNull();
-    expect(screen.queryByRole('header', { name: "You're registered" })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'See it in Calendar' })).toBeNull();
+    expect(screen.queryByTestId('register-done')).toBeNull();
     expect(app.haptics.events).not.toContain('success');
     await app.settle();
   });
@@ -160,7 +169,7 @@ describe('SCR-C-15 CheckoutOutcomeScreen', () => {
       app.sources.setForeground(false);
       app.sources.setForeground(true);
     });
-    expect(await screen.findByLabelText('Registration complete')).toBeOnTheScreen();
+    expect(await screen.findByLabelText('Confirmed')).toBeOnTheScreen();
   });
 
   it('SPK-PAY-007: an unknown outcome says do not pay again and offers no new payment', async () => {
@@ -260,7 +269,7 @@ describe('SCR-C-15 CheckoutOutcomeScreen', () => {
       progress: { pendingCheckoutQuoteId: IDS.quote2 },
       routes: routes(),
     });
-    expect(await screen.findByLabelText('Registration complete')).toBeOnTheScreen();
+    expect(await screen.findByLabelText('Confirmed')).toBeOnTheScreen();
     await act(async () => undefined);
     expect(app.progressStore.snapshot().pendingCheckoutQuoteId).toBe(IDS.quote2);
   });
@@ -270,7 +279,7 @@ describe('SCR-C-15 CheckoutOutcomeScreen', () => {
     const listed = ['api', '/me/registration-checkouts', null, { limit: 20 }];
     app.queryClient.setQueryData(listed, { data: { items: [], nextCursor: null } });
     render(<CheckoutOutcomeScreen checkoutId={IDS.checkout} />, { wrapper: app.wrapper });
-    expect(await screen.findByLabelText('Registration complete')).toBeOnTheScreen();
+    expect(await screen.findByLabelText('Confirmed')).toBeOnTheScreen();
     await waitFor(() => expect(app.queryClient.getQueryState(listed)?.isInvalidated).toBe(true));
   });
 
@@ -442,13 +451,13 @@ describe('SCR-C-15 CheckoutOutcomeScreen', () => {
   it('§4.15: offline shows the last known status with its age', async () => {
     let now = new Date('2026-10-24T12:00:00.000Z');
     const app = renderOutcome({ now: () => now, routes: routes() });
-    expect(await screen.findByLabelText('Registration complete')).toBeOnTheScreen();
+    expect(await screen.findByLabelText('Confirmed')).toBeOnTheScreen();
     now = new Date('2026-10-24T12:05:00.000Z');
     act(() => app.sources.setReachable(false));
     // ADR-008: under the app's offline banner the section says its own age and needs on one quiet line.
     expect(
       screen.getByText('Showing information from 5 minutes ago. Needs a connection: Paying again.'),
     ).toBeOnTheScreen();
-    expect(screen.getByLabelText('Registration complete')).toBeOnTheScreen();
+    expect(screen.getByLabelText('Confirmed')).toBeOnTheScreen();
   });
 });

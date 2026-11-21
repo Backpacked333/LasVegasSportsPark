@@ -1,0 +1,409 @@
+/*
+ * Shared primitives of the redesign handoff (Phase 0): Avatar, Toast, Drawer, BottomSheet,
+ * Skeleton, SegmentedControl, OfflineBanner. Every colour is a token of styles.css, so both themes
+ * (classic and Legends) follow. Reduced motion: no slides, no shimmer (styles.css turns every
+ * animation and transition off).
+ */
+
+/* ---------- Avatar ---------- */
+.ui-avatar {
+  --avatar-size: 34px;
+  position: relative;
+  width: var(--avatar-size);
+  height: var(--avatar-size);
+  border-radius: 999px;
+  background: var(--avatar-bg);
+  color: var(--avatar-ink);
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  overflow: hidden;
+  font-weight: 700;
+  font-size: calc(var(--avatar-size) * 0.36);
+  line-height: 1;
+  letter-spacing: 0.01em;
+}
+.ui-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.ui-avatar[data-ring] {
+  overflow: visible;
+  box-shadow:
+    0 0 0 2px var(--card),
+    0 0 0 4px var(--avatar-ring);
+}
+.ui-avatar[data-ring] img {
+  border-radius: 999px;
+}
+
+/* ---------- Toast ---------- */
+.ui-toast-region {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  z-index: 90;
+  width: max-content;
+  max-width: calc(100vw - 32px);
+  pointer-events: none;
+}
+.ui-toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 48px;
+  padding: 6px 8px 6px 18px;
+  border-radius: 999px;
+  background: var(--toast-bg);
+  color: var(--toast-ink);
+  box-shadow: var(--shadow-pop);
+  font-size: 14px;
+  font-weight: 600;
+  animation: ui-toast-in 0.22s ease-out;
+}
+.ui-toast-glyph {
+  color: var(--toast-action);
+  font-weight: 700;
+}
+.ui-toast[data-tone='error'] .ui-toast-glyph {
+  color: var(--night-danger);
+}
+.ui-toast[data-tone='warning'] .ui-toast-glyph {
+  color: var(--night-warn);
+}
+.ui-toast-message {
+  flex: 1;
+  min-width: 0;
+}
+.ui-toast-button {
+  min-height: 36px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--toast-action);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ui-toast-button:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+.ui-toast-button[data-primary] {
+  background: var(--toast-action);
+  color: var(--night);
+}
+.ui-toast-button[data-primary]:hover {
+  background: var(--floodlight-hover);
+}
+.ui-toast-close {
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--night-muted);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+.ui-toast-close:hover {
+  color: var(--toast-ink);
+}
+@keyframes ui-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+}
+/* Phones: above the floating tab bar. */
+@media (max-width: 600px) {
+  .ui-toast-region {
+    bottom: calc(100px + env(safe-area-inset-bottom, 0px));
+  }
+}
+
+/* ---------- Overlays: drawer and sheet ---------- */
+.ui-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  justify-content: flex-end;
+}
+.ui-scrim {
+  position: absolute;
+  inset: 0;
+  background: var(--scrim);
+  animation: ui-fade-in 0.2s ease;
+}
+@keyframes ui-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+.ui-drawer {
+  position: relative;
+  height: 100%;
+  background: var(--card);
+  color: var(--ink);
+  box-shadow: var(--shadow-drawer);
+  display: flex;
+  flex-direction: column;
+  outline: none;
+  animation: ui-drawer-in 0.26s cubic-bezier(0.3, 1, 0.4, 1);
+}
+@keyframes ui-drawer-in {
+  from {
+    transform: translateX(100%);
+  }
+}
+.ui-drawer-head {
+  position: relative;
+  padding: 22px 64px 18px 20px;
+}
+.ui-drawer-head[data-tone='night'] {
+  background: var(--night);
+  color: var(--night-ink);
+}
+.ui-drawer-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--track);
+  color: var(--ink);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+.ui-drawer-head[data-tone='night'] .ui-drawer-close {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+.ui-drawer-close:hover {
+  filter: brightness(1.08);
+}
+.ui-drawer-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 20px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.ui-drawer-foot {
+  border-top: 1px solid var(--line);
+  padding: 14px 20px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  background: var(--card);
+}
+.ui-overlay-sheet {
+  align-items: flex-end;
+  justify-content: stretch;
+}
+.ui-sheet {
+  position: relative;
+  width: 100%;
+  max-height: 88dvh;
+  display: flex;
+  flex-direction: column;
+  background: var(--card);
+  color: var(--ink);
+  border-radius: 28px 28px 0 0;
+  box-shadow: var(--shadow-sheet);
+  outline: none;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  animation: ui-sheet-in 0.32s ease-out;
+  touch-action: none;
+}
+@keyframes ui-sheet-in {
+  from {
+    transform: translateY(100%);
+  }
+}
+.ui-sheet-handle {
+  display: grid;
+  place-items: center;
+  height: 24px;
+  cursor: grab;
+}
+.ui-sheet-handle > span {
+  width: 40px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--line-strong);
+}
+.ui-sheet-head {
+  position: relative;
+  padding: 4px 64px 10px 20px;
+}
+.ui-sheet-head h3 {
+  margin: 0;
+  font-size: 19px;
+  font-weight: 650;
+}
+.ui-sheet-head .ui-drawer-close {
+  top: -4px;
+}
+.ui-sheet-body {
+  overflow-y: auto;
+  padding: 0 20px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  touch-action: pan-y;
+}
+.ui-sheet-foot {
+  padding: 12px 20px 16px;
+  display: flex;
+  gap: 8px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ui-drawer,
+  .ui-sheet {
+    animation: ui-fade-in 0.01s;
+  }
+}
+
+/* ---------- Skeleton ---------- */
+.ui-skeleton {
+  display: block;
+  background: linear-gradient(
+      90deg,
+      var(--skeleton) 0%,
+      var(--skeleton-shine) 50%,
+      var(--skeleton) 100%
+    )
+    0 0 / 200% 100%;
+  animation: ui-shimmer 1.4s ease-in-out infinite;
+}
+.on-night .ui-skeleton {
+  background: rgba(255, 255, 255, 0.08);
+}
+.ui-skeleton-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+@keyframes ui-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+
+/* ---------- Segmented control ---------- */
+.ui-segmented {
+  display: inline-flex;
+  padding: 4px;
+  gap: 2px;
+  border-radius: 999px;
+  background: var(--track);
+}
+.ui-segment {
+  min-height: 32px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+  flex: 1;
+  white-space: nowrap;
+}
+.ui-segment:hover:not([aria-checked='true']):not([disabled]) {
+  background: var(--track-hover);
+}
+.ui-segment[aria-checked='true'] {
+  background: var(--card);
+  color: var(--ink);
+  box-shadow: var(--shadow-chip);
+}
+.ui-segment[disabled] {
+  color: var(--faint);
+  cursor: not-allowed;
+}
+.ui-segmented[data-size='lg'] .ui-segment {
+  min-height: 44px;
+}
+
+/* ---------- Offline banner ---------- */
+.ui-offline-queued {
+  margin-left: auto;
+  font-weight: 700;
+}
+
+/* ---------- Live number flash: a changed value lights up for 1 s ---------- */
+.ui-flash {
+  border-radius: 6px;
+  animation: ui-flash 1s ease-out;
+}
+@keyframes ui-flash {
+  0%,
+  35% {
+    background: var(--flash);
+    color: var(--night);
+  }
+}
+
+/* ---------- Centred dialog (S 3f, S 1b refund note) ---------- */
+.ui-dialog {
+  position: relative;
+  max-height: calc(100dvh - 32px);
+  display: flex;
+  flex-direction: column;
+  background: var(--card);
+  color: var(--ink);
+  border-radius: 28px;
+  box-shadow: var(--shadow-pop);
+  overflow: hidden;
+  outline: none;
+  animation: ui-fade-in 0.2s ease;
+}
+.ui-dialog-head {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 20px 64px 16px 22px;
+  border-bottom: 1px solid var(--line);
+}
+.ui-dialog-head h3 {
+  margin: 0;
+  font-size: 20px;
+  letter-spacing: -0.01em;
+}
+.ui-dialog-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 22px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.ui-dialog-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 22px;
+  border-top: 1px solid var(--line);
+  background: var(--sand-2);
+}

@@ -787,7 +787,7 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
     });
     render(<RegistrationIntentScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
     expect(await screen.findByRole('header', { name: "Who's going?" })).toBeOnTheScreen();
-    expect(screen.getByLabelText('Step 1 of 5, Who')).toBeOnTheScreen();
+    expect(screen.getByLabelText('Step 1 of 3, Who')).toBeOnTheScreen();
     const ben = screen.getByTestId(`participant-${IDS.childB}`);
     // The reasons and the alternative are written inside Ben's card, under his name.
     // PA-11: in customer words, by the reason's code; the staff-only override is not offered.

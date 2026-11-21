@@ -1,481 +1,256 @@
 /**
- * SCR-S-24 Registration queue and approvals (SPK-REG-002, SPK-REG-003, SPK-REG-007): applications
- * awaiting review with their age, eligibility reasons and required actions; accept or decline
- * (a reason is required) before any payment is captured; an eligibility override needs a reason
- * and is audited. Every command sends `expectedRevision` and an idempotency key per intent (§4.9);
- * STALE_REVISION (for example, the applicant withdrew) offers "Reload".
+ * SCR-S-24 Registrations, as the redesign draws it (handoff S 1c triage queue, S 3f decline, S 2c
+ * waitlist offers; SPK-REG-002, SPK-REG-003, SPK-REG-005, SPK-REG-007, SPK-REG-008, SPK-UX-005).
+ * The rail's Registrations opens here (`/registrations`, also `/registrations/queue`).
  *
- * - The approval record stays separate from enrollment, placement and money (SPK-REG-003).
- * - Approval reserves nothing unless an approved policy says so: pending DEC-028/DEC-029.
- * - The default queue is every application waiting for a decision: `awaiting_review` (eligible)
- *   and `submitted` (the API keeps an application that failed eligibility in `submitted`).
- * - Who may override eligibility is pending DEC-066: "Override" is offered on a submitted
- *   application whose evaluation failed (the only state the API accepts it from), and the API
- *   decides (ACCESS_DENIED names the missing permission). Approve is not offered on an ineligible
- *   application without an override.
- * - Lists are the API's keyset pages (`GET /v1/applications`, newest first, ENR-02) with "Load
- *   more", shown in that order and labelled so: the default view lists the two waiting states
- *   apart, each newest first, and never re-sorts a partial set (older applications follow under
- *   "Load more"; the API offers no oldest-first order).
- * - Review deadlines are pending DEC-028 (the API states none), so none is invented. Who may
- *   decide is the API's: the permission names and whether this principal holds them come from
- *   `GET /v1/me/permissions`; the API states no named resolver per application.
+ * Tabs with live counts (INTERACTIONS 1c row 1), kept in the address (`?tab=`):
+ * - Needs a decision (`TriageQueue`): applications waiting for a person, with the reasons, bulk
+ *   decisions, the decision rail and the J/K/X/A/O/D keys.
+ * - Waitlist offers (`WaitlistOffersTab`): offers in flight with their time left.
+ * - Forms missing: activities whose enrollments miss a required form, from reporting's enrollment
+ *   completeness read (`GET /v1/reports/enrollment-completeness`, demand reports: program, league
+ *   and general managers), each opening its enrollments.
+ * - All: every application by status, newest first (`GET /v1/applications`).
+ *
+ * Counts come from the same reads (with "+" while more pages exist); a tab the viewer may not read
+ * shows no count and says so when opened. Approval comes before any payment and reserves no place
+ * unless an approved policy says so (pending DEC-028, DEC-029); who may override eligibility is
+ * pending DEC-066 (the API decides; ACCESS_DENIED names the missing permission).
  */
-import type { Schema } from '@sportspark/api-client';
-import { formatAge } from '@sportspark/api-client';
-import { useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
-import { Link } from 'react-router';
-import { useApiCommand } from '../../api/useApiCommand';
-import { usePermissions } from '../../api/permissions';
+import { useSearchParams, Link } from 'react-router';
 import { useApiPages } from '../../api/useApiPages';
-import { CommandError } from '../../features/registration-finance/CommandError';
-import { EligibilityView } from '../../features/registration-finance/Eligibility';
-import { SelectField, TextArea } from '../../features/registration-finance/fields';
-import {
-  APPLICATION_STATUS,
-  REGISTRATION_INTENT,
-  applicationDecidable,
-} from '../../features/registration-finance/labels';
+import { useApiQuery } from '../../api/useApiQuery';
+import { APPLICATION_STATUS } from '../../features/registration-finance/labels';
 import { OfferingName, PersonName } from '../../features/registration-finance/names';
-import { OfflineCaption, useOnline } from '../../features/registration-finance/offline';
-import { PENDING } from '../../features/registration-finance/pending';
-import { REGISTRATION_LINKS, SectionNav } from '../../features/registration-finance/SectionNav';
-import { useNow } from '../../providers/AppProviders';
-import { Button } from '../../ui/Button';
+import { useApp, useNow } from '../../providers/AppProviders';
+import { Icon } from '../../ui/Icon';
+import { LoadMore } from '../../ui/LoadMore';
+import { PageHeader } from '../../ui/Page';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
-import { LoadMore } from '../../ui/LoadMore';
-import { StatusBadge, type StatusTone } from '../../ui/StatusBadge';
-import { Icon, type IconName } from '../../ui/Icon';
-import { PageHeader } from '../../ui/Page';
+import { StatusBadge } from '../../ui/StatusBadge';
+import { TriageQueue, useDecisionPages } from './TriageQueue';
+import { WaitlistOffersTab } from './WaitlistOffersTab';
+import { waitingLabel } from './triage-model';
 import './registrations.css';
-import { Toolbar } from '../../ui/glass/GlassCard';
+import './triage.css';
 
-type Application = Schema<'Application'>;
-type ApplicationStatus = Schema<'ApplicationStatus'>;
+type Tab = 'decide' | 'offers' | 'forms' | 'all';
 
-const QUEUE_KEY = ['api', '/applications'] as const;
-
-type Mode = 'idle' | 'decline' | 'override';
-
-/** The icon of a request's kind in the approval queue (decorative; the kind is written). */
-const INTENT_ICON: Record<Application['intent'], IconName> = {
-  individual_league: 'sports_soccer',
-  join_team: 'group_add',
-  create_team_entry: 'groups',
-  youth: 'family_restroom',
-  trial: 'event_seat',
-  makeup: 'event_repeat',
-  pickup: 'event_seat',
-  rental_request: 'event',
-  membership: 'badge',
-  package_purchase: 'confirmation_number',
-  party_request: 'cake',
-};
-
-/** Accent of a queue row: an eligibility failure stands out; the badges carry the words. */
-function approvalTone(application: Application): StatusTone {
-  if (application.eligibility && !application.eligibility.eligible && !application.override) {
-    return 'danger';
-  }
-  if (application.status === 'accepted') return 'success';
-  if (application.status === 'declined' || application.status === 'withdrawn') return 'neutral';
-  if (application.eligibility === null) return 'pending';
-  return 'info';
-}
-
-function ApplicationCard({ application }: { application: Application }) {
-  const online = useOnline();
-  const now = useNow();
-  const queryClient = useQueryClient();
-  const [mode, setMode] = useState<Mode>('idle');
-  const [reason, setReason] = useState('');
-  const [reasonError, setReasonError] = useState<string | null>(null);
-  const accept = useApiCommand('post', '/applications/{id}/accept', { invalidate: [QUEUE_KEY] });
-  const decline = useApiCommand('post', '/applications/{id}/decline', { invalidate: [QUEUE_KEY] });
-  const override = useApiCommand('post', '/applications/{id}/override-eligibility', {
-    invalidate: [QUEUE_KEY],
-  });
-  const [last, setLast] = useState<'accept' | 'decline' | 'override' | null>(null);
-  const active =
-    last === 'accept'
-      ? accept
-      : last === 'decline'
-        ? decline
-        : last === 'override'
-          ? override
-          : null;
-  const decidable = applicationDecidable(application.status);
-  const failed = application.eligibility !== null && !application.eligibility.eligible;
-  const canOverride = application.status === 'submitted' && failed && application.override === null;
-  const canApprove = decidable && (!failed || application.override !== null);
-  const busy = accept.isProcessing || decline.isProcessing || override.isProcessing;
-  const subject = application.id;
-
-  const reload = () => {
-    accept.reset();
-    decline.reset();
-    override.reset();
-    void queryClient.invalidateQueries({ queryKey: QUEUE_KEY });
-  };
-  const doAccept = () => {
-    setLast('accept');
-    accept
-      .submit({ path: { id: application.id }, body: { expectedRevision: application.revision } })
-      .catch(() => undefined);
-  };
-  const doWithReason = () => {
-    if (reason.trim() === '') {
-      setReasonError('A reason is required and is kept in the audit history.');
-      return;
-    }
-    setReasonError(null);
-    const command = mode === 'decline' ? decline : override;
-    setLast(mode === 'decline' ? 'decline' : 'override');
-    command
-      .submit({
-        path: { id: application.id },
-        body: { expectedRevision: application.revision, reason: reason.trim() },
-      })
-      .then(() => {
-        setMode('idle');
-        setReason('');
-      })
-      .catch(() => undefined);
-  };
-
-  return (
-    <li
-      aria-labelledby={`application-${subject}`}
-      className="approval"
-      data-tone={approvalTone(application)}
-    >
-      <span className="icon-tile" data-tone={approvalTone(application)} aria-hidden="true">
-        <Icon name={INTENT_ICON[application.intent]} size={20} />
-      </span>
-      <div className="row-text">
-        <span className="type-caps">{REGISTRATION_INTENT[application.intent]}</span>
-        <span className="row-title" id={`application-${subject}`}>
-          <PersonName id={application.participantPersonId} fallback="Participant" />
-          <span className="approval-arrow"> → </span>
-          <OfferingName id={application.offeringId} />
-        </span>
-        <span className="caption">
-          submitted{' '}
-          {application.submittedAt ? formatAge(new Date(application.submittedAt), now) : 'not yet'}{' '}
-          by {application.submittedBy.actorLabel} ({application.submittedBy.kind})
-          {application.requiresApproval ? ' · approval required before payment' : ''}
-        </span>
-        <span className="caption">
-          Review deadline: pending {PENDING.reviewDeadline.ids.join(', ')} (none is set). Resolver:
-          not stated per application.
-        </span>
-        <span className="actions-row">
-          <StatusBadge {...APPLICATION_STATUS[application.status]} />
-        </span>
-        <EligibilityView
-          result={application.eligibility}
-          override={application.override}
-          label="Eligibility"
-        />
-        {application.decisionReason ? (
-          <span className="caption">Decision reason: {application.decisionReason}</span>
-        ) : null}
-      </div>
-      {decidable ? (
-        // Each button is described by its row title, so a screen reader names the application it
-        // acts on (SPK-UX-009).
-        <div className="rf-actions">
-          {canApprove ? (
-            <Button
-              busy={accept.isProcessing}
-              disabled={!online || busy}
-              onClick={doAccept}
-              aria-describedby={`application-${subject}`}
-            >
-              Approve
-            </Button>
-          ) : null}
-          <Button
-            variant="secondary"
-            disabled={!online || busy}
-            onClick={() => setMode('decline')}
-            aria-describedby={`application-${subject}`}
-          >
-            Decline…
-          </Button>
-          {canOverride ? (
-            <Button
-              variant="secondary"
-              disabled={!online || busy}
-              onClick={() => setMode('override')}
-              aria-describedby={`application-${subject}`}
-            >
-              Override eligibility…
-            </Button>
-          ) : null}
-        </div>
-      ) : null}
-      {mode !== 'idle' ? (
-        <form
-          noValidate
-          aria-label={mode === 'decline' ? 'Decline the application' : 'Override eligibility'}
-          onSubmit={(event) => {
-            event.preventDefault();
-            doWithReason();
-          }}
-        >
-          {mode === 'override' ? (
-            <p className="caption">
-              Overrides need specific authority, a reason and audit history (SPK-REG-002). Which
-              roles hold that authority is pending {PENDING.overrideAuthority.ids.join(', ')}{' '}
-              (owner: {PENDING.overrideAuthority.owner}); the API decides.
-            </p>
-          ) : null}
-          <TextArea
-            label={mode === 'decline' ? 'Reason for declining' : 'Reason for the override'}
-            required
-            value={reason}
-            onChange={setReason}
-            error={reasonError}
-          />
-          <div className="rf-actions">
-            <Button type="submit" busy={busy} disabled={!online}>
-              {mode === 'decline' ? 'Decline the application' : 'Override eligibility'}
-            </Button>
-            <Button variant="secondary" onClick={() => setMode('idle')}>
-              Cancel
-            </Button>
-          </div>
-        </form>
-      ) : null}
-      <OfflineCaption action="approving or declining" />
-      {active?.status === 'success' && active.data ? (
-        <p role="status">Application now {APPLICATION_STATUS[active.data.status].label}.</p>
-      ) : null}
-      <CommandError error={active?.error} onReload={reload} />
-    </li>
-  );
-}
-
-const STATUS_FILTERS: readonly ApplicationStatus[] = [
-  'awaiting_review',
-  'submitted',
-  'accepted',
-  'declined',
-  'withdrawn',
+const TABS: readonly { id: Tab; label: string }[] = [
+  { id: 'decide', label: 'Needs a decision' },
+  { id: 'offers', label: 'Waitlist offers' },
+  { id: 'forms', label: 'Forms missing' },
+  { id: 'all', label: 'All' },
 ];
 
-/** The default filter: every application waiting for a decision. */
-const NEEDS_DECISION = 'needs_decision';
-type Filter = ApplicationStatus | typeof NEEDS_DECISION | '';
-
-function ApplicationList({
-  items,
-  label = 'Applications',
-}: {
-  items: readonly Application[];
-  label?: string;
-}) {
-  return (
-    <ul className="list approvals" aria-label={label}>
-      {items.map((application) => (
-        <ApplicationCard key={application.id} application={application} />
-      ))}
-    </ul>
-  );
+function count(n: number | undefined, more: boolean): string | null {
+  if (n === undefined) return null;
+  return `${n}${more ? '+' : ''}`;
 }
 
-const WAITING: readonly {
-  status: 'awaiting_review' | 'submitted';
-  title: string;
-  label: string;
-  description: string;
-  none: string;
-}[] = [
-  {
-    status: 'awaiting_review',
-    title: 'Awaiting review',
-    label: 'Applications awaiting review',
-    description: 'Eligible applications waiting for approval or decline.',
-    none: 'No eligible application is awaiting review.',
-  },
-  {
-    status: 'submitted',
-    title: 'Submitted, eligibility not met',
-    label: 'Submitted applications',
-    description:
-      'Applications the API keeps in submitted (eligibility failed or not yet evaluated): decline, or override eligibility.',
-    none: 'No submitted application is waiting for a decision.',
-  },
-];
-
-/**
- * One waiting state in the API's order (newest first, ENR-02) with "Load more": the list is never
- * re-sorted, because a re-sorted first page would put the oldest loaded application on top while
- * older ones are still on pages not loaded (the API offers no oldest-first order).
- */
-function WaitingList({ state }: { state: (typeof WAITING)[number] }) {
-  const pages = useApiPages({
-    path: '/applications',
-    request: { query: { limit: 50, status: state.status } },
+function useFormsMissing(facilityId: string | null) {
+  return useApiQuery({
+    path: '/reports/enrollment-completeness',
+    request: { query: { facilityId: facilityId ?? '' } },
+    enabled: !!facilityId,
   });
-  const id = `queue-${state.status}`;
-  return (
-    <section className="card card-flush queue-card" aria-labelledby={id}>
-      <div className="card-head">
-        <h3 id={id}>{state.title}</h3>
-        {pages.data ? (
-          <span className="queue-count">
-            {pages.data.length}
-            {pages.hasNextPage ? '+' : ''} waiting
-          </span>
-        ) : null}
-      </div>
-      <p className="caption queue-note">
-        {state.description} Newest first, as the API lists them
-        {pages.hasNextPage ? '; older applications follow under “Load more”' : ''}.
-      </p>
-      <QueryBoundary
-        query={pages}
-        label={state.label.toLowerCase()}
-        isEmpty={(items) => items.length === 0}
-        empty={{
-          title: 'None waiting',
-          description: state.none,
-        }}
-        unavailableOffline={['approving, declining or overriding']}
-      >
-        {(items) => <ApplicationList items={items} label={state.label} />}
-      </QueryBoundary>
-      <LoadMore pages={pages} label={state.label.toLowerCase()} />
-    </section>
-  );
 }
 
-/** Every application waiting for a decision: the API's two waiting states, each in its order. */
-function DecisionQueue() {
-  const awaiting = useApiPages({
-    path: '/applications',
-    request: { query: { limit: 50, status: 'awaiting_review' } },
-  });
-  const submitted = useApiPages({
-    path: '/applications',
-    request: { query: { limit: 50, status: 'submitted' } },
-  });
-  // Shares the cache entries the two lists read: "Queue clear" only when both answered empty.
-  const clear =
-    awaiting.data?.length === 0 &&
-    !awaiting.hasNextPage &&
-    submitted.data?.length === 0 &&
-    !submitted.hasNextPage;
-  if (clear) {
+function FormsMissingTab({ facilityId }: { facilityId: string | null }) {
+  const report = useFormsMissing(facilityId);
+  if (!facilityId) {
     return (
       <StateView
         variant="empty"
-        title="Queue clear"
-        description="No application is waiting for a decision."
+        title="Choose a facility"
+        description="Forms missing are counted per facility: choose one in the header."
       />
     );
   }
   return (
-    <>
-      {WAITING.map((state) => (
-        <WaitingList key={state.status} state={state} />
-      ))}
-    </>
+    <QueryBoundary
+      query={report}
+      label="forms missing"
+      hideAge
+      isEmpty={(r) => !r.rows.some((row) => Number(row.enrollmentsMissingForms) > 0)}
+      empty={{ title: 'No forms missing', description: 'Every enrollment has its required forms.' }}
+    >
+      {(r) => (
+        <section className="card card-flush wl-card" aria-label="Activities with forms missing">
+          <table className="wl-table">
+            <thead>
+              <tr>
+                <th scope="col">Activity</th>
+                <th scope="col">Enrollments missing a form</th>
+                <th scope="col" className="wl-actions-col">
+                  Open
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {r.rows
+                .filter((row) => Number(row.enrollmentsMissingForms) > 0)
+                .map((row) => (
+                  <tr key={String(row.offeringId)}>
+                    <td>
+                      <b>{String(row.offering ?? 'Activity')}</b>
+                    </td>
+                    <td>
+                      <span className="tri-chip" data-tone="warning">
+                        <span aria-hidden="true">▲</span> {String(row.enrollmentsMissingForms)}{' '}
+                        missing
+                      </span>
+                    </td>
+                    <td className="wl-actions">
+                      <Link
+                        className="button button-secondary button-sm"
+                        to={`/programs/offerings/${String(row.offeringId)}`}
+                      >
+                        Open activity
+                      </Link>
+                    </td>
+                  </tr>
+                ))}
+            </tbody>
+          </table>
+        </section>
+      )}
+    </QueryBoundary>
   );
 }
 
-function StatusQueue({ status }: { status: ApplicationStatus | '' }) {
-  const applications = useApiPages({
-    path: '/applications',
-    request: { query: { limit: 50, ...(status ? { status } : {}) } },
-  });
+function AllTab() {
+  const now = useNow();
+  const pages = useApiPages({ path: '/applications', request: { query: { limit: 50 } } });
   return (
-    <section className="card card-flush queue-card" aria-label="Applications by status">
+    <section className="card card-flush wl-card" aria-label="All applications">
       <QueryBoundary
-        query={applications}
+        query={pages}
         label="applications"
+        hideAge
         isEmpty={(items) => items.length === 0}
-        empty={{ title: 'No applications', description: 'No application has this status.' }}
-        unavailableOffline={['approving, declining or overriding']}
+        empty={{ title: 'No applications', description: 'No application has been made yet.' }}
       >
-        {(items) => <ApplicationList items={items} />}
+        {(items) => (
+          <table className="wl-table">
+            <thead>
+              <tr>
+                <th scope="col">Participant</th>
+                <th scope="col">Activity</th>
+                <th scope="col">Status</th>
+                <th scope="col">Submitted</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((a) => (
+                <tr key={a.id}>
+                  <td>
+                    <PersonName id={a.participantPersonId} fallback="Participant" />
+                  </td>
+                  <td>
+                    <OfferingName id={a.offeringId} />
+                  </td>
+                  <td>
+                    <StatusBadge {...APPLICATION_STATUS[a.status]} />
+                  </td>
+                  <td>{waitingLabel(a.submittedAt, now)} ago</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </QueryBoundary>
-      <LoadMore pages={applications} label="applications" />
+      <LoadMore pages={pages} label="applications" />
     </section>
   );
 }
 
-/** What the API's role view says about deciding (SPK-UX-005); the API still decides per record. */
-function DecisionAuthority() {
-  const permissions = usePermissions();
-  const describe = (actionId: string): string => {
-    const held = permissions.actionPermission(actionId);
-    if (held === undefined) return 'not known yet';
-    if (held === null) return 'not held by your roles';
-    if (held.kind === 'conditional') return 'held for some records';
-    return held.facilityIds === null ? 'held in every facility' : 'held in some facilities';
-  };
-  return (
-    <p className="caption" aria-label="Decision permissions">
-      Approving or declining needs enrollment.review_application (
-      {describe('enrollment.review_application')}); overriding eligibility needs
-      enrollment.override_eligibility ({describe('enrollment.override_eligibility')}).
-    </p>
-  );
-}
-
 export function RegistrationQueueScreen() {
-  const [status, setStatus] = useState<Filter>(NEEDS_DECISION);
+  const { facilityId } = useApp();
+  const [params, setParams] = useSearchParams();
+  const raw = params.get('tab');
+  const tab: Tab = TABS.some((t) => t.id === raw) ? (raw as Tab) : 'decide';
+  const { submitted, awaiting } = useDecisionPages();
+  const offers = useApiPages({
+    path: '/waitlist-queue',
+    request: { query: { status: 'offered', limit: 100 } },
+  });
+  const forms = useFormsMissing(facilityId);
+  const decideCount =
+    submitted.data && awaiting.data
+      ? count(
+          submitted.data.length + awaiting.data.length,
+          submitted.hasNextPage || awaiting.hasNextPage,
+        )
+      : null;
+  const offerCount = offers.data ? count(offers.data.length, offers.hasNextPage) : null;
+  const formsCount = forms.data
+    ? String(forms.data.rows.reduce((sum, r) => sum + (Number(r.enrollmentsMissingForms) || 0), 0))
+    : null;
+  const counts: Record<Tab, string | null> = {
+    decide: decideCount,
+    offers: offerCount,
+    forms: formsCount,
+    all: null,
+  };
+  const eyebrow = [
+    decideCount !== null ? `${decideCount} waiting for a decision` : null,
+    offerCount !== null ? `${offerCount} offers in flight` : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+
   return (
-    <section aria-labelledby="queue-title" className="grow">
+    <section aria-labelledby="queue-title" className="grow tri-screen">
       <PageHeader
-        eyebrow="Grow · Registrations · One queue for every approval"
-        title="Registration queue and approvals"
+        eyebrow={eyebrow || 'Registrations and waitlists'}
+        title="Registrations"
         titleId="queue-title"
         actions={
-          <Link className="button button-primary" to="/registrations/assisted">
-            <Icon name="person_add" size={19} />
-            Register someone at the desk
-          </Link>
+          <div className="tri-tabs" role="tablist" aria-label="Registrations">
+            {TABS.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                role="tab"
+                id={`tab-${t.id}`}
+                aria-selected={tab === t.id}
+                aria-controls={`panel-${t.id}`}
+                onClick={() =>
+                  setParams((p) => {
+                    const n = new URLSearchParams(p);
+                    if (t.id === 'decide') n.delete('tab');
+                    else n.set('tab', t.id);
+                    return n;
+                  })
+                }
+              >
+                {t.label}
+                {counts[t.id] !== null ? (
+                  <span className="tri-tab-count" data-tab={t.id}>
+                    {counts[t.id]}
+                  </span>
+                ) : null}
+              </button>
+            ))}
+          </div>
         }
       />
-      <SectionNav label="Registrations and waitlists" links={REGISTRATION_LINKS} />
-      <div className="split">
-        <div className="split-main">
-          <Toolbar className="queue-toolbar">
-            <SelectField
-              label="Applications"
-              value={status}
-              placeholder="All statuses"
-              onChange={(v) => setStatus(v as Filter)}
-              options={[
-                {
-                  value: NEEDS_DECISION,
-                  label: 'Waiting for a decision (submitted or awaiting review)',
-                },
-                ...STATUS_FILTERS.map((s) => ({ value: s, label: APPLICATION_STATUS[s].label })),
-              ]}
-            />
-          </Toolbar>
-          {status === NEEDS_DECISION ? <DecisionQueue /> : <StatusQueue status={status} />}
-        </div>
-        <aside className="split-side" aria-label="How approval works">
-          <section className="card">
-            <h4>Before you decide</h4>
-            <p className="caption">
-              Approval comes before any payment is captured, and it reserves no place unless an
-              approved policy says so: pending {PENDING.approvals.ids.join(', ')} (owner:{' '}
-              {PENDING.approvals.owner}).
-            </p>
-            <DecisionAuthority />
-            <Link to="/registrations/waitlists">Waitlists and offers →</Link>
-          </section>
-        </aside>
+      <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
+        {tab === 'decide' ? <TriageQueue /> : null}
+        {tab === 'offers' ? <WaitlistOffersTab /> : null}
+        {tab === 'forms' ? <FormsMissingTab facilityId={facilityId} /> : null}
+        {tab === 'all' ? <AllTab /> : null}
       </div>
+      <nav className="sched-more tri-more" aria-label="Registrations and waitlists">
+        <span className="caption">More:</span>
+        <Link to="/registrations/assisted">
+          <Icon name="person_add" size={16} /> Register someone at the desk
+        </Link>
+        <Link to="/registrations/waitlists">Waitlists by activity</Link>
+        <Link to="/registrations/enrollments">Cancellation and transfer</Link>
+      </nav>
     </section>
   );
 }

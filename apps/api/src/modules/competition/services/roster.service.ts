@@ -452,14 +452,16 @@ export class RosterService implements RosterPort {
   ): Promise<TeamInvitationAccepted> {
     const organizationId = organizationOf(principal);
     const now = this.clock.now();
-    await this.expireIfDue(
-      principal,
-      organizationId,
-      invitationId,
-      input.token,
-      now,
-      correlationId,
-    );
+    if (input.token !== undefined) {
+      await this.expireIfDue(
+        principal,
+        organizationId,
+        invitationId,
+        input.token,
+        now,
+        correlationId,
+      );
+    }
     return this.uow.run(async ({ trx }) => {
       const invitation = await trx
         .selectFrom('team_invitations')
@@ -469,9 +471,20 @@ export class RosterService implements RosterPort {
         .forUpdate()
         .executeTakeFirst();
       if (!invitation) throw errors.protectedNotFound('team_invitation');
-      // The token is the secret only the recipient holds: without it nothing is revealed (§4.10).
-      if (hashToken(input.token) !== invitation.token_hash) {
-        throw errors.protectedNotFound('team_invitation');
+      if (input.token !== undefined) {
+        // The token is the secret only the recipient holds: without it nothing is revealed (§4.10).
+        if (hashToken(input.token) !== invitation.token_hash) {
+          throw errors.protectedNotFound('team_invitation');
+        }
+      } else {
+        // CMP-03 (redesign handoff 3c "Join" from Home's To do): the signed-in recipient accepts
+        // from their own invitation list without the link, exactly as they may decline: the
+        // invitation names them, or one of their verified contact points (`recipientSubject`).
+        // Anyone else learns nothing (§4.10).
+        const subject = await this.recipientSubject(trx, principal, invitation);
+        if (!subject || subject !== (input.personId ?? principal.personId)) {
+          throw errors.protectedNotFound('team_invitation');
+        }
       }
       if (invitation.status === 'pending' && new Date(invitation.expires_at) <= now) {
         // Expired between the pre-check and this lock; the next attempt records the expiry.

@@ -70,6 +70,8 @@ export const DEFAULT_COMMUNICATIONS_POLICY: CommunicationsPolicy = {
     // team's place in a season, never marketing.
     team_place_offer: 'operational',
     team_waiting_list: 'operational',
+    // S 4d: an injury report about a child is safety information for the guardians.
+    injury_report: 'operational',
     renewal_opportunity: 'promotional',
     staff_broadcast: 'choose',
   },

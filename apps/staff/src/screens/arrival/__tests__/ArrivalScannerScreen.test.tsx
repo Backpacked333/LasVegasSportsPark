@@ -74,7 +74,7 @@ describe('SCR-S-28 ArrivalScannerScreen', () => {
         },
       }),
     });
-    render(app.at('/arrival'));
+    render(app.at('/arrival/select'));
     const people = await scan(user);
 
     // SPK-ENTRY-003: the scan records nobody and nothing is preselected.
@@ -119,7 +119,7 @@ describe('SCR-S-28 ArrivalScannerScreen', () => {
   it('asks for a visitor category for an adult without a session before recording the arrival', async () => {
     const user = userEvent.setup();
     const app = createTestApp({ routes: routes() });
-    render(app.at('/arrival'));
+    render(app.at('/arrival/select'));
     await scan(user);
     await user.click(
       screen.getByRole('checkbox', { name: 'Record arrival at the facility for Sam Rivera' }),
@@ -143,7 +143,7 @@ describe('SCR-S-28 ArrivalScannerScreen', () => {
         },
       }),
     });
-    render(app.at('/arrival'));
+    render(app.at('/arrival/select'));
     await user.type(await screen.findByLabelText('Pass reference'), REFERENCE);
     await user.click(screen.getByRole('button', { name: 'Open selection' }));
     expect(
@@ -166,7 +166,7 @@ describe('SCR-S-28 ArrivalScannerScreen', () => {
         },
       }),
     });
-    render(app.at('/arrival'));
+    render(app.at('/arrival/select'));
     await user.type(await screen.findByLabelText('Pass reference'), REFERENCE);
     await user.click(screen.getByRole('button', { name: 'Open selection' }));
     const unavailable = await screen.findByTestId('command-unavailable');
@@ -208,7 +208,7 @@ describe('SCR-S-28 ArrivalScannerScreen', () => {
         },
       }),
     });
-    render(app.at('/arrival'));
+    render(app.at('/arrival/select'));
     await scan(user);
     await user.click(
       screen.getByRole('checkbox', { name: 'Check Alex Rivera in to Junior skills' }),
@@ -265,7 +265,7 @@ describe('SCR-S-28 ArrivalScannerScreen', () => {
         },
       }),
     });
-    render(app.at('/arrival'));
+    render(app.at('/arrival/select'));
     await scan(user);
     expect(await screen.findByText(/participation waiver/)).toBeInTheDocument();
     expect(screen.getByText('Blocking')).toBeInTheDocument();
@@ -288,7 +288,7 @@ describe('SCR-S-28 ArrivalScannerScreen', () => {
         },
       }),
     });
-    render(app.at('/arrival'));
+    render(app.at('/arrival/select'));
     const people = await scan(user);
     await user.click(
       screen.getByRole('checkbox', { name: 'Record arrival at the facility for Alex Rivera' }),
@@ -325,7 +325,7 @@ describe('SCR-S-28 ArrivalScannerScreen', () => {
         },
       }),
     });
-    render(app.at('/arrival'));
+    render(app.at('/arrival/select'));
     await scan(user);
     act(() => app.connectivity.set(false));
 
@@ -396,7 +396,7 @@ describe('SCR-S-28 ArrivalScannerScreen', () => {
         },
       }),
     });
-    render(app.at('/arrival'));
+    render(app.at('/arrival/select'));
     await scan(user);
     act(() => app.connectivity.set(false));
     device = new Date('2026-10-24T11:53:00.000Z');
@@ -435,7 +435,7 @@ describe('SCR-S-28 ArrivalScannerScreen', () => {
     };
     // Queue offline, move to Today, reconnect there.
     const app = createTestApp({ routes: routes({ 'POST /offline-sync': syncRoute }) });
-    const view = render(app.at('/arrival'));
+    const view = render(app.at('/arrival/select'));
     await scan(user);
     act(() => app.connectivity.set(false));
     await user.click(
@@ -453,7 +453,7 @@ describe('SCR-S-28 ArrivalScannerScreen', () => {
     // Items still queued on this device when the dashboard closed are sent once on reopening.
     window.localStorage.clear();
     const offline = createTestApp({ routes: routes({ 'POST /offline-sync': syncRoute }) });
-    const first = render(offline.at('/arrival'));
+    const first = render(offline.at('/arrival/select'));
     await scan(user);
     act(() => offline.connectivity.set(false));
     await user.click(
@@ -539,7 +539,7 @@ describe('SCR-S-28 ArrivalScannerScreen', () => {
         },
       }),
     });
-    render(app.at('/arrival'));
+    render(app.at('/arrival/select'));
     const search = await screen.findByRole('search', { name: 'Find a person' });
     // The API's minimum is two characters: nothing is sent before.
     await user.type(within(search).getByLabelText('Find a person'), 'A');
@@ -655,7 +655,7 @@ describe('SCR-S-28 ArrivalScannerScreen', () => {
           fakeResponse(409, apiErrorBody('STALE_REVISION', { nextAction: 'reload_and_retry' })),
       }),
     });
-    render(app.at('/arrival'));
+    render(app.at('/arrival/select'));
     const search = await screen.findByRole('search', { name: 'Find a person' });
     await user.type(within(search).getByLabelText('Find a person'), 'Alex');
     await user.click(within(search).getByRole('button', { name: 'Search' }));
@@ -688,7 +688,7 @@ describe('SCR-S-28 ArrivalScannerScreen', () => {
           ),
       }),
     });
-    render(app.at('/arrival'));
+    render(app.at('/arrival/select'));
     const search = await screen.findByRole('search', { name: 'Find a person' });
     await user.type(within(search).getByLabelText('Find a person'), 'Alex');
     await user.click(within(search).getByRole('button', { name: 'Search' }));
@@ -706,7 +706,7 @@ describe('SCR-S-28 ArrivalScannerScreen', () => {
     const app = createTestApp({
       routes: routes({ 'GET /people': { status: 200, body: { items: [], nextCursor: null } } }),
     });
-    render(app.at('/arrival'));
+    render(app.at('/arrival/select'));
     const search = await screen.findByRole('search', { name: 'Find a person' });
     await user.type(within(search).getByLabelText('Find a person'), 'Zed');
     await user.click(within(search).getByRole('button', { name: 'Search' }));
@@ -771,7 +771,7 @@ describe('SCR-S-28 ArrivalScannerScreen', () => {
         'GET /session-bookings': { status: 200, body: [] },
       }),
     });
-    render(app.at('/arrival'));
+    render(app.at('/arrival/select'));
     const rail = await screen.findByRole('list', { name: 'Sessions now and next' });
     // One recorded late of two expected; counts are observed attendance, not occupancy.
     await waitFor(() => expect(rail).toHaveTextContent('1 / 2 present of expected'));
@@ -789,7 +789,7 @@ describe('SCR-S-28 ArrivalScannerScreen', () => {
 
   it('asks for a facility when the viewer works across several', async () => {
     const app = createTestApp();
-    render(app.at('/arrival'));
+    render(app.at('/arrival/select'));
     expect(await screen.findByText('Choose a facility')).toBeInTheDocument();
   });
 });

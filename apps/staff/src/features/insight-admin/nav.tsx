@@ -13,6 +13,9 @@ export function ReportsNav() {
       <TabTrack>
         <ul>
           <li>
+            <NavLink to="/reports/week">This week</NavLink>
+          </li>
+          <li>
             <NavLink to="/reports" end>
               Operating reports
             </NavLink>

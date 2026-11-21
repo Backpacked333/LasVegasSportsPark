@@ -1,4 +1,8 @@
 /**
+ * Handoff M 2f "You · one family hub" on top (`YouHub`: the family with a flag on whoever needs
+ * something, Due now and Credits tiles, one grouped list, Legends mode, Help & contact the desk),
+ * then "More" with the rest of SCR-C-30 below.
+ *
  * SCR-C-30, the fifth destination, "You" (SPK-UX-002 as amended by PA-11, **Proposed**: family,
  * registrations, payments, credits, forms, preferences and support, grouped by topic). The tab
  * draws the large title; the hub opens with who is signed in (`GET /v1/me`: an initials avatar
@@ -64,6 +68,7 @@ import { StatusBadge } from '../../ui/StatusBadge';
 import { SwitchRow } from '../../ui/SwitchRow';
 import { layout, makeStyles, spacing, type, useLegendsMode } from '../../ui/theme';
 import { grantKey, HELD_GRANTS_REQUEST, managedPeople, type GrantView } from '../family/grants';
+import { YouHub } from './YouHub';
 import { formatDateTime, personDisplayName, useMe, type MeData } from './components/account-data';
 
 /** A row of the hub: what it opens, and whether it needs a linked participant record. */
@@ -274,7 +279,7 @@ function LegendsModeRow() {
   return (
     <SwitchRow
       label="Legends mode"
-      description="Appearance: a dark look with gold accents"
+      description="Appearance: night green with floodlight accents"
       value={legends}
       onChange={setLegends}
       testID="account-legends-mode"
@@ -388,18 +393,22 @@ function AccountHub({ me }: { me: MeData }) {
   return (
     <View>
       {linked ? <RecoveryRequired /> : null}
-      <ProfileHeader me={me} />
-      {linked ? null : (
-        <View style={styles.actions}>
-          <Button label="Finish setting up" onPress={() => router.push('/onboarding')} />
-        </View>
+      {linked ? (
+        <YouHub me={me} linked={linked} />
+      ) : (
+        <>
+          <ProfileHeader me={me} />
+          <View style={styles.actions}>
+            <Button label="Finish setting up" onPress={() => router.push('/onboarding')} />
+          </View>
+        </>
       )}
       <Group title="Family">
         {row(FAMILY_ROWS[0] as HubRow, familyDetail(me, held.data))}
         {row(FAMILY_ROWS[1] as HubRow)}
       </Group>
       <Group title="Bookings and plans">
-        {BOOKING_ROWS.map((r) => row(r))}
+        {BOOKING_ROWS.filter((r) => !linked || r.key !== 'registrations').map((r) => row(r))}
         {conditional(BOOKING_CONDITIONAL).map((r) => row(r))}
         {cart ? (
           <ListRow
@@ -412,13 +421,13 @@ function AccountHub({ me }: { me: MeData }) {
         ) : null}
       </Group>
       <Group title="Money">
-        {MONEY_ROWS.map((r) => row(r))}
+        {MONEY_ROWS.filter((r) => !linked || r.key !== 'payments').map((r) => row(r))}
         {conditional(MONEY_CONDITIONAL).map((r) => row(r))}
       </Group>
-      <Group title="Forms">{FORMS_ROWS.map((r) => row(r))}</Group>
+      {linked ? null : <Group title="Forms">{FORMS_ROWS.map((r) => row(r))}</Group>}
       <Group title="Settings">
         {row(NOTIFICATIONS_ROW)}
-        <LegendsModeRow />
+        {linked ? null : <LegendsModeRow />}
         {SETUP_ROWS.map((r) => row(r))}
       </Group>
       <Group title="Help">{HELP_ROWS.map((r) => row(r))}</Group>

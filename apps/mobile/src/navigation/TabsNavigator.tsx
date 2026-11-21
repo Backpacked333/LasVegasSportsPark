@@ -24,6 +24,7 @@ import { Icon } from '../ui/Icon';
 import { useHaptics } from '../ui/PressableScale';
 import { BottomBarInsetContext } from '../ui/Screen';
 import { fonts, layout, makeStyles, radius, spacing, useTheme } from '../ui/theme';
+import { useTodoCount } from '../features/home/todo';
 import { DESTINATIONS } from './destinations';
 import { HeaderActions } from './HeaderActions';
 
@@ -34,17 +35,23 @@ import { HeaderActions } from './HeaderActions';
 export function TabHeader({ title }: { title?: string }) {
   const styles = useStyles();
   const insets = useSafeAreaInsets();
+  // Home (no title) draws its own greeting with the actions beside it (handoff 1b): only the
+  // status bar inset here.
   return (
     <View style={[styles.header, { paddingTop: insets.top }]}>
-      {title ? (
-        <AppHeader title={title} actions={<HeaderActions />} />
-      ) : (
-        <View style={styles.actionsOnly}>
-          <HeaderActions />
-        </View>
-      )}
+      {title ? <AppHeader title={title} actions={<HeaderActions />} /> : null}
     </View>
   );
+}
+
+/** The Home tab's badge: the To do count, hidden at 0, "9+" above 9 (handoff Shell row 2). */
+export function todoBadge(count: number): string | undefined {
+  if (count <= 0) return undefined;
+  return count > 9 ? '9+' : String(count);
+}
+
+function useHomeBadge(): string | undefined {
+  return todoBadge(useTodoCount());
 }
 
 /**
@@ -60,6 +67,7 @@ export function TabsNavigator() {
   const floating = useGlassMode() !== 'solid';
   const insets = useSafeAreaInsets();
   const haptics = useHaptics();
+  const homeBadge = useHomeBadge();
   return (
     <BottomBarInsetContext.Provider value={floating ? TAB_ROW_HEIGHT + insets.bottom : 0}>
       <Tabs
@@ -96,8 +104,22 @@ export function TabsNavigator() {
             options={{
               title: d.title,
               header: () => <TabHeader title={d.name === 'index' ? undefined : d.title} />,
-              tabBarAccessibilityLabel: d.accessibilityLabel,
+              tabBarAccessibilityLabel:
+                d.name === 'index' && homeBadge
+                  ? `${d.accessibilityLabel}, ${homeBadge} to do`
+                  : d.accessibilityLabel,
               tabBarButtonTestID: `tab-${d.name}`,
+              ...(d.name === 'index'
+                ? {
+                    tabBarBadge: homeBadge,
+                    tabBarBadgeStyle: {
+                      backgroundColor: colors.countBadge,
+                      color: colors.onCountBadge,
+                      ...fonts.semibold,
+                      fontSize: 11,
+                    },
+                  }
+                : {}),
               tabBarIcon: ({ color, focused }) => (
                 <View style={[styles.iconPill, focused && styles.iconPillOn]}>
                   <Icon name={d.icon} size={23} color={focused ? colors.onFloodlight : color} />

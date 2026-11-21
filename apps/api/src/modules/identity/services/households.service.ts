@@ -168,6 +168,24 @@ export class HouseholdsService {
     });
   }
 
+  /**
+   * S 4c (SPK-IAM-001, §4.10): staff who read a person's authority read the household's members
+   * by id. A household is grouping only; reading it grants nothing over its members, whose own
+   * records stay behind their own reads. An unknown household (or another organization's) is not
+   * found.
+   */
+  async read(principal: Principal, id: string): Promise<Household> {
+    const organizationId = principal.organizationId;
+    if (!organizationId) throw errors.authenticationRequired();
+    await this.authorization.require(principal, IdentityActions.readAuthority, {
+      type: 'household',
+      id,
+      organizationId,
+      protected: true,
+    });
+    return this.detail(this.db, organizationId, id);
+  }
+
   async detail(db: Db | Trx, organizationId: string, id: string): Promise<Household> {
     const row = await db
       .selectFrom('households')

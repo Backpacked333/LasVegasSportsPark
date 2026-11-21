@@ -37,6 +37,7 @@ import {
   DeparturesController,
   MePassesController,
   PassesController,
+  ArrivalLookupsController,
   SessionCheckinsController,
   VisitsController,
 } from './controllers/arrival.controller';
@@ -69,6 +70,7 @@ import { EntryFollowUps } from './services/entry-follow-ups.service';
 import { OccupancyService } from './services/occupancy.service';
 import { OfflineSyncService } from './services/offline-sync.service';
 import { PassesService } from './services/passes.service';
+import { ParticipantCareService } from './services/participant-care.service';
 import { ReleasesService } from './services/releases.service';
 import { StaffScope } from './services/staff-scope';
 import { VisitsService } from './services/visits.service';
@@ -120,6 +122,7 @@ const providers: Provider[] = [
   CheckinsService,
   AttendanceService,
   ReleasesService,
+  ParticipantCareService,
   OfflineSyncService,
   OccupancyService,
   AccessEventsService,
@@ -155,6 +158,7 @@ const providers: Provider[] = [
   controllers: [
     MePassesController,
     PassesController,
+    ArrivalLookupsController,
     VisitsController,
     DeparturesController,
     SessionCheckinsController,

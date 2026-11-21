@@ -28,6 +28,7 @@ import {
 } from 'react';
 import type { Reachability } from '../connectivity/sources';
 import { linkSecretsFollowSession, linkSecretsSessionExpired } from '../links/link-secrets';
+import { PersonFilterProvider } from '../ui/PersonFilter';
 import { ThemeProvider } from '../ui/ThemeProvider';
 import type { AppServices } from './services';
 
@@ -212,7 +213,12 @@ export function AppProviders({ services, queryClient, children }: AppProvidersPr
     <QueryClientProvider client={client}>
       <AppContext.Provider value={value}>
         <ConnectivityContext.Provider value={{ reachable }}>
-          <ThemeProvider store={services.themeStore}>{children}</ThemeProvider>
+          <ThemeProvider store={services.themeStore}>
+            {/* The household "who" filter, shared by Home, Calendar and Explore (ui/PersonFilter). */}
+            <PersonFilterProvider store={services.personFilterStore}>
+              {children}
+            </PersonFilterProvider>
+          </ThemeProvider>
         </ConnectivityContext.Provider>
       </AppContext.Provider>
     </QueryClientProvider>

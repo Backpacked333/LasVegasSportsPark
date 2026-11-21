@@ -54,6 +54,7 @@ describe('team workspace (CMP-01, CMP-02, CMP-04, CMP-06, CMP-14; SPK-CAP-001/00
   const assignments: AssignmentCheckPort = {
     isAcceptedOfficial: async (_organizationId, fixture, personId) =>
       accepted.has(`${fixture}:${personId}`),
+    sessionCoverage: async () => null,
   };
 
   async function teamOf(name: string): Promise<Team> {

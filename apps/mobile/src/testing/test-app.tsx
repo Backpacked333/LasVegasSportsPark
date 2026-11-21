@@ -27,8 +27,10 @@ import { createManualSources, type Reachability } from '../connectivity/sources'
 import { AppProviders, MUTATION_DEFAULTS } from '../providers/AppProviders';
 import { RecordingHaptics } from '../providers/haptics';
 import type { AppServices } from '../providers/services';
+import { MemoryPersonFilterStore } from '../ui/person-filter-store';
 import type { ThemeName } from '../ui/theme';
 import { MemoryThemeStore } from '../ui/theme-preference';
+import { ToastProvider } from '../ui/Toast';
 
 export const TEST_NOW = new Date('2026-10-24T12:00:00.000Z');
 export const TEST_SESSION: Session = {
@@ -58,6 +60,10 @@ export interface TestAppOptions {
   now?: () => Date;
   /** The stored theme choice at launch (`'legends'` for Legends mode); none by default. */
   theme?: ThemeName | null;
+  /** The remembered household "who" filter (a person id); "Everyone" by default. */
+  personFilter?: string | null;
+  /** Mount the app's `ToastProvider` (as the root layout does), so toasts can be asserted. */
+  toasts?: boolean;
 }
 
 export function createTestApp(options: TestAppOptions = {}) {
@@ -71,6 +77,7 @@ export function createTestApp(options: TestAppOptions = {}) {
     options.session === undefined ? TEST_SESSION : options.session,
   );
   const themeStore = new MemoryThemeStore(options.theme ?? null);
+  const personFilterStore = new MemoryPersonFilterStore(options.personFilter ?? null);
   const haptics = new RecordingHaptics();
   const services: AppServices = {
     config: {
@@ -87,6 +94,7 @@ export function createTestApp(options: TestAppOptions = {}) {
     generateKey: sequentialKeys(),
     now: options.now ?? (() => TEST_NOW),
     themeStore,
+    personFilterStore,
     haptics,
   };
   // No retries and no cache time in tests: each assertion sees the API's first answer.
@@ -100,12 +108,24 @@ export function createTestApp(options: TestAppOptions = {}) {
     return (
       <GestureHandlerRootView style={{ flex: 1 }}>
         <AppProviders services={services} queryClient={queryClient}>
-          <BottomSheetModalProvider>{children}</BottomSheetModalProvider>
+          <BottomSheetModalProvider>
+            {options.toasts ? <ToastProvider>{children}</ToastProvider> : children}
+          </BottomSheetModalProvider>
         </AppProviders>
       </GestureHandlerRootView>
     );
   }
-  return { services, fake, sources, sessionStore, themeStore, haptics, queryClient, wrapper };
+  return {
+    services,
+    fake,
+    sources,
+    sessionStore,
+    themeStore,
+    personFilterStore,
+    haptics,
+    queryClient,
+    wrapper,
+  };
 }
 
 /**

@@ -1,5 +1,6 @@
 import { Controller, Get, HttpCode, Post } from '@nestjs/common';
 import {
+  ArrivalLookupBody,
   CreateSessionCheckinBody,
   IssuePassBody,
   ListVisitsQuery,
@@ -11,6 +12,7 @@ import {
   VoidVisitBody,
   WithdrawSessionCheckinBody,
   z,
+  type ArrivalLookup,
   type Departure,
   type IssuedPass,
   type MyPass,
@@ -29,6 +31,25 @@ import { VisitsService } from '../services/visits.service';
 import { CorrelationId } from './correlation.decorator';
 
 const IdParams = z.object({ id: z.uuid() });
+
+/**
+ * S 2a: a family found by name at the desk opens the selection a pass of theirs would open. It
+ * writes nothing but its audit record, so it needs no idempotency key (like a scan).
+ */
+@Controller('arrival-lookups')
+export class ArrivalLookupsController {
+  constructor(private readonly passes: PassesService) {}
+
+  @Post()
+  @HttpCode(200)
+  lookup(
+    @CurrentPrincipal() principal: Principal,
+    @ZodBody(ArrivalLookupBody) body: ArrivalLookupBody,
+    @CorrelationId() correlationId: string,
+  ): Promise<ArrivalLookup> {
+    return this.passes.lookup(principal, body, correlationId);
+  }
+}
 
 /** Passes (SPK-ENTRY-002, SPK-ENTRY-003). */
 @Controller('passes')

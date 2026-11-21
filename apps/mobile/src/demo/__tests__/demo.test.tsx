@@ -4,7 +4,7 @@
  */
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import { readDemoAccounts } from '../../config/app-config';
 import { SignInScreen } from '../../screens/sign-in/SignInScreen';
 import { createTestApp, TEST_SESSION } from '../../testing/test-app';
@@ -46,7 +46,31 @@ describe('demo sign-in', () => {
 
     const demo = createTestApp({ session: null, config: { appMode: 'demo', demoAccounts: {} } });
     render(<SignInScreen />, { wrapper: demo.wrapper });
-    expect(screen.getByText('Demo mode')).toBeOnTheScreen();
+    // Handoff M 5a: the redesigned welcome, with the tour's sign-in kept below it.
+    expect(screen.getByTestId('welcome')).toBeOnTheScreen();
+    expect(screen.getByRole('button', { name: 'Sign in as the parent' })).toBeOnTheScreen();
+  });
+
+  it('handoff M 5b: the demo code signs in as the seeded parent through the local identity provider', async () => {
+    const app = createTestApp({
+      session: null,
+      config: { appMode: 'demo', demoAccounts: { 'dev-parent': PARENT } },
+      routes: {
+        'POST /dev/tokens': {
+          status: 201,
+          body: { token: 'demo-token', accountId: PARENT, expiresAt: null },
+        },
+        'GET /me/households': { status: 200, body: { items: [] } },
+      },
+    });
+    render(<SignInScreen />, { wrapper: app.wrapper });
+    fireEvent.changeText(screen.getByLabelText('Phone or email'), '(702) 555-0148');
+    await act(async () => fireEvent.press(screen.getByRole('button', { name: 'Send me a code' })));
+    expect(await screen.findByText('Demo mode: the code is 481052.')).toBeOnTheScreen();
+    await act(async () => fireEvent.changeText(screen.getByLabelText('Code, 6 digits'), '481052'));
+    await waitFor(() =>
+      expect(app.fake.requests.some((r) => r.route === '/dev/tokens')).toBe(true),
+    );
   });
 
   it('signs in as the seeded parent and starts the family tour', async () => {

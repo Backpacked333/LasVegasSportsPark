@@ -25,8 +25,11 @@ import { AssistedRegistrationScreen } from '../../screens/registrations/Assisted
 import { EnrollmentChangeScreen } from '../../screens/registrations/EnrollmentChangeScreen';
 import { EnrollmentsScreen } from '../../screens/registrations/EnrollmentsScreen';
 import { RegistrationQueueScreen } from '../../screens/registrations/RegistrationQueueScreen';
-import { RegistrationsScreen } from '../../screens/registrations/RegistrationsScreen';
 import { WaitlistScreen } from '../../screens/registrations/WaitlistScreen';
+import {
+  RefundRequestScreen,
+  RefundRequestsScreen,
+} from '../../screens/finance/refund-requests/RefundRequestScreen';
 import './registration-finance.css';
 
 const ROUTES: readonly [path: string, element: ReactElement][] = [
@@ -35,7 +38,7 @@ const ROUTES: readonly [path: string, element: ReactElement][] = [
   ['/programs/offerings/:offeringId', <OfferingSetupScreen />],
   ['/programs/offerings/:offeringId/publication', <OfferingPublicationScreen />],
   ['/programs/offerings/:offeringId/uniforms', <OfferingUniformsScreen />],
-  ['/registrations', <RegistrationsScreen />],
+  ['/registrations', <RegistrationQueueScreen />],
   ['/registrations/queue', <RegistrationQueueScreen />],
   ['/registrations/assisted', <AssistedRegistrationScreen />],
   ['/registrations/assisted/:basketId', <AssistedRegistrationScreen />],
@@ -55,6 +58,9 @@ const ROUTES: readonly [path: string, element: ReactElement][] = [
   ['/finance/credits', <CreditsScreen />],
   ['/finance/credits/:creditId', <CreditsScreen />],
   ['/finance/reconciliation', <ReconciliationScreen />],
+  // Staff S 4b: refund requests from families ("Cancel a week").
+  ['/finance/refund-requests', <RefundRequestsScreen />],
+  ['/finance/refund-requests/:caseId', <RefundRequestScreen />],
 ];
 
 /** Route elements for `<Routes>` (React Router reads Route children through fragments). */

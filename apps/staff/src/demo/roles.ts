@@ -362,19 +362,52 @@ export const DEMO_ROLES: readonly DemoRole[] = [
   {
     id: 'coach',
     title: 'Coach',
-    who: 'Takes attendance, messages families and assesses players.',
+    who: 'Runs their team on game day, takes attendance, messages families and assesses players.',
     subject: 'dev-coach',
     tour: [
       {
+        path: '/workspace/week',
+        title: 'My week',
+        body: 'The coach home: what needs an answer, the next session with its countdown and answers, and the week by day.',
+        tryThis: [
+          'Nudge the players who have not answered',
+          'See the result still waiting for the referee',
+        ],
+      },
+      {
+        path: '/workspace/week',
+        title: 'Lineup and game day',
+        body: 'Only players who answered Going appear, the fewest minutes this season first. Game day keeps the score and the minutes on the phone.',
+        tryThis: [
+          'Open Lineup and press Auto-fill fairly',
+          'Drag a player onto a place, then share',
+          'Start game day and score a goal',
+        ],
+      },
+      {
         path: '/workspace',
-        title: 'My assignments',
-        body: 'A coach sees only their own sessions and teams. Each assignment opens attendance, release and messages.',
-        tryThis: ['Open the next Mini kickers class', 'Accept the class that is offered'],
+        title: 'Take attendance',
+        body: 'The class on now opens as big tiles: tap once for here, twice for late, hold for absent. Allergy and form flags sit on the tile; Pickup releases each child to an adult the family allowed.',
+        tryThis: [
+          'Mark Leo here, then undo it',
+          'Open Noah’s allergy flag',
+          'Release Maya at pickup',
+        ],
+      },
+      {
+        path: '/workspace/messages',
+        title: 'Team messages',
+        body: 'One thread per team, private replies and a text fallback. It waits for a messaging service, so it shows how it will work.',
       },
       {
         path: '/workspace/assessments',
-        title: 'Player assessments',
-        body: 'Assess players against a template. Recommendations feed placement for the next season.',
+        title: 'Skills assessment',
+        body: 'Three plain-word levels per skill, a note for the family and a suggested next class. Nothing reaches families until Send all.',
+      },
+      {
+        path: '/workspace/issues',
+        title: 'Report an injury',
+        body: 'Who, what, review: the family is told, the manager sees it on Today and it is kept with the child’s record.',
       },
       {
         path: '/workspace/offline',
@@ -386,19 +419,46 @@ export const DEMO_ROLES: readonly DemoRole[] = [
   {
     id: 'referee',
     title: 'Referee',
-    who: 'Accepts match assignments, reports results and sees fees.',
+    who: 'Accepts match requests, reports results and sees fees.',
     subject: 'dev-official',
     tour: [
+      {
+        path: '/workspace/referee',
+        title: 'Referee home',
+        body: 'Requests to answer, confirmed games with their fees, availability and pay. Accepting covers the game at once for the manager.',
+        tryThis: ['Accept the game later today', 'Say you cannot take a game, with a reason'],
+      },
       {
         path: '/workspace',
         title: 'My assignments',
         body: 'Matches this official is assigned to, with time, field and the other officials. One match is accepted and one is offered.',
-        tryThis: ['Accept the offered match', 'Open the accepted match'],
+        tryThis: ['Open the accepted match', 'Open its match report'],
       },
       {
         path: '/workspace/fees',
         title: 'My fees',
         body: 'Fees for matches officiated, and whether each has been approved and exported. The list fills once a match is completed.',
+      },
+    ],
+  },
+  {
+    id: 'field-crew',
+    title: 'Field crew',
+    who: 'Gets the fields ready before first use and works the maintenance tasks.',
+    // Created by the demo dataset (apps/api/src/dev/demo/staff-crew.ts), not by the development seed.
+    subject: 'demo-crew',
+    tour: [
+      {
+        path: '/workspace/fields',
+        title: 'Fields by first use',
+        body: 'Each field has its checklist. Mark ready unlocks once every item is ticked, and the managers see it on Today.',
+        tryThis: ['Finish Field 2: it starts soon', 'Report a problem on a field'],
+      },
+      {
+        path: '/facilities/board',
+        title: 'Maintenance tasks board',
+        body: 'To do, doing and done, with the bookings each task affects. Closing a field offers to move or cancel them first.',
+        tryThis: ['Start the goalmouth repair', 'Close Field 2 and see what it affects'],
       },
     ],
   },

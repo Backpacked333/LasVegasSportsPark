@@ -82,7 +82,7 @@ describe('SwitchRow (ADR-008)', () => {
       false: theme.colors.control,
       true: theme.colors.primary,
     });
-    // ADR-008: a light thumb, never the platform's teal (which sat on gold in Legends mode).
+    // ADR-008: a light thumb, never the platform's teal (which sat on the accent in Legends mode).
     expect(screen.UNSAFE_getByType(Switch).props.thumbColor).toBe(
       name === 'legends' ? legendsTheme.colors.text : classicTheme.colors.background,
     );

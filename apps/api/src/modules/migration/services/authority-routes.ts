@@ -284,6 +284,7 @@ export const AUTHORITY_EXEMPT_ROUTES: readonly AuthorityExemptRoute[] = [
   x('POST', '/passes', NOT_A_CATEGORY),
   x('POST', '/passes/:id/revoke', NOT_A_CATEGORY),
   x('POST', '/passes/scan', 'A scan writes nothing but its audit record.'),
+  x('POST', '/arrival-lookups', 'A lookup by name writes nothing but its audit record (S 2a).'),
   x(
     'POST',
     '/facilities/:id/occupancy-snapshots',

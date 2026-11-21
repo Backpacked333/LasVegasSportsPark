@@ -10,3 +10,9 @@ export const DevSignIn: ComponentType | null =
   import.meta.env.DEV || import.meta.env.VITE_STAGING === 'true'
     ? lazy(() => import('./DevSignIn').then((m) => ({ default: m.DevSignIn })))
     : null;
+
+/** The redesign primitives gallery (`/dev/ui`): development and demo builds only. */
+export const UiGallery: ComponentType | null =
+  import.meta.env.DEV || __DEMO__
+    ? lazy(() => import('./UiGallery').then((m) => ({ default: m.UiGallery })))
+    : null;

@@ -24,6 +24,7 @@
       "communications.follow_season_first_game",
       "workforce.follow_fixture"
     ],
+    "competition.incident_reported": ["communications.notify_injury_report"],
     "competition.result_published": ["communications.notify_result_published"],
     "competition.result_reminder_requested": ["communications.notify_result_reminder"],
     "competition.season_created": ["communications.schedule_season_messages"],

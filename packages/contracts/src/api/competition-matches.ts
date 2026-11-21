@@ -1054,6 +1054,9 @@ export const IncidentSchema = z
     fixtureId: z.uuid().nullable(),
     seasonId: z.uuid().nullable(),
     competitionId: z.uuid().nullable(),
+    /** S 4d: the program session an injury or operational incident happened in, and its facility. */
+    sessionId: z.uuid().nullable(),
+    facilityId: z.uuid().nullable(),
     subjectPersonId: z.uuid().nullable(),
     teamEntryId: z.uuid().nullable(),
     resultRevisionId: z.uuid().nullable(),
@@ -1080,6 +1083,12 @@ export const CreateIncidentBody = withCommandMeta({
   fixtureId: z.uuid().optional(),
   seasonId: z.uuid().optional(),
   competitionId: z.uuid().optional(),
+  /**
+   * S 4d: a program session the incident happened in (with its offering); its assigned coach may
+   * report an injury or an operational incident there. Never with a fixture.
+   */
+  offeringId: z.uuid().optional(),
+  sessionId: z.uuid().optional(),
   subjectPersonId: z.uuid().optional(),
   teamEntryId: z.uuid().optional(),
   occurredAt: Instant.optional(),
@@ -1099,6 +1108,19 @@ export const CreateIncidentBody = withCommandMeta({
     message: 'a card names the carded person',
     path: ['subjectPersonId'],
   })
+  .refine((i) => (i.sessionId === undefined) === (i.offeringId === undefined), {
+    message: 'a session is named with its offering',
+    path: ['offeringId'],
+  })
+  .refine(
+    (i) =>
+      i.sessionId === undefined ||
+      ((i.kind === 'injury' || i.kind === 'operational') && i.fixtureId === undefined),
+    {
+      message: 'a session incident is an injury or an operational incident, without a fixture',
+      path: ['sessionId'],
+    },
+  )
   .openapi('CreateIncidentRequest');
 export type CreateIncidentInput = z.infer<typeof CreateIncidentBody>;
 
@@ -1112,6 +1134,7 @@ export type UpdateIncidentInput = z.infer<typeof UpdateIncidentBody>;
 
 export const ListIncidentsQuery = z.object({
   fixtureId: z.uuid().optional(),
+  sessionId: z.uuid().optional(),
   seasonId: z.uuid().optional(),
   subjectPersonId: z.uuid().optional(),
   status: IncidentStatusSchema.optional(),

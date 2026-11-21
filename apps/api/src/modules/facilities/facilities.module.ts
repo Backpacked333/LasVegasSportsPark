@@ -7,6 +7,7 @@ import { ClosureLiftGuards, ClosureLifted, SchedulingModule } from '../schedulin
 import { AssetsController } from './controllers/assets.controller';
 import { MaintenanceTasksController } from './controllers/maintenance-tasks.controller';
 import { PreventiveSchedulesController } from './controllers/preventive-schedules.controller';
+import { FieldPreparationsController } from './controllers/field-preparations.controller';
 import { ReleaseChecklistController } from './controllers/release-checklist.controller';
 import { RestrictionsController } from './controllers/restrictions.controller';
 import { MaintenanceTaskDueReached } from './facilities.events';
@@ -24,6 +25,7 @@ import { AssetsService } from './services/assets.service';
 import { FacilitiesJobs } from './services/facilities-jobs';
 import { FacilitiesReader } from './services/facilities-reader';
 import { FacilityDaySummaryService } from './services/facility-day-summary.service';
+import { FieldPreparationsService } from './services/field-preparations.service';
 import { MaintenanceTasksService } from './services/maintenance-tasks.service';
 import { PreventiveSchedulesService } from './services/preventive-schedules.service';
 import { ReleaseChecklistService } from './services/release-checklist.service';
@@ -37,6 +39,7 @@ const providers: Provider[] = [
   RestrictionsService,
   ReleaseChecklistService,
   FacilityDaySummaryService,
+  FieldPreparationsService,
   PreventiveSchedulesService,
   AssetDirectoryService,
   // FAC-03 (SPK-UX-006) and R4-OPS-MODULES-02 (SPK-FAC-004): registers
@@ -77,12 +80,14 @@ const providers: Provider[] = [
     RestrictionsController,
     PreventiveSchedulesController,
     ReleaseChecklistController,
+    FieldPreparationsController,
   ],
   exports: [
     AssetsService,
     MaintenanceTasksService,
     RestrictionsService,
     ReleaseChecklistService,
+    FieldPreparationsService,
     FacilityDaySummaryService,
     PreventiveSchedulesService,
     MAINTENANCE_REPORT_PORT,

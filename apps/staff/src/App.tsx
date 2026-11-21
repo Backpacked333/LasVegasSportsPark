@@ -4,7 +4,9 @@
  * switches), the coach and referee workspace (SPK-UX-007), sign-in, and a not-available page for
  * unknown paths.
  */
-import { Navigate, Route, Routes } from 'react-router';
+import { Suspense } from 'react';
+import { Route, Routes } from 'react-router';
+import { UiGallery } from './dev';
 import { competitionRoutes } from './features/competition/routes';
 import { insightAdminRoutes } from './features/insight-admin/routes';
 import { operationsRoutes } from './features/operations/routes';
@@ -13,6 +15,7 @@ import { Shell } from './layout/Shell';
 import { STAFF_AREAS } from './navigation/areas';
 import { messageSequenceRoutes } from './screens/communications/sequences/routes';
 import { packageGRoutes } from './screens/package-g/routes';
+import { crewRoutes, HomeRedirect } from './screens/crew/routes';
 import { AreaScreen } from './screens/area/AreaScreen';
 import { FacilitiesArea } from './screens/facilities/FacilitiesArea';
 import { NotFoundScreen } from './screens/not-found/NotFoundScreen';
@@ -23,6 +26,10 @@ import { DuplicateReviewScreen } from './screens/people/DuplicateReviewScreen';
 import { InvitationsScreen } from './screens/people/InvitationsScreen';
 import { OpenAccessReviewScreen } from './screens/people/OpenAccessReviewScreen';
 import { PeopleScreen } from './screens/people/PeopleScreen';
+import {
+  HouseholdRecordScreen,
+  PersonHouseholdRedirect,
+} from './screens/people/household/HouseholdRecordScreen';
 import { PersonRecordScreen } from './screens/people/PersonRecordScreen';
 import { publicRoutes } from './screens/public/routes';
 import { RelationshipsScreen } from './screens/people/RelationshipsScreen';
@@ -50,7 +57,9 @@ export function AppRoutes() {
       >
         {/* Before the area placeholders: the first of equal routes wins. */}
         {registrationFinanceRoutes()}
-        <Route index element={<Navigate to="/today" replace />} />
+        {/* Phase 8: the coach, referee and field crew homes; "/" opens the viewer's home. */}
+        {crewRoutes()}
+        <Route index element={<HomeRedirect />} />
         {/* Before the area placeholders: equally ranked routes match in order. */}
         {competitionRoutes()}
         {operationsRoutes()}
@@ -58,6 +67,16 @@ export function AppRoutes() {
         {packageGRoutes()}
         {messageSequenceRoutes()}
         <Route path="/today" element={<TodayScreen />} />
+        {UiGallery ? (
+          <Route
+            path="/dev/ui"
+            element={
+              <Suspense fallback={null}>
+                <UiGallery />
+              </Suspense>
+            }
+          />
+        ) : null}
         <Route path="/today/exceptions/:exceptionId" element={<ExceptionDetailScreen />} />
         <Route path="/people" element={<PeopleScreen />} />
         <Route path="/people/access-reviews" element={<AccessReviewsScreen />} />
@@ -66,6 +85,8 @@ export function AppRoutes() {
         <Route path="/people/duplicates" element={<DuplicateReviewScreen />} />
         <Route path="/people/duplicates/:candidateId" element={<DuplicateCandidateScreen />} />
         <Route path="/people/invitations" element={<InvitationsScreen />} />
+        <Route path="/people/households/:householdId" element={<HouseholdRecordScreen />} />
+        <Route path="/people/:personId/household" element={<PersonHouseholdRedirect />} />
         <Route path="/people/:personId" element={<PersonRecordScreen />} />
         <Route path="/people/:personId/relationships" element={<RelationshipsScreen />} />
         <Route path="/support/cases" element={<SupportCasesScreen />} />

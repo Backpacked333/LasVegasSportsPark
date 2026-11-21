@@ -119,7 +119,8 @@ describe('demo dataset (ADR-007)', () => {
       ['dev-parent', []],
     ]);
     expect(first.devTokens.path).toBe('/v1/dev/tokens');
-    // The dataset adds one sign-in account: the general manager, who approves and sees money.
+    // The dataset adds two sign-in accounts: the general manager, who approves and sees money,
+    // and the field crew (demo/staff-crew.ts, Phase 8), whose home is Fields.
     expect(first.demo.accounts.map((a) => [a.subject, a.roles])).toEqual([
       [
         'demo-manager',
@@ -131,6 +132,7 @@ describe('demo dataset (ADR-007)', () => {
           'scheduler',
         ],
       ],
+      ['demo-crew', ['facilities_operator']],
     ]);
     // Nothing the services refused: every part of the dataset was created.
     expect(first.demo.notCreated).toEqual([]);
@@ -425,7 +427,8 @@ describe('demo dataset (ADR-007)', () => {
     const rentals = await deskReads<{ items: Json[] }>(
       `/v1/bookings?kind=rental&facilityId=${facility}`,
     );
-    expect(rentals.items).toHaveLength(3);
+    // Three from the rentals seed and the regular Saturday renter of the staff schedule (S 5a).
+    expect(rentals.items).toHaveLength(4);
     const payments = await deskReads<{ items: Array<{ status: string }> }>(
       '/v1/payments?limit=100',
     );
@@ -438,7 +441,8 @@ describe('demo dataset (ADR-007)', () => {
     expect(uniforms).toHaveLength(2);
 
     const leagueReads = await as('dev-league');
-    expect(await leagueReads<Json[]>('/v1/competitions')).toHaveLength(2);
+    // The adult league, the cup being planned, and the parent app's youth league (parent-core).
+    expect(await leagueReads<Json[]>('/v1/competitions')).toHaveLength(3);
     const awaiting = await leagueReads<{ items: Json[] }>(
       `/v1/seasons/${seasonId}/result-revisions?status=submitted`,
     );
@@ -446,7 +450,8 @@ describe('demo dataset (ADR-007)', () => {
     const disputes = await leagueReads<{ items: Json[] }>(`/v1/disputes?seasonId=${seasonId}`);
     expect(disputes.items).toHaveLength(1);
     const drafts = await leagueReads<Json[]>(`/v1/schedule-drafts?facilityId=${facility}`);
-    expect(drafts).toHaveLength(2);
+    // Two from the league seed, and the staff schedule's make-up and clinic drafts (S 1b).
+    expect(drafts).toHaveLength(4);
 
     const adminReads = await as('dev-admin');
     expect((await adminReads<{ items: Json[] }>('/v1/message-templates')).items).toHaveLength(4);
@@ -490,22 +495,33 @@ describe('demo dataset (ADR-007)', () => {
     const tasks = await managerRead<{ items: Json[] }>(
       `/v1/maintenance-tasks?facilityId=${facility}`,
     );
-    expect(tasks.items).toHaveLength(1);
+    // The torn net on Field 3, and the field crew's three tasks (demo/staff-crew.ts, Phase 8).
+    expect(tasks.items).toHaveLength(4);
     const closures = await managerRead<Json[]>(`/v1/closures?facilityId=${facility}`);
-    expect(closures).toHaveLength(1);
+    // The planned Field 3 closure, and Field 4 closed for its repair during the busy hour that
+    // Today shows (demo/staff-today.ts; the clock of this suite is inside opening hours), and
+    // tomorrow's Field 4 repair on the week by use (demo/staff-schedule.ts).
+    expect(closures).toHaveLength(3);
 
     // "My assignments" of the coach and the official.
     const coachReads = await as('dev-coach');
     type Mine = { items: Array<{ assignment: { status: string } }> };
     const coach = await coachReads<Mine>('/v1/me/assignments');
-    expect(coach.items.map((a) => a.assignment.status).sort()).toEqual([
-      'accepted',
-      'accepted',
-      'offered',
-    ]);
+    // demo/assignments.ts: today's class and the futsal club accepted, next week's class offered;
+    // demo/staff-coach.ts: the Sunday class the coach declined (the swap to approve), and Little
+    // Kickers now when the coach is free at the seed's clock.
+    expect(coach.items.map((a) => a.assignment.status).sort()).toEqual(
+      expect.arrayContaining(['accepted', 'accepted', 'declined', 'offered']),
+    );
     const officialReads = await as('dev-official');
     const official = await officialReads<Mine>('/v1/me/assignments');
-    expect(official.items.map((a) => a.assignment.status).sort()).toEqual(['accepted', 'offered']);
+    // The next league night (accepted and offered), and the request for the coach's game today
+    // (demo/staff-crew.ts, Phase 8).
+    expect(official.items.map((a) => a.assignment.status).sort()).toEqual([
+      'accepted',
+      'offered',
+      'offered',
+    ]);
 
     // The seeded parent: a class today, a team, an amount owed, a waiver to accept, notices in
     // the inbox, an invitation to a rental roster and a register receipt.
@@ -515,22 +531,25 @@ describe('demo dataset (ADR-007)', () => {
     const enrollments = await parentReads<{ items: Array<{ status: string }> }>(
       `/v1/enrollments?participantPersonId=${child}`,
     );
-    expect(enrollments.items).toEqual([expect.objectContaining({ status: 'confirmed' })]);
+    // The term class, plus the front desk's training today and camp week (front-desk.ts: the desk
+    // scans this same family). The camp week may already be cancelled by the refund the desk shows.
+    expect(enrollments.items.filter((e) => e.status === 'confirmed').length).toBeGreaterThanOrEqual(
+      2,
+    );
     const from = new Date(t.clock.now().getTime() - 12 * 3_600_000).toISOString();
     const to = new Date(t.clock.now().getTime() + 12 * 3_600_000).toISOString();
     const calendar = await parentReads<{ items: Json[] }>(
       `/v1/me/family-calendar?from=${from}&to=${to}`,
     );
     expect(calendar.items.length).toBeGreaterThan(0);
-    expect(await parentReads<Json[]>('/v1/me/team-entries')).toHaveLength(1);
+    // The parent's own team and the child's youth team (parent-core).
+    expect(await parentReads<Json[]>('/v1/me/team-entries')).toHaveLength(2);
     const owed = await parentReads<{
       items: Array<{ status: string; totals: { remainingMinor: number } }>;
     }>(`/v1/obligations?debtorPersonId=${parent?.personId}&status=open`);
-    expect(owed.items).toEqual([
-      expect.objectContaining({
-        status: 'open',
-        totals: expect.objectContaining({ remainingMinor: 2_200 }),
-      }),
+    // The register's amount owed and the front desk's two league instalments (front-desk.ts).
+    expect(owed.items.map((o) => o.totals.remainingMinor).sort((a, b) => a - b)).toEqual([
+      2_200, 4_000, 4_000,
     ]);
     const waivers = await parentReads<{ waivers: Array<{ status: string }> }>(
       `/v1/people/${child}/waivers`,
@@ -556,12 +575,20 @@ describe('demo dataset late on a Sunday evening', () => {
       expect(summary.demo.notCreated).toEqual([]);
       expect(Object.keys(summary.demo.tourLinks)).toHaveLength(16);
       const assignments = await t.db.selectFrom('assignments').select(['status']).execute();
+      // demo/staff-coach.ts adds next Sunday's class: its duty manager (accepted), the coach's
+      // decline and the replacement proposed for it (the swap); Little Kickers "now" would cross
+      // midnight, so it is skipped at this hour.
+      // The coach's next game is tomorrow then, with its referee request (demo/staff-crew.ts).
       expect(assignments.map((a) => a.status).sort()).toEqual([
         'accepted',
         'accepted',
         'accepted',
+        'accepted',
+        'declined',
         'offered',
         'offered',
+        'offered',
+        'proposed',
       ]);
     } finally {
       await t.close();

@@ -190,6 +190,14 @@ export const ScanActivitySchema = z
     checkin: z
       .object({ id: z.uuid(), status: z.enum(['held', 'admitted']), revision: Revision })
       .nullable(),
+    /**
+     * S 2a arrival desk (SPK-ENTRY-004): the arrival checks for this person and activity as they
+     * stand at the scan, judged exactly as a check-in would judge them, so the desk can say
+     * "cleared" or "not cleared" before anyone is checked in. Nothing is recorded (SPK-ENTRY-003);
+     * a check-in evaluates them again when it is recorded. A `blocking` issue keeps the person
+     * not cleared; warnings and information never do.
+     */
+    issues: z.array(ArrivalIssueSchema),
   })
   .openapi('ScanActivity');
 export type ScanActivity = z.infer<typeof ScanActivitySchema>;
@@ -229,6 +237,21 @@ export const PassScanSchema = z
   })
   .openapi('PassScan');
 export type PassScan = z.infer<typeof PassScanSchema>;
+
+/**
+ * S 2a arrival desk "Name, phone or pass reference" (SPK-ENTRY-003, SPK-ENTRY-004): a family found
+ * by name opens the same selection a pass of that holder opens (a household's members, or a person
+ * and the people they may view), with the same arrival checks. Records nobody.
+ */
+export const ArrivalLookupBody = z
+  .object({ facilityId: z.uuid(), holder: PassHolderSchema })
+  .openapi('ArrivalLookupRequest');
+export type ArrivalLookupBody = z.infer<typeof ArrivalLookupBody>;
+
+export const ArrivalLookupSchema = PassScanSchema.omit({ pass: true })
+  .extend({ holder: PassHolderSchema })
+  .openapi('ArrivalLookup');
+export type ArrivalLookup = z.infer<typeof ArrivalLookupSchema>;
 
 // ---------------------------------------------------------------------------------------------
 // Visits: facility arrival (SPK-ENTRY-001, SPK-ENTRY-006)
@@ -642,6 +665,94 @@ export const CollectorCheckSchema = z
   .openapi('CollectorCheck');
 export type CollectorCheck = z.infer<typeof CollectorCheckSchema>;
 
+/**
+ * S 3g (SPK-ENTRY-007, SCR-W-09): the adults who may collect one participant of an activity right
+ * now, for the assigned coach or the pickup desk to match the person in front of them before a
+ * release. Only people holding `collect` over the participant now are listed (names only, never
+ * contacts or other permissions); a participant outside the activity reads as not found (§4.10).
+ * The release itself re-checks authority when it is recorded.
+ */
+export const AuthorizedCollectorsQuery = z.object({
+  activityType: z.enum(['session', 'event']),
+  activityId: z.uuid(),
+  offeringId: z.uuid().optional(),
+  participantPersonId: z.uuid(),
+});
+export type AuthorizedCollectorsQuery = z.infer<typeof AuthorizedCollectorsQuery>;
+
+export const AuthorizedCollectorsSchema = z
+  .object({
+    participantPersonId: z.uuid(),
+    collectors: z.array(
+      z.object({
+        personId: z.uuid(),
+        givenName: z.string(),
+        familyName: z.string(),
+        displayName: z.string(),
+      }),
+    ),
+    checkedAt: Instant,
+    restrictions: z.array(CollectorRestrictionSchema),
+  })
+  .openapi('AuthorizedCollectors');
+export type AuthorizedCollectors = z.infer<typeof AuthorizedCollectorsSchema>;
+
+/** `?personIds=a,b` or repeated: 1 to 60 participants of the activity. */
+const PersonIdList = z.preprocess(
+  (value) =>
+    typeof value === 'string'
+      ? value
+          .split(',')
+          .map((v) => v.trim())
+          .filter((v) => v.length > 0)
+      : value,
+  z.array(z.uuid()).min(1).max(60),
+);
+
+/**
+ * S 2d (SPK-ENTRY-004 actionable information, §1.7, §4.14): which participants of an activity have
+ * operational care notes, by kind only, for the assigned coach's attendance tiles (or desk staff
+ * who may read care notes). People outside the activity are left out. No note text is returned,
+ * so nothing is audited; the text is read one person at a time (`/attendance/care-notes`).
+ */
+export const ParticipantCareFlagsQuery = z.object({
+  activityType: z.enum(['session', 'event']),
+  activityId: z.uuid(),
+  offeringId: z.uuid().optional(),
+  personIds: PersonIdList,
+});
+export type ParticipantCareFlagsQuery = z.infer<typeof ParticipantCareFlagsQuery>;
+
+export const ParticipantCareFlagsSchema = z
+  .object({
+    items: z.array(
+      z.object({
+        personId: z.uuid(),
+        kinds: z.array(z.enum(['allergy', 'care_instruction'])),
+      }),
+    ),
+  })
+  .openapi('ParticipantCareFlags');
+export type ParticipantCareFlags = z.infer<typeof ParticipantCareFlagsSchema>;
+
+/** S 2d: one participant's care notes, for the assigned coach; every read is audited (§4.14). */
+export const ParticipantCareNotesQuery = z.object({
+  activityType: z.enum(['session', 'event']),
+  activityId: z.uuid(),
+  offeringId: z.uuid().optional(),
+  personId: z.uuid(),
+});
+export type ParticipantCareNotesQuery = z.infer<typeof ParticipantCareNotesQuery>;
+
+export const ParticipantCareNotesSchema = z
+  .object({
+    personId: z.uuid(),
+    notes: z.array(ScanCareNoteSchema),
+    readAt: Instant,
+  })
+  .openapi('ParticipantCareNotes');
+export type ParticipantCareNotes = z.infer<typeof ParticipantCareNotesSchema>;
+
 // ---------------------------------------------------------------------------------------------
 // Offline synchronization (§4.15, SPK-AT-018)
 // ---------------------------------------------------------------------------------------------
@@ -934,6 +1045,14 @@ command(
   false,
 );
 command(
+  '/arrival-lookups',
+  'Open the arrival selection for a household or person found by name, as a scan of their pass would (S 2a; records nobody, SPK-ENTRY-003)',
+  ArrivalLookupBody,
+  ArrivalLookupSchema,
+  200,
+  false,
+);
+command(
   '/visits',
   'Record facility arrivals for the selected people (SPK-ENTRY-001, SPK-ENTRY-006)',
   RecordVisitsBody,
@@ -986,6 +1105,18 @@ query(
   AttendanceQuery,
   ActivityAttendanceSchema,
 );
+query(
+  '/attendance/care-flags',
+  "Which participants of an activity have operational care notes, by kind only (the assigned coach's tiles, S 2d; SPK-ENTRY-004)",
+  ParticipantCareFlagsQuery,
+  ParticipantCareFlagsSchema,
+);
+query(
+  '/attendance/care-notes',
+  "One participant's operational care notes for the assigned coach or desk; every read is audited (S 2d, §4.14)",
+  ParticipantCareNotesQuery,
+  ParticipantCareNotesSchema,
+);
 command('/departures', 'Record a departure (SPK-ENTRY-001)', RecordDepartureBody, DepartureSchema);
 command(
   '/releases',
@@ -1000,6 +1131,12 @@ command(
   CollectorCheckSchema,
   200,
   false,
+);
+query(
+  '/releases/authorized-collectors',
+  'The adults who may collect a participant of the activity now, for the assigned coach or the pickup desk (S 3g, SPK-ENTRY-007)',
+  AuthorizedCollectorsQuery,
+  AuthorizedCollectorsSchema,
 );
 query('/releases/{id}', 'Read a release record', null, ReleaseRecordSchema);
 command(
