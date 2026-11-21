@@ -5,6 +5,16 @@
  */
 export type StatusTone = 'success' | 'warning' | 'danger' | 'info' | 'neutral' | 'pending';
 
+/**
+ * The six tones of the redesign handoff (README "Status tones"): success, warning, error, info,
+ * neutral and pending (proposed). `error` is the handoff's name for `danger`; both are accepted.
+ */
+export type HandoffTone = StatusTone | 'error';
+
+export function toneOf(tone: HandoffTone): StatusTone {
+  return tone === 'error' ? 'danger' : tone;
+}
+
 /** One distinct shape per tone, so tones differ in greyscale and for colour-blind users. */
 export const STATUS_GLYPHS: Record<StatusTone, string> = {
   success: '✓',
@@ -27,9 +37,24 @@ export function plainWords(label: string): string {
   );
 }
 
-export function StatusBadge({ tone, label }: { tone: StatusTone; label: string }) {
+export function StatusBadge({
+  tone: given,
+  label,
+  size,
+}: {
+  tone: HandoffTone;
+  label: string;
+  /** `sm`: the 20 px chip of dense cards (issue tags, check chips). */
+  size?: 'sm';
+}) {
+  const tone = toneOf(given);
   return (
-    <span className={`badge tone-${tone}`} data-tone={tone}>
+    <span
+      className={['badge', `tone-${tone}`, size === 'sm' ? 'badge-sm' : null]
+        .filter(Boolean)
+        .join(' ')}
+      data-tone={tone}
+    >
       <span aria-hidden="true">{STATUS_GLYPHS[tone]}</span>
       <span className="badge-label">{plainWords(label)}</span>
     </span>

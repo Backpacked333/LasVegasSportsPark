@@ -492,7 +492,9 @@ describe('demo dataset (ADR-007)', () => {
     );
     expect(tasks.items).toHaveLength(1);
     const closures = await managerRead<Json[]>(`/v1/closures?facilityId=${facility}`);
-    expect(closures).toHaveLength(1);
+    // The planned Field 3 closure, and Field 4 closed for its repair during the busy hour that
+    // Today shows (demo/staff-today.ts; the clock of this suite is inside opening hours).
+    expect(closures).toHaveLength(2);
 
     // "My assignments" of the coach and the official.
     const coachReads = await as('dev-coach');

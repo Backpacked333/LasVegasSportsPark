@@ -137,6 +137,35 @@
   --pending-wash: #faf8ff;
   --pending-dash: #b6a6e3;
 
+  /*
+   * Redesign handoff (README token table): person colours (each child keeps one everywhere: chip,
+   * stripe, avatar ring, initials fallback), the toast surface, the drawer and sheet shadows, and
+   * the "changed" flash of a live number.
+   */
+  --person-1: #b0306b;
+  --person-1-bg: #f8dde8;
+  --person-1-ink: #8e2152;
+  --person-2: #1d409e;
+  --person-2-bg: #dfe6f8;
+  --person-2-ink: #1d409e;
+  --person-3: #e08a1e;
+  --person-3-bg: #fbecd6;
+  --person-3-ink: #7a4500;
+  --person-4: #0e8a8a;
+  --person-4-bg: #d6f0ef;
+  --person-4-ink: #0a5f5f;
+  --person-5: #5b3fa8;
+  --person-5-bg: #eee8fa;
+  --person-5-ink: #5b3fa8;
+  --toast-bg: #1b2420;
+  --toast-ink: #e8f0eb;
+  --toast-action: #c6f36b;
+  --shadow-drawer: -12px 0 40px rgba(12, 34, 25, 0.18);
+  --shadow-sheet: 0 -8px 32px rgba(12, 34, 25, 0.1);
+  --flash: #c6f36b;
+  --skeleton: #ecece7;
+  --skeleton-shine: #f6f6f3;
+
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
@@ -280,6 +309,30 @@
   --info-ink: #b4d0ff;
   --pending-wash: #17132a;
   --pending-dash: #5a4b96;
+
+  --person-1: #f07cb1;
+  --person-1-bg: #35172a;
+  --person-1-ink: #f7a9cc;
+  --person-2: #7da2ff;
+  --person-2-bg: #172038;
+  --person-2-ink: #a9c1ff;
+  --person-3: #f2a54a;
+  --person-3-bg: #33240f;
+  --person-3-ink: #ffc98a;
+  --person-4: #4fd1c5;
+  --person-4-bg: #10302d;
+  --person-4-ink: #8ee6dd;
+  --person-5: #b9a2ff;
+  --person-5-bg: #221b38;
+  --person-5-ink: #d6c8ff;
+  --toast-bg: #1c1c1f;
+  --toast-ink: #f5f5f7;
+  --toast-action: #f0c75a;
+  --shadow-drawer: -12px 0 40px rgba(0, 0, 0, 0.6);
+  --shadow-sheet: 0 -8px 32px rgba(0, 0, 0, 0.6);
+  --flash: #f0c75a;
+  --skeleton: #1d1d20;
+  --skeleton-shine: #26262a;
 
   --shadow-chip: 0 1px 2px rgba(0, 0, 0, 0.5);
   --shadow-card: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 10px 28px -14px rgba(0, 0, 0, 0.8);
@@ -618,6 +671,11 @@ code {
   background: var(--tone-neutral-bg);
   color: var(--tone-neutral);
   max-width: 100%;
+}
+.badge-sm {
+  min-height: 20px;
+  padding: 0 7px;
+  font-size: 11px;
 }
 .badge-label {
   color: inherit;

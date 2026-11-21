@@ -22,6 +22,7 @@ import { seedRegistrations } from './demo/registrations';
 import { seedRentals } from './demo/rentals';
 import { seedReports } from './demo/reports';
 import { seedSpaces } from './demo/spaces';
+import { seedStaffToday } from './demo/staff-today';
 import {
   assertSeedAllowed,
   seedDevelopment,
@@ -136,6 +137,7 @@ export async function seedDemo(
   const register = await seedRegister(ctx, staff, families);
   ctx.log('staff assignments');
   await seedAssignments(ctx, staff, catalog, league);
+  await seedStaffToday(ctx, staff, spaces, catalog, league);
   await settle(ctx);
   ctx.log('reports');
   await seedReports(ctx, staff);
