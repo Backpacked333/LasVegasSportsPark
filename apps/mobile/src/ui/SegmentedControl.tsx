@@ -13,6 +13,7 @@
  */
 import { Pressable, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 import { useSelectionHaptic } from './ChoiceList';
+import { CountBadge } from './CountBadge';
 import { Icon } from './Icon';
 import {
   elevation,
@@ -31,6 +32,11 @@ export interface Segment<V extends string = string> {
   /** A fuller name for screen readers ("Upcoming sessions"). */
   accessibilityLabel?: string;
   disabled?: boolean;
+  /**
+   * A count beside the label (handoff M 2d: "To do 3"), drawn as a count badge and read as part
+   * of the segment's name ("To do, 3"). Nothing is drawn for 0.
+   */
+  count?: number;
 }
 
 export interface SegmentedControlProps<V extends string> {
@@ -83,7 +89,12 @@ export function SegmentedControl<V extends string>({
           <Pressable
             key={segment.value}
             accessibilityRole={tabs ? 'tab' : 'radio'}
-            accessibilityLabel={segment.accessibilityLabel ?? segment.label}
+            accessibilityLabel={[
+              segment.accessibilityLabel ?? segment.label,
+              segment.count && segment.count > 0 ? String(segment.count) : null,
+            ]
+              .filter(Boolean)
+              .join(', ')}
             accessibilityState={
               tabs ? { selected, disabled } : { checked: selected, selected, disabled }
             }
@@ -120,6 +131,7 @@ export function SegmentedControl<V extends string>({
             >
               {segment.label}
             </Text>
+            {segment.count ? <CountBadge count={segment.count} max={9} /> : null}
           </Pressable>
         );
       })}

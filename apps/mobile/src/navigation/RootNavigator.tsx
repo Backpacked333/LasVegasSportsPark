@@ -67,7 +67,7 @@ export function RootNavigator() {
         <Stack screenOptions={screenOptions}>
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
           <Stack.Screen name="pass" options={{ title: 'Facility pass', presentation: 'modal' }} />
-          <Stack.Screen name="inbox" options={{ title: 'Notifications' }} />
+          <Stack.Screen name="inbox" options={{ title: 'Inbox' }} />
           <Stack.Screen name="sign-in" options={{ title: 'Sign in' }} />
           <Stack.Screen name="onboarding" options={{ title: 'Account setup' }} />
           <Stack.Screen name="recovery" options={{ title: 'Account recovery' }} />
