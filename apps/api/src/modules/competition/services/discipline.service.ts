@@ -68,6 +68,7 @@ import { organizationOf, staffAuthority } from '../competition.shared';
 import {
   CARD_REMOVED_OVERTURN_REASON,
   DISCIPLINE_MANAGER_ROLES,
+  INJURY_REPORTED,
   SUSPENSION_CARD_REMOVED,
 } from '../competition-matches.policy';
 import type {
@@ -751,30 +752,54 @@ export class DisciplineService implements SuspensionCheckPort {
     correlationId: string | null,
   ): Promise<Incident> {
     const organizationId = organizationOf(principal);
+    await this.authorization.require(principal, MatchActions.reportIncident, {
+      type: 'incident',
+      organizationId,
+    });
+    // S 4d: a program session names its facility (workforce over catalog, read outside the
+    // transaction like every activity resolution); an unknown session is refused before anything
+    // is written.
+    const session =
+      input.sessionId !== undefined && input.offeringId !== undefined
+        ? await this.assignments.sessionCoverage(
+            organizationId,
+            input.offeringId,
+            input.sessionId,
+            principal.personId,
+          )
+        : null;
+    if (input.sessionId !== undefined && !session) {
+      throw errors.notFound('session', input.sessionId);
+    }
     return this.uow.run(async ({ trx }) => {
-      await this.authorization.require(principal, MatchActions.reportIncident, {
-        type: 'incident',
-        organizationId,
-      });
       // SPK-STAFF-005: an official reports incidents of a fixture they hold an accepted
-      // assignment for (proposed assignments do not count); league management reports any.
+      // assignment for (proposed assignments do not count); a coach reports an injury or an
+      // operational incident of a session they hold an accepted coach assignment for (S 4d);
+      // league management reports any.
       if (
         principal.kind === 'staff' &&
         !principal.staffRoles.some((r) => DISCIPLINE_MANAGER_ROLES.includes(r))
       ) {
-        const assigned =
+        const officialOfFixture =
           input.fixtureId !== undefined &&
           principal.personId !== null &&
+          principal.staffRoles.includes('official') &&
           (await this.assignments.isAcceptedOfficial(
             organizationId,
             input.fixtureId,
             principal.personId,
             trx,
           ));
-        if (!assigned) {
+        const coachOfSession =
+          session !== null && session.acceptedCoach && principal.staffRoles.includes('coach');
+        if (!officialOfFixture && !coachOfSession) {
           throw errors.accessDenied(
-            'An official reports incidents only for a fixture they are assigned to and have accepted.',
-            { action: MatchActions.reportIncident.id, fixtureId: input.fixtureId ?? null },
+            'Officials report incidents only for a fixture they are assigned to and have accepted; coaches only for a session they coach.',
+            {
+              action: MatchActions.reportIncident.id,
+              fixtureId: input.fixtureId ?? null,
+              sessionId: input.sessionId ?? null,
+            },
           );
         }
       }
@@ -804,6 +829,8 @@ export class DisciplineService implements SuspensionCheckPort {
         fixtureId: input.fixtureId ?? null,
         seasonId,
         competitionId,
+        sessionId: input.sessionId ?? null,
+        facilityId: session?.facilityId ?? null,
         subjectPersonId: input.subjectPersonId ?? null,
         teamEntryId: input.teamEntryId ?? null,
         resultRevisionId: null,
@@ -831,6 +858,9 @@ export class DisciplineService implements SuspensionCheckPort {
       fixtureId: string | null;
       seasonId: string | null;
       competitionId: string | null;
+      /** S 4d: the program session and its facility (session incidents only). */
+      sessionId?: string | null;
+      facilityId?: string | null;
       subjectPersonId: string | null;
       teamEntryId: string | null;
       resultRevisionId: string | null;
@@ -853,6 +883,8 @@ export class DisciplineService implements SuspensionCheckPort {
         fixture_id: input.fixtureId,
         season_id: input.seasonId,
         competition_id: input.competitionId,
+        offering_session_id: input.sessionId ?? null,
+        facility_id: input.facilityId ?? null,
         subject_person_id: input.subjectPersonId,
         team_entry_id: input.teamEntryId,
         result_revision_id: input.resultRevisionId,
@@ -885,8 +917,31 @@ export class DisciplineService implements SuspensionCheckPort {
         severity: input.severity,
         fixtureId: input.fixtureId,
         resultRevisionId: input.resultRevisionId,
+        sessionId: input.sessionId ?? null,
       },
     });
+    // S 4d (SPK-UX-006): an injury is an issue on the manager's Today until it is reviewed; the
+    // exception names the incident (its restricted narrative is never copied, SPK-DISC-004).
+    if (input.kind === 'injury') {
+      await this.exceptions.raise(trx, {
+        organizationId: input.organizationId,
+        facilityId: input.facilityId ?? null,
+        category: INJURY_REPORTED.category,
+        severity: input.severity === 'critical' || input.severity === 'high' ? 'high' : 'warning',
+        title: `Injury reported: ${input.summary}`,
+        affectedType: 'incident',
+        affectedId: input.id,
+        ownerQueue: input.sessionId ? 'program_manager' : INJURY_REPORTED.ownerQueue,
+        dedupeKey: `injury_reported:${input.id}`,
+        details: {
+          incidentId: input.id,
+          fixtureId: input.fixtureId,
+          sessionId: input.sessionId ?? null,
+          subjectPersonId: input.subjectPersonId,
+          severity: input.severity,
+        },
+      });
+    }
     await this.outbox.enqueue(trx, MatchEvents.incidentReported, {
       organizationId: input.organizationId,
       aggregateType: 'incident',
@@ -897,6 +952,8 @@ export class DisciplineService implements SuspensionCheckPort {
         severity: input.severity,
         fixtureId: input.fixtureId,
         subjectPersonId: input.subjectPersonId,
+        sessionId: input.sessionId ?? null,
+        facilityId: input.facilityId ?? null,
       },
       correlationId: input.correlationId,
     });
@@ -995,6 +1052,7 @@ export class DisciplineService implements SuspensionCheckPort {
       .orderBy('occurred_at', 'desc')
       .orderBy('id');
     if (query.fixtureId) q = q.where('fixture_id', '=', query.fixtureId);
+    if (query.sessionId) q = q.where('offering_session_id', '=', query.sessionId);
     if (query.seasonId) q = q.where('season_id', '=', query.seasonId);
     if (query.subjectPersonId) q = q.where('subject_person_id', '=', query.subjectPersonId);
     if (query.status) q = q.where('status', '=', query.status);

@@ -162,6 +162,9 @@ export interface IncidentsTable {
   closed_at: NullableTimestamp;
   closed_by: Json<Record<string, unknown>> | null;
   closure_note: string | null;
+  /** S 4d (migration 0472): the program session an injury or operational incident happened in. */
+  offering_session_id: Generated<string | null>;
+  facility_id: Generated<string | null>;
   revision: Generated<number>;
   created_at: GeneratedTimestamp;
   updated_at: GeneratedTimestamp;

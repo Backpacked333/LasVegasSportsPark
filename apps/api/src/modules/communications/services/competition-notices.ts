@@ -17,6 +17,7 @@ type InvitationCreatedPayload = EventPayload<typeof CompetitionEvents.teamInvita
 type ResultPublishedPayload = EventPayload<typeof MatchEvents.resultPublished>;
 type AvailabilityRequestedPayload = EventPayload<typeof CompetitionEvents.availabilityRequested>;
 type ResultReminderPayload = EventPayload<typeof FieldEvents.resultReminderRequested>;
+type IncidentReportedPayload = EventPayload<typeof MatchEvents.incidentReported>;
 
 /** The actor communications composes competition notices as (an audit label, no authority). */
 const ACTOR = 'communications.competition_notices';
@@ -184,6 +185,38 @@ export class CompetitionNotices {
   }
 
   /** A replayed event whose notice exists composes nothing (the unique source-event index). */
+  /**
+   * `communications.notify_injury_report` (S 4d, SPK-DISC-001, SPK-DISC-005, SPK-COMMS-002): an
+   * injury reported about a person is one protected operational `injury_report` notice with that
+   * person as its subject, so the guardians holding `receive_messages` over a child hear about it
+   * (re-checked before dispatch). The notice says that a report was made and where to ask; the
+   * restricted narrative and anything resembling a diagnosis are never copied into it
+   * (SPK-DISC-004, SPK-DISC-005). Other incident kinds, and incidents about nobody, are not
+   * messaged.
+   */
+  async onIncidentReported(trx: Trx, event: DomainEvent<IncidentReportedPayload>): Promise<void> {
+    const payload = event.payload;
+    if (payload.kind !== 'injury' || !payload.subjectPersonId) return;
+    if (await this.alreadyComposed(trx, event)) return;
+    const facility = payload.facilityId
+      ? (await this.facilities.describe(event.organizationId, [payload.facilityId], trx)).get(
+          payload.facilityId,
+        )
+      : undefined;
+    await this.notifications.composeAndQueueIn(trx, systemPrincipal(event.organizationId, ACTOR), {
+      kind: 'injury_report',
+      category: 'operational',
+      ...(facility ? { facilityId: facility.id } : {}),
+      subject: { type: 'incident', id: payload.incidentId },
+      audience: { subjectPersonIds: [payload.subjectPersonId] },
+      title: 'Injury report from today',
+      body: `A coach recorded an injury to your child and what was done about it${facility ? ` at ${facility.name}` : ''}. Call the front desk if you have questions or the coach asked you to.`,
+      protected: true,
+      sourceEventId: event.id,
+      correlationId: event.correlationId,
+    });
+  }
+
   private async alreadyComposed(trx: Trx, event: DomainEvent<unknown>): Promise<boolean> {
     const row = await trx
       .selectFrom('notifications')

@@ -47,6 +47,7 @@ describe('placement and field-side work (SPK-PLACE-002/005, SPK-UX-007, SPK-STAF
   const assignments: AssignmentCheckPort = {
     isAcceptedOfficial: async (_organizationId, fixture, personId) =>
       accepted.has(`${fixture}:${personId}`),
+    sessionCoverage: async () => null,
   };
 
   const post = (path: string, actor: Actor, body: object, k: string = key()) =>
