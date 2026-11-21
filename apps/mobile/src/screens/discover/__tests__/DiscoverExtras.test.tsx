@@ -5,13 +5,24 @@
  * Explore v2 (ADR-008): the search box searches on the keyboard's search key or after a pause,
  * promotions are tags on the picture card, suggestions are picture tiles with person chips.
  */
-import { apiErrorBody, fakeResponse } from '@sportspark/api-client/testing';
-import { fireEvent, render, screen, within } from '@testing-library/react-native';
+import { apiErrorBody, fakeResponse, type FakeRequest } from '@sportspark/api-client/testing';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
+import { groupForExplore } from '../../../features/register/fit';
 import { createRegistrationTestApp } from '../../../features/registration/testing/registration-test-app';
-import { familyRoutes, IDS, offering, page } from '../../../features/registration/testing/fixtures';
-import { promotionText } from '../../../features/registration/promotions';
-import { DiscoverScreen, searchProblem } from '../DiscoverScreen';
-import { openSupportDetails } from '../../../testing/ui-surfaces';
+import {
+  familyRoutes,
+  IDS,
+  offering,
+  offeringSession,
+  page,
+} from '../../../features/registration/testing/fixtures';
+import {
+  DiscoverScreen,
+  exploreQuery,
+  forPerson,
+  searchProblem,
+  whenRange,
+} from '../DiscoverScreen';
 
 const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), navigate: jest.fn() };
 jest.mock('expo-router', () => ({
@@ -31,17 +42,6 @@ const EARLY_BIRD = {
   // 07:59 UTC on Nov 16 is still Nov 15 in Los Angeles: the facility's zone decides the date.
   availableUntil: '2026-11-16T07:59:00.000Z',
 };
-const SIBLINGS = {
-  ...EARLY_BIRD,
-  discountDefinitionId: '0192f1a0-0000-7000-8000-0000000000e2',
-  name: 'Siblings',
-  basis: 'multi_line' as const,
-  amountKind: 'fixed' as const,
-  amountValue: 2000,
-  currency: 'USD',
-  minLines: 2,
-  availableUntil: null,
-};
 
 const CAMP = offering({
   id: IDS.offering2,
@@ -51,46 +51,7 @@ const CAMP = offering({
   promotions: [EARLY_BIRD],
 });
 
-function suggestionsFor(personId: string) {
-  return {
-    participantPersonId: personId,
-    basis: 'ok',
-    items: [
-      {
-        offering: CAMP,
-        reason: { kind: 'age_band', ageYears: 9, referenceDate: '2026-12-21' },
-      },
-    ],
-  };
-}
-
 describe('SCR-C-07 Discover: search, promotions and suggestions', () => {
-  it('searches the catalog on the server with q, and an unmatched search says what was searched', async () => {
-    const app = createRegistrationTestApp({
-      routes: {
-        'GET /offerings': (req) =>
-          fakeResponse(200, { items: req.query.q ? [] : [offering()], nextCursor: null }),
-      },
-    });
-    render(<DiscoverScreen />, { wrapper: app.wrapper });
-    expect(await screen.findByText('Autumn Youth Program')).toBeOnTheScreen();
-
-    fireEvent.changeText(screen.getByLabelText('Search activities'), 'zumba');
-    fireEvent(screen.getByLabelText('Search activities'), 'submitEditing');
-    expect(
-      await screen.findByRole('header', { name: 'No activities match "zumba"' }),
-    ).toBeOnTheScreen();
-    expect(app.fake.requests.filter((r) => r.route === '/offerings').at(-1)?.query).toEqual({
-      limit: '50',
-      q: 'zumba',
-    });
-
-    fireEvent.press(screen.getByRole('button', { name: 'Show all activities' }));
-    expect(await screen.findByText('Autumn Youth Program')).toBeOnTheScreen();
-    expect(screen.getByLabelText('Search activities')).toHaveProp('value', '');
-    await app.settle();
-  });
-
   it('a one-letter search is a field message and nothing is sent', async () => {
     const app = createRegistrationTestApp({ routes: { 'GET /offerings': page([offering()]) } });
     render(<DiscoverScreen />, { wrapper: app.wrapper });
@@ -104,104 +65,287 @@ describe('SCR-C-07 Discover: search, promotions and suggestions', () => {
     expect(searchProblem('  ab ')).toBeNull();
     await app.settle();
   });
+});
 
-  it('SPK-PAY-003: an automatic discount is a labelled pill on the row, dated in the facility zone', async () => {
-    const app = createRegistrationTestApp({ routes: { 'GET /offerings': page([CAMP]) } });
-    render(<DiscoverScreen />, { wrapper: app.wrapper });
-    const row = await screen.findByTestId(`offering-${IDS.offering2}`);
-    expect(within(row).getByLabelText('Early bird: 10% off until Nov 15')).toBeOnTheScreen();
-    // The row's one label reads the promotion after the status.
-    expect(within(row).getByRole('button').props.accessibilityLabel).toMatch(
-      /Registration open, Early bird: 10% off until Nov 15$/,
-    );
-    expect(promotionText(SIBLINGS, 'America/Los_Angeles')).toBe(
-      'Siblings: $20.00 off with 2 or more registrations',
-    );
-    await app.settle();
-  });
+/** Ada is 9 on the test day, Ben 5 (dates of birth from `GET /people/{id}`). */
+function person(id: string, givenName: string, dateOfBirth: string | null) {
+  return {
+    id,
+    kind: 'child',
+    givenName,
+    familyName: 'Example',
+    dateOfBirth,
+    status: 'active',
+    mergedIntoPersonId: null,
+    revision: 1,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+  };
+}
 
-  it('"Picked for <child>": suggestions by age for each family member who may be registered', async () => {
-    const app = createRegistrationTestApp({
-      routes: {
-        ...familyRoutes(),
-        'GET /offerings': page([offering()]),
-        'GET /me/offering-suggestions': (req) =>
-          fakeResponse(200, suggestionsFor(String(req.query.participantPersonId))),
+const FUTSAL = offering({
+  id: '0192f1a0-0000-7000-8000-0000000000c1',
+  name: 'Futsal Skills Clinic',
+  ageBand: { minAgeYears: 7, maxAgeYears: 11 },
+  price: {
+    ...(offering().price as NonNullable<ReturnType<typeof offering>['price']>),
+    basePriceMinor: 9500,
+  },
+});
+const HOOPS = offering({
+  id: '0192f1a0-0000-7000-8000-0000000000c2',
+  name: 'Junior Hoops',
+  ageBand: { minAgeYears: 6, maxAgeYears: 10 },
+});
+const KEEPERS = offering({
+  id: '0192f1a0-0000-7000-8000-0000000000c3',
+  name: 'Goalkeeper Basics',
+  ageBand: { minAgeYears: 7, maxAgeYears: 12 },
+});
+const TOTS = offering({
+  id: '0192f1a0-0000-7000-8000-0000000000c4',
+  name: 'Tiny Tots',
+  ageBand: { minAgeYears: 3, maxAgeYears: 5 },
+});
+
+function exploreRoutes(overrides: Record<string, unknown> = {}) {
+  return {
+    ...familyRoutes(),
+    'GET /offerings': page([FUTSAL, HOOPS, KEEPERS, TOTS, CAMP]),
+    'GET /people/{id}': (req: FakeRequest) =>
+      fakeResponse(
+        200,
+        req.params.id === IDS.childA
+          ? person(IDS.childA, 'Ada', '2017-03-01')
+          : req.params.id === IDS.childB
+            ? person(IDS.childB, 'Ben', '2021-03-01')
+            : person(req.params.id as string, 'Cy', null),
+      ),
+    'GET /offerings/{id}/sessions': (req: FakeRequest) =>
+      fakeResponse(
+        200,
+        req.params.id === FUTSAL.id
+          ? [
+              offeringSession({
+                id: `${FUTSAL.id.slice(0, -2)}d1`,
+                offeringId: FUTSAL.id,
+                scheduledStart: '2026-10-29T00:00:00.000Z',
+                scheduledEnd: '2026-10-29T01:00:00.000Z',
+              }),
+              offeringSession({
+                id: `${FUTSAL.id.slice(0, -2)}d2`,
+                offeringId: FUTSAL.id,
+                sequence: 2,
+                scheduledStart: '2026-11-05T01:00:00.000Z',
+                scheduledEnd: '2026-11-05T02:00:00.000Z',
+              }),
+            ]
+          : req.params.id === HOOPS.id
+            ? [
+                offeringSession({
+                  offeringId: HOOPS.id,
+                  scheduledStart: '2026-10-31T16:00:00.000Z',
+                  scheduledEnd: '2026-10-31T17:00:00.000Z',
+                }),
+              ]
+            : [],
+      ),
+    'GET /me/family-calendar': {
+      status: 200,
+      body: { from: '', to: '', participantPersonIds: [], items: [], overlaps: [] },
+    },
+    'GET /me/team-entries': {
+      status: 200,
+      body: [
+        {
+          teamEntry: { id: IDS.season },
+          teamName: 'Desert Foxes U9',
+          seasonId: IDS.season,
+          seasonName: 'Fall',
+          divisionName: 'U9',
+          members: [{ personId: IDS.childA, roles: ['player'], rosterStatus: 'active' }],
+          nextFixture: null,
+        },
+      ],
+    },
+    'GET /me/fixtures': {
+      status: 200,
+      body: [
+        {
+          id: IDS.operation,
+          status: 'scheduled',
+          scheduledStart: '2026-10-31T16:00:00.000Z',
+          scheduledEnd: '2026-10-31T17:00:00.000Z',
+          home: {
+            entryId: IDS.season,
+            teamId: IDS.season,
+            teamName: 'Desert Foxes U9',
+            availability: {},
+          },
+          away: null,
+          venue: { timezone: 'America/Los_Angeles' },
+          responses: [],
+          myResponse: null,
+          rosterStatus: null,
+        },
+      ],
+    },
+    'GET /offering-availability': {
+      status: 200,
+      body: {
+        items: [
+          { offeringId: FUTSAL.id, status: 'available', unit: 'seats', capacity: 12, remaining: 4 },
+          { offeringId: KEEPERS.id, status: 'full', unit: 'seats', capacity: 6, remaining: 0 },
+        ],
+        unavailableOfferingIds: [],
       },
-    });
-    render(<DiscoverScreen />, { wrapper: app.wrapper });
+    },
+    'GET /me/offering-suggestions': {
+      status: 200,
+      body: { participantPersonId: IDS.childA, basis: 'ok', items: [] },
+    },
+    ...overrides,
+  };
+}
 
-    const card = await screen.findByTestId('picked-for');
-    expect(within(card).getByRole('header', { name: 'Picked for Ada' })).toBeOnTheScreen();
-    const suggestion = await within(card).findByTestId(`suggestion-${IDS.offering2}`);
-    expect(within(suggestion).getByRole('button').props.accessibilityLabel).toContain(
-      'Ada is 9 on Dec 21, 2026',
-    );
+describe('M 1d Explore: shop for one child', () => {
+  it('1d row 2: "Looking for" sets the age: with Ada chosen only what fits age 9 is listed, and the hint says so; tapping her again shows everyone', async () => {
+    const app = createRegistrationTestApp({ routes: exploreRoutes() });
+    render(<DiscoverScreen />, { wrapper: app.wrapper });
+    fireEvent.press(await screen.findByRole('radio', { name: 'Ada, 9' }));
     expect(
-      within(card).getByText(
-        'Suggested by age only. Whether someone can take part is checked when you register.',
+      screen.getByText(
+        "Only showing activities for ages 9. Times that clash with Ada's calendar are flagged.",
       ),
     ).toBeOnTheScreen();
-    // A view-only family member is never offered (the account may not register them).
-    expect(within(card).queryByRole('button', { name: 'Cy' })).toBeNull();
+    await waitFor(() => expect(screen.queryByText('Tiny Tots')).toBeNull());
+    expect(screen.getByRole('header', { name: 'All for Ada' })).toBeOnTheScreen();
+    // The choice is the shared who-filter (Home and Calendar read it too).
+    expect(app.services.personFilterStore?.read()).toBe(IDS.childA);
+    fireEvent.press(screen.getByRole('radio', { name: 'Ada, 9' }));
+    expect(await screen.findByText('Tiny Tots')).toBeOnTheScreen();
+  });
 
-    fireEvent.press(within(card).getByRole('button', { name: 'Ben' }));
-    expect(await within(card).findByRole('header', { name: 'Picked for Ben' })).toBeOnTheScreen();
-    expect(
-      app.fake.requests.filter((r) => r.route === '/me/offering-suggestions').at(-1)?.query,
-    ).toEqual({ participantPersonId: IDS.childB, limit: '3' });
+  it('1d rows 3 and 4: one fit answer per card from Ada\'s calendar (fits, clashes with her team, full · waitlist) and "4 left" at five or fewer places', async () => {
+    const app = createRegistrationTestApp({ routes: exploreRoutes(), personFilter: IDS.childA });
+    render(<DiscoverScreen />, { wrapper: app.wrapper });
+    const futsal = await screen.findByTestId(`offering-${FUTSAL.id}`);
+    await waitFor(() => expect(within(futsal).getByLabelText("Fits Ada's week")).toBeOnTheScreen());
+    expect(within(futsal).getByLabelText('4 left')).toBeOnTheScreen();
+    expect(within(futsal).getByText('$95')).toBeOnTheScreen();
+    expect(within(futsal).getByText(/^Wednesdays 5:00 PM · 2 weeks$/)).toBeOnTheScreen();
+    const hoops = screen.getByTestId(`offering-${HOOPS.id}`);
+    expect(within(hoops).getByLabelText('Clashes with Desert Foxes')).toBeOnTheScreen();
+    const keepers = screen.getByTestId(`offering-${KEEPERS.id}`);
+    expect(within(keepers).getByLabelText('Full · waitlist')).toBeOnTheScreen();
+  });
 
-    fireEvent.press(
-      within(await within(card).findByTestId(`suggestion-${IDS.offering2}`)).getByRole('button'),
+  it('1d row 4: when the places read fails, no places badge is shown (never guessed)', async () => {
+    const app = createRegistrationTestApp({
+      routes: exploreRoutes({
+        'GET /offering-availability': () =>
+          fakeResponse(503, apiErrorBody('INTEGRATION_UNAVAILABLE')),
+      }),
+      personFilter: IDS.childA,
+    });
+    render(<DiscoverScreen />, { wrapper: app.wrapper });
+    const futsal = await screen.findByTestId(`offering-${FUTSAL.id}`);
+    await waitFor(() => expect(within(futsal).getByLabelText("Fits Ada's week")).toBeOnTheScreen());
+    expect(within(futsal).queryByLabelText(/left$/)).toBeNull();
+    expect(screen.queryByLabelText('Full · waitlist')).toBeNull();
+  });
+
+  it('1d: a promotion is a floodlight tag on the picture of a "Picked for Ada" tile', async () => {
+    const app = createRegistrationTestApp({
+      routes: exploreRoutes({
+        'GET /me/offering-suggestions': {
+          status: 200,
+          body: {
+            participantPersonId: IDS.childA,
+            basis: 'ok',
+            items: [
+              {
+                offering: CAMP,
+                reason: { kind: 'age_band', ageYears: 9, referenceDate: '2026-10-24' },
+              },
+            ],
+          },
+        },
+      }),
+      personFilter: IDS.childA,
+    });
+    render(<DiscoverScreen />, { wrapper: app.wrapper });
+    expect(await screen.findByRole('header', { name: 'Picked for Ada' })).toBeOnTheScreen();
+    const tile = screen.getByTestId(`picked-${CAMP.id}`);
+    expect(within(tile).getByText('Early bird')).toBeOnTheScreen();
+    expect(within(tile).getByText('$120 / week')).toBeOnTheScreen();
+  });
+
+  it('1d row 1: the search is sent as q after a 250 ms pause; nothing matching reads "Nothing matches. Try a sport or a day." with sport chips', async () => {
+    jest.useFakeTimers();
+    try {
+      const app = createRegistrationTestApp({
+        routes: exploreRoutes({
+          'GET /offerings': (req: FakeRequest) =>
+            fakeResponse(200, { items: req.query.q ? [] : [FUTSAL], nextCursor: null }),
+        }),
+      });
+      render(<DiscoverScreen />, { wrapper: app.wrapper });
+      await screen.findByText('Futsal Skills Clinic');
+      fireEvent.changeText(screen.getByLabelText('Search activities'), 'zumba');
+      act(() => jest.advanceTimersByTime(249));
+      expect(app.fake.requests.some((r) => r.query.q === 'zumba')).toBe(false);
+      act(() => jest.advanceTimersByTime(1));
+      expect(await screen.findByText('Nothing matches. Try a sport or a day.')).toBeOnTheScreen();
+      expect(app.fake.requests.some((r) => r.route === '/offerings' && r.query.q === 'zumba')).toBe(
+        true,
+      );
+      fireEvent.press(within(screen.getByTestId('discover-sports')).getByText('Futsal'));
+      await waitFor(() =>
+        expect(
+          app.fake.requests.some((r) => r.route === '/offerings' && r.query.q === 'futsal'),
+        ).toBe(true),
+      );
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('1d: the category chips send their kind; the filters sheet sends dates and format (only parameters the API takes)', async () => {
+    const app = createRegistrationTestApp({ routes: exploreRoutes() });
+    render(<DiscoverScreen />, { wrapper: app.wrapper });
+    fireEvent.press(await screen.findByRole('button', { name: 'Camps' }));
+    await waitFor(() =>
+      expect(
+        app.fake.requests.some((r) => r.route === '/offerings' && r.query.kind === 'camp'),
+      ).toBe(true),
     );
-    expect(mockRouter.push).toHaveBeenCalledWith(`/registration/offering/${IDS.offering2}`);
-    await app.settle();
-  });
-
-  it('says so when no date of birth is recorded, and shows a failure with its code', async () => {
-    const app = createRegistrationTestApp({
-      routes: {
-        ...familyRoutes(),
-        'GET /offerings': page([offering()]),
-        'GET /me/offering-suggestions': (req) =>
-          req.query.participantPersonId === IDS.childA
-            ? fakeResponse(200, {
-                participantPersonId: IDS.childA,
-                basis: 'date_of_birth_unknown',
-                items: [],
-              })
-            : fakeResponse(500, apiErrorBody('INTERNAL_ERROR')),
-      },
-    });
-    render(<DiscoverScreen />, { wrapper: app.wrapper });
+    expect(whenRange('week', '2026-10-21')).toEqual({ from: '2026-10-21', to: '2026-10-25' });
+    expect(whenRange('month', '2026-10-21')).toEqual({ from: '2026-10-21', to: '2026-10-31' });
     expect(
-      await screen.findByText(
-        'No date of birth is recorded for Ada, so nothing can be suggested by age. The front desk can add it.',
+      exploreQuery(
+        { kind: 'camp', search: ' foxes ', filter: { format: '7v7', from: '2026-11-01', to: '' } },
+        { signedIn: true, organizationSlug: 'dev' },
       ),
-    ).toBeOnTheScreen();
-
-    fireEvent.press(screen.getByRole('button', { name: 'Ben' }));
-    await openSupportDetails(screen);
-    expect(await screen.findByText(/Error code: INTERNAL_ERROR/)).toBeOnTheScreen();
-    expect(
-      within(screen.getByTestId('picked-for')).getByRole('button', { name: 'Try again' }),
-    ).toBeOnTheScreen();
-    await app.settle();
+    ).toEqual({ limit: 50, kind: 'camp', format: '7v7', from: '2026-11-01', q: 'foxes' });
   });
 
-  it('hides the suggestions while a filter is applied', async () => {
-    const app = createRegistrationTestApp({
-      routes: {
-        ...familyRoutes(),
-        'GET /offerings': page([offering()]),
-        'GET /me/offering-suggestions': (req) =>
-          fakeResponse(200, suggestionsFor(String(req.query.participantPersonId))),
-      },
-    });
-    render(<DiscoverScreen />, { wrapper: app.wrapper });
-    expect(await screen.findByTestId('picked-for')).toBeOnTheScreen();
-    fireEvent.press(screen.getByRole('button', { name: 'Camps' }));
-    expect(screen.queryByTestId('picked-for')).toBeNull();
-    await app.settle();
+  it('1d: the weeks of one camp are one card; a person without an age narrows nothing', () => {
+    const week2 = {
+      ...CAMP,
+      id: IDS.offering,
+      name: 'Winter Break Soccer Camp · Week 2',
+      startsOn: '2026-12-28',
+      endsOn: '2027-01-01',
+    };
+    const week1 = { ...CAMP, name: 'Winter Break Soccer Camp · Week 1' };
+    const grouped = groupForExplore([week1, FUTSAL, week2]);
+    expect(grouped.map((g) => g.name)).toEqual([
+      'Winter Break Soccer Camp',
+      'Futsal Skills Clinic',
+    ]);
+    expect(grouped[0]?.members.map((m) => m.id)).toEqual([week1.id, week2.id]);
+    expect(forPerson([FUTSAL, TOTS], { age: null })).toHaveLength(2);
+    expect(forPerson([FUTSAL, TOTS], { age: 4 }).map((o) => o.name)).toEqual(['Tiny Tots']);
   });
 });

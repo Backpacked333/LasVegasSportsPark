@@ -76,6 +76,10 @@ export function routeForTarget(target: LinkTarget): string | null {
       return '/onboarding';
     case 'inbox':
       return '/inbox';
+    case 'activity':
+      return `/registration/offering/${target.id}`;
+    case 'waitlist':
+      return `/registration/waitlist/${target.id}`;
     case 'account':
       return '/account';
     case 'family':

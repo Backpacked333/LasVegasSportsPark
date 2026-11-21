@@ -41,15 +41,11 @@
 import { presentationForError, type Schema } from '@sportspark/api-client';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useState, type ReactNode } from 'react';
-import { Pressable, View } from 'react-native';
+import { Pressable, Share, View } from 'react-native';
+import { useInsets } from '../../ui/insets';
 import { useApiQuery } from '../../api/useApiQuery';
 import { artworkFor } from '../../artwork/artworkFor';
-import {
-  ageBandLabel,
-  capacityLabel,
-  formatInstant,
-  formatMoney,
-} from '../../features/registration/format';
+import { ageBandLabel, formatInstant, formatMoney } from '../../features/registration/format';
 import { basketInProgress, useMyBaskets } from '../../features/registration/in-progress';
 import { INTENT_LABELS } from '../../features/registration/intents';
 import {
@@ -75,13 +71,39 @@ import { InfoCard } from '../../ui/InfoCard';
 import { QueryBoundary, QueryErrorView } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
-import { StatusBadge } from '../../ui/StatusBadge';
+import { StatusBadge, type StatusBadgeProps } from '../../ui/StatusBadge';
 import { StickyActionBar, type StickyAction } from '../../ui/StickyActionBar';
 import { SupportDetails } from '../../ui/SupportDetails';
-import { Tag } from '../../ui/Tag';
 import { Text } from '../../ui/Text';
-import { fonts, layout, makeStyles, MIN_TOUCH_SIZE, spacing } from '../../ui/theme';
-import { advertisedPrice, KIND_WORD, shortDates } from '../discover/offering-look';
+import {
+  fonts,
+  layout,
+  makeStyles,
+  MIN_TOUCH_SIZE,
+  radius,
+  spacing,
+  useTheme,
+} from '../../ui/theme';
+import { Icon } from '../../ui/Icon';
+import { IconButton } from '../../ui/IconButton';
+import { buildAppLink } from '../../links/link-targets';
+import { useBusyTimes } from '../../features/register/family-busy';
+import { useExploreFacts } from '../../features/register/explore-facts';
+import {
+  agesShort,
+  fitAnswer,
+  lengthWords,
+  liveSessions,
+  meetingPattern,
+  placesBadge,
+  shortRange,
+  wholeMoney,
+} from '../../features/register/fit';
+import { useWho } from '../../features/register/useWho';
+import { qualifiesLine } from '../../features/register/who';
+import { useKnownFacilityZone } from '../../features/today/known-zone';
+import { usePersonFilter } from '../../ui/PersonFilter';
+import { shortDates } from '../discover/offering-look';
 
 type Offering = Schema<'Offering'>;
 type OfferingSession = Schema<'OfferingSession'>;
@@ -560,14 +582,33 @@ function RegistrationNotice({ offering }: { offering: Offering }) {
   return null;
 }
 
-function ActionBar({ offering, action }: { offering: Offering; action: DetailAction }) {
+/**
+ * "$95 · for 8 weeks · ~$12 a session" and the one action (handoff 3d): "Register Maya" opens Who
+ * (1e) with Maya ticked; the name is the child chosen in Explore, or the first one who qualifies.
+ */
+function ActionBar({
+  offering,
+  action,
+  registerFor,
+  lengthNote,
+}: {
+  offering: Offering;
+  action: DetailAction;
+  registerFor: { personId: string; name: string } | null;
+  lengthNote: string | null;
+}) {
   const router = useRouter();
   const { reachable } = useConnectivity();
   const offline = reachable === false;
   const price = offering.price;
   const perSession = price?.pricingBasis === 'per_session';
-  const amount = price ? formatMoney(price.basePriceMinor, price.currency) : undefined;
-  const start = () => router.push(registrationRoutes.start(offering.id));
+  const amount = price ? wholeMoney(price.basePriceMinor, price.currency) : undefined;
+  const start = () =>
+    router.push(
+      registerFor
+        ? registrationRoutes.startFor(offering.id, registerFor.personId)
+        : registrationRoutes.start(offering.id),
+    );
   const needsConnection = action.kind !== 'sign_in' && action.kind !== 'opens';
   const button: StickyAction = (() => {
     switch (action.kind) {
@@ -591,25 +632,23 @@ function ActionBar({ offering, action }: { offering: Offering; action: DetailAct
         return { label: 'Book', onPress: start, accessibilityHint: 'Choose who to book for' };
       case 'register':
         return {
-          label: 'Register',
+          label: registerFor ? `Register ${registerFor.name}` : 'Register',
           onPress: start,
-          accessibilityHint: 'Choose who to register and how',
+          accessibilityHint: registerFor
+            ? `Opens who's playing with ${registerFor.name} ticked`
+            : 'Choose who to register and how',
         };
     }
   })();
   return (
     <StickyActionBar
       summaryLabel={
-        action.kind === 'checkout'
-          ? 'In your cart'
-          : amount
-            ? perSession
-              ? 'Per class'
-              : 'From'
-            : undefined
+        action.kind === 'checkout' ? 'In your cart' : perSession ? 'Per class' : undefined
       }
       summaryValue={amount}
-      summaryNote={offline && needsConnection ? 'Registration needs a connection.' : undefined}
+      summaryNote={
+        offline && needsConnection ? 'Registration needs a connection.' : (lengthNote ?? undefined)
+      }
       action={{ ...button, disabled: button.disabled || (offline && needsConnection) }}
       testID="offering-action"
     />
@@ -625,6 +664,44 @@ function Fold({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
+/** A row of the facts card: an icon, a bold line and a quiet one. */
+function FactRow({
+  icon,
+  title,
+  detail,
+  first = false,
+  testID,
+}: {
+  icon: string;
+  title: string;
+  detail: string | null;
+  first?: boolean;
+  testID?: string;
+}) {
+  const styles = useStyles();
+  const { colors } = useTheme();
+  return (
+    <View
+      style={[styles.factRow, first ? null : styles.factDivider]}
+      accessible
+      accessibilityLabel={[title, detail].filter(Boolean).join('. ')}
+      testID={testID}
+    >
+      <Icon name={icon} size={22} color={colors.primary} />
+      <View style={styles.factWords}>
+        <Text variant="callout" style={styles.factTitle}>
+          {title}
+        </Text>
+        {detail ? (
+          <Text variant="footnote" tone="muted">
+            {detail}
+          </Text>
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
 function OfferingPage({
   offering: o,
   sessions,
@@ -632,6 +709,8 @@ function OfferingPage({
   titleOf,
   people,
   options,
+  answers,
+  agesLine,
 }: {
   offering: Offering;
   sessions: OfferingSession[] | undefined;
@@ -639,36 +718,77 @@ function OfferingPage({
   titleOf: PolicyTitles;
   people: ReturnType<typeof useParticipants>;
   options: RegistrationOptionsState;
+  /** The fit and places answers for this family (3d). */
+  answers: StatusBadgeProps[];
+  /** "Maya qualifies · Leo is too young". */
+  agesLine: string | null;
 }) {
   const styles = useStyles();
-  const pattern = sessionPattern(sessions, o.facility.timezone);
-  const facts = [
-    { icon: 'person', label: ageBandLabel(o.ageBand) ?? 'All ages' },
-    { icon: 'calendar_today', label: shortDates(o) },
-    ...(pattern ? [{ icon: 'schedule', label: pattern }] : []),
-    { icon: 'place', label: o.locationLabel ?? o.facility.name },
-    ...o.capacity.map((c) => ({ icon: 'group', label: capacityLabel(c) })),
-    ...(advertisedPrice(o.price)
-      ? [{ icon: 'sell', label: advertisedPrice(o.price) as string }]
-      : []),
-  ];
+  const router = useRouter();
+  const insets = useInsets();
+  const zone = o.facility.timezone;
+  const pattern = sessions ? meetingPattern(sessions, zone, { range: true }) : null;
+  const length = sessions ? lengthWords(sessions, zone) : null;
+  const share = () => {
+    Share.share({
+      message: `${o.name} · ${shortRange(o.startsOn, o.endsOn)}\n${buildAppLink({ to: 'activity', id: o.id })}`,
+    }).catch(() => undefined);
+  };
   return (
     <View>
-      <Artwork source={artworkFor(o, 'wide').source} aspectRatio={16 / 9} rounded={false} />
-      <View style={styles.head}>
-        <Text variant="label" tone="muted">
-          {[KIND_WORD[o.kind], o.locationLabel ?? o.facility.name].filter(Boolean).join(' · ')}
-        </Text>
+      <View>
+        <Artwork source={artworkFor(o, 'wide').source} aspectRatio={3 / 2} rounded={false} />
+        <View style={[styles.floating, { top: insets.top + spacing.sm }]}>
+          <IconButton
+            icon="arrow_back"
+            label="Back"
+            variant="onMedia"
+            onPress={() => (router.canGoBack() ? router.back() : router.replace('/discover'))}
+            testID="offering-back"
+          />
+          <IconButton
+            icon="ios_share"
+            label="Share"
+            variant="onMedia"
+            onPress={share}
+            testID="offering-share"
+          />
+        </View>
+      </View>
+      <View style={styles.sheet}>
+        {answers.length > 0 ? (
+          <View style={styles.answers} testID="offering-answers">
+            {answers.map((a) => (
+              <StatusBadge key={a.label} {...a} />
+            ))}
+          </View>
+        ) : null}
+        {o.publicationState !== 'registration_open' || answers.length === 0 ? (
+          <StatusBadge {...registrationWindowStatus(o)} testID="offering-window" />
+        ) : null}
         <Text variant="title1" heading>
           {o.name}
         </Text>
-        <StatusBadge {...registrationWindowStatus(o)} testID="offering-window" />
-        <View style={styles.tags} testID="offering-facts">
-          {facts.map((fact) => (
-            <Tag key={`${fact.icon}-${fact.label}`} icon={fact.icon} label={fact.label} />
-          ))}
-        </View>
         {o.description ? <Description text={o.description} /> : null}
+        <Card style={styles.facts} testID="offering-facts">
+          <FactRow
+            first
+            icon="event_repeat"
+            title={pattern ?? shortDates(o)}
+            detail={[length, shortRange(o.startsOn, o.endsOn)].filter(Boolean).join(' · ') || null}
+          />
+          <FactRow
+            icon="location_on"
+            title={o.locationLabel ?? o.facility.name}
+            detail={o.locationLabel ? o.facility.name : null}
+          />
+          <FactRow
+            icon="cake"
+            title={agesShort(o.ageBand)}
+            detail={agesLine}
+            testID="offering-ages"
+          />
+        </Card>
       </View>
       <RegistrationNotice offering={o} />
       <Card style={styles.folds}>
@@ -727,6 +847,7 @@ export function OfferingDetailScreen({ offeringId }: { offeringId: string }) {
     enabled: offering.data !== undefined,
   });
   const o = offering.data;
+  const zone = useKnownFacilityZone(o?.facility.timezone).zone;
   // Read for the folds and the bar at once, so the reads do not wait for a fold to open.
   const policyIds = o
     ? [
@@ -747,6 +868,45 @@ export function OfferingDetailScreen({ offeringId }: { offeringId: string }) {
       !people.namesLoading &&
       people.namesError === null,
   );
+  // 3d: the answers for this family, for the child chosen in Explore (the shared who-filter).
+  const who = useWho(offeringId, zone, signedIn && o !== undefined);
+  const lookingFor = usePersonFilter(who.people.map((p) => ({ id: p.personId })));
+  const children = who.rows.filter(
+    (row) => !who.people.find((p) => p.personId === row.personId)?.self,
+  );
+  const chosen = who.people.find((p) => p.personId === lookingFor.selected) ?? null;
+  const chosenRow = who.rows.find((row) => row.personId === chosen?.personId);
+  const firstFit = who.rows.find((row) => row.tickable);
+  const registerFor =
+    chosenRow?.tickable && chosen
+      ? { personId: chosen.personId, name: chosen.self ? 'me' : chosen.name }
+      : firstFit
+        ? { personId: firstFit.personId, name: firstFit.name }
+        : null;
+  const answerFor =
+    chosen && !chosen.self
+      ? chosen
+      : (who.people.find((p) => p.personId === firstFit?.personId && !p.self) ?? null);
+  const busy = useBusyTimes(answerFor?.personId ?? null, zone).busy;
+  const facts = useExploreFacts([], o ? [o.id] : [], signedIn);
+  const availability = o ? facts.availabilityOf(o.id) : undefined;
+  const fit = fitAnswer({
+    offeringIds: [offeringId],
+    availability,
+    sessions: sessions.data,
+    busy,
+    childName: answerFor?.name ?? null,
+  });
+  const places = placesBadge(availability, {
+    few: (n) => `${n} ${n === 1 ? 'place' : 'places'} left`,
+    full: 'Full · waitlist',
+  });
+  const answers = [fit?.badge, fit?.kind === 'full' || fit?.kind === 'in' ? null : places].filter(
+    (b): b is StatusBadgeProps => b !== null && b !== undefined,
+  );
+  const agesLine = qualifiesLine(children, (personId) =>
+    who.intent ? eligibilityOf(who.options.data, personId, who.intent) : null,
+  );
   const baskets = useMyBaskets(signedIn && o !== undefined);
   const cart = cartHolding(baskets.data?.items, offeringId);
   const action = o
@@ -758,18 +918,38 @@ export function OfferingDetailScreen({ offeringId }: { offeringId: string }) {
         waitlistOnly: waitlistOnlyFor(options.data, personIds),
       })
     : null;
+  const lengthNote = (() => {
+    if (!o?.price || !sessions.data) return null;
+    const length = lengthWords(sessions.data, o.facility.timezone);
+    const count = liveSessions(sessions.data).length;
+    if (!length || count < 2 || o.price.pricingBasis === 'per_session') return length;
+    const each = Math.round(o.price.basePriceMinor / count / 100);
+    return `for ${length} · ~${wholeMoney(each * 100, o.price.currency)} a session`;
+  })();
   // §4.10: once the API answers NOT_FOUND or ACCESS_DENIED, the cached activity is not shown.
   const shown =
     o && !(offering.error && presentationForError(offering.error) === 'unavailable')
       ? o
       : undefined;
   return (
-    <Screen footer={shown && action ? <ActionBar offering={shown} action={action} /> : undefined}>
+    <Screen
+      footer={
+        shown && action ? (
+          <ActionBar
+            offering={shown}
+            action={action}
+            registerFor={registerFor}
+            lengthNote={lengthNote}
+          />
+        ) : undefined
+      }
+    >
       <QueryBoundary
         query={offering}
         label="activity"
         empty={{ title: 'Not available', description: '' }}
         unavailableOffline={['Registration']}
+        hideUpdated
       >
         {(data) => (
           <OfferingPage
@@ -779,6 +959,8 @@ export function OfferingDetailScreen({ offeringId }: { offeringId: string }) {
             titleOf={titleOf}
             people={people}
             options={options}
+            answers={answers}
+            agesLine={agesLine}
           />
         )}
       </QueryBoundary>
@@ -786,10 +968,30 @@ export function OfferingDetailScreen({ offeringId }: { offeringId: string }) {
   );
 }
 
-const useStyles = makeStyles(() => ({
-  head: { paddingHorizontal: layout.gutter, paddingTop: spacing.lg, gap: spacing.sm },
-  tags: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs, paddingTop: spacing.xs },
-  description: { gap: spacing.xxs, paddingTop: spacing.sm },
+const useStyles = makeStyles(({ colors }) => ({
+  floating: {
+    position: 'absolute',
+    left: spacing.md,
+    right: spacing.md,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  sheet: {
+    marginTop: -20,
+    paddingHorizontal: layout.gutter,
+    paddingTop: 18,
+    gap: spacing.md,
+    borderTopLeftRadius: radius.xl,
+    borderTopRightRadius: radius.xl,
+    backgroundColor: colors.page,
+  },
+  answers: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  facts: { paddingVertical: spacing.xs },
+  factRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingVertical: 11 },
+  factDivider: { borderTopWidth: 1, borderTopColor: colors.divider },
+  factWords: { flex: 1, gap: 1 },
+  factTitle: { ...fonts.semibold },
+  description: { gap: spacing.xxs },
   more: { minHeight: MIN_TOUCH_SIZE, justifyContent: 'center', alignSelf: 'flex-start' },
   moreLabel: { ...fonts.semibold },
   pressed: { opacity: 0.6 },
@@ -799,12 +1001,12 @@ const useStyles = makeStyles(() => ({
   eligibility: { paddingVertical: spacing.xs, gap: spacing.xs },
 }));
 
-/** Route component for app/registration/offering/[offeringId].tsx. */
+/** Route component for app/registration/offering/[offeringId].tsx (3d draws its own back button). */
 export function OfferingDetailRoute() {
   const offeringId = param(useLocalSearchParams<{ offeringId: string }>().offeringId) ?? '';
   return (
     <>
-      <Stack.Screen options={{ title: 'Activity' }} />
+      <Stack.Screen options={{ title: 'Activity', headerShown: false }} />
       <OfferingDetailScreen offeringId={offeringId} />
     </>
   );
