@@ -201,7 +201,6 @@ export async function seedParentCore(
   devChildPersonId: string,
 ): Promise<void> {
   const calendar = calendarOf(ctx);
-  const parent = await requirePrincipal(ctx, 'dev-parent');
   const league = staff.league.principal;
 
   await nameParentHousehold(ctx, devChildPersonId);
