@@ -25,6 +25,7 @@ import { seedRentals } from './demo/rentals';
 import { seedReports } from './demo/reports';
 import { seedSpaces } from './demo/spaces';
 import { seedStaffToday } from './demo/staff-today';
+import { seedStaffSchedule } from './demo/staff-schedule';
 import {
   assertSeedAllowed,
   seedDevelopment,
@@ -148,6 +149,7 @@ export async function seedDemo(
   await seedReports(ctx, staff);
   await settle(ctx);
   await seedParentCore(ctx, staff, spaces, base.child.personId);
+  await seedStaffSchedule(ctx, staff, spaces, catalog, families);
   ctx.log('done');
 
   const slug = ctx.organizationSlug;

@@ -37,25 +37,25 @@ function expectNamedControls(container: HTMLElement) {
 }
 
 describe('registration and finance areas', () => {
-  it('SPK-UX-005: the Registrations home lists SCR-S-24 to SCR-S-27 and marks the current page', async () => {
+  it('SPK-UX-005: Registrations opens on the triage (S 1c) with its tabs and links the other screens', async () => {
     const app = createTestApp();
     render(app.at('/registrations'));
-    const list = await screen.findByRole('list', { name: 'Registration screens' });
+    const tabs = await screen.findByRole('tablist', { name: 'Registrations' });
     expect(
-      within(list)
+      within(tabs)
+        .getAllByRole('tab')
+        .map((t) => t.textContent?.replace(/\d+\+?$/, '')),
+    ).toEqual(['Needs a decision', 'Waitlist offers', 'Forms missing', 'All']);
+    const nav = screen.getByRole('navigation', { name: 'Registrations and waitlists' });
+    expect(
+      within(nav)
         .getAllByRole('link')
-        .map((a) => a.textContent),
+        .map((a) => a.textContent?.trim()),
     ).toEqual([
-      'Registration queue and approvals',
-      'Assisted registration',
-      'Waitlist management',
+      'Register someone at the desk',
+      'Waitlists by activity',
       'Cancellation and transfer',
     ]);
-    const nav = screen.getByRole('navigation', { name: 'Registrations and waitlists' });
-    expect(within(nav).getByRole('link', { name: 'Overview' })).toHaveAttribute(
-      'aria-current',
-      'page',
-    );
     const main = screen.getByRole('navigation', { name: 'Main' });
     // The areas come from GET /v1/me/permissions: wait for the link before checking it.
     expect(

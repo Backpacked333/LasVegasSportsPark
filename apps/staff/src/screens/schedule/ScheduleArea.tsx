@@ -7,7 +7,7 @@
  * is the switch and the links of the facility's public and lobby schedule (SPK-SCHED-010,
  * proposed amendment PA-06; capability `public_schedule`, pending DEC-100).
  */
-import { Navigate, Route, Routes } from 'react-router';
+import { Navigate, Route, Routes, useLocation } from 'react-router';
 import { DaySummaryLine } from '../../features/schedule-facilities/DaySummary';
 import { SubNav } from '../../features/schedule-facilities/SubNav';
 import '../../features/schedule-facilities/schedule-facilities.css';
@@ -37,6 +37,19 @@ const SECTIONS = [
 ] as const;
 
 export function ScheduleArea() {
+  const { pathname } = useLocation();
+  // The day timeline and week (S 1b, S 2b) carry their own header; the other sections keep tabs.
+  const calendar = /^\/schedule(\/calendar)?\/?$/.test(pathname);
+  if (calendar) {
+    return (
+      <section aria-labelledby="area-schedule" className="area-stack">
+        <Routes>
+          <Route index element={<Navigate to="calendar" replace />} />
+          <Route path="calendar" element={<ScheduleCalendarScreen />} />
+        </Routes>
+      </section>
+    );
+  }
   return (
     <section aria-labelledby="area-schedule" className="area-stack">
       <PageHeader

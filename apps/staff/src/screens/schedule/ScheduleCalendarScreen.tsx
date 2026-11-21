@@ -1,33 +1,43 @@
 /**
- * SCR-S-03 Schedule calendar and resource view (SPK-SCHED-001, SPK-SCHED-002, SPK-SCHED-003,
- * SPK-SCHED-008, SPK-FAC-003; DEC-001 pending). Per facility, every pitch with its subdivisions
- * underneath, and per space the events booked on it over a facility-local day or week:
- * scheduled time, occupied time with setup and cleanup buffers, what blocks it through shared space
- * (a whole-pitch booking blocks its halves and the other way round), and closures or maintenance
- * restrictions. Reads `GET /v1/resources`, `GET /v1/events` (cursor pages, "Load more events"),
- * `GET /v1/closures`, and the program sessions at the facility in the same window
- * (`GET /v1/sessions`, cursor pages, with the facility zone the API states).
+ * SCR-S-03 Schedule, as the redesign draws it (handoff S 1b day timeline, S 3e drag, S 2b week by
+ * use with "Find a free slot", S 5a new booking from a held slot; SPK-SCHED-001, SPK-SCHED-002,
+ * SPK-SCHED-003, SPK-SCHED-005, SPK-SCHED-006, SPK-SCHED-008, SPK-FAC-003, SPK-REPORT-003).
  *
- * States: loading; empty (no events in range; no resources: first setup); permission restriction
- * (facility scope) as not available; stale version (a refresh brought a changed published
- * revision: banner, the shown data stays until the user asks for the latest); offline (cached,
- * read-only, with its age); errors with code and retry. While more events exist than are shown,
- * no space reads as free: whether more exist is kept with the events shown, so a held-back refresh
- * never makes the shown list look complete, and "Load more events" during a held-back change
- * shows the latest first, then continues it. The bars are a visual aid only and hidden from
- * assistive technology; each space's list carries the same information as text.
+ * Day: every space as a 68 px row on the facility-local day, with kind filters that count, conflict
+ * and draft chips that filter the grid, free time as dashed "book" blocks, and a detail rail with
+ * the selected block's readiness checks and its fix. Tapping empty time or a free gap opens New
+ * booking with the space and time filled in; dragging a booking moves it (draft, validation, then
+ * Notify or Undo; `useScheduleMove`). Week: the use heatmap (`WeekHeatmap`). Day and Week keep the
+ * date (`?date=` and `?view=` in the address, so Back works and a week cell can open its day).
+ *
+ * Reads `GET /v1/resources`, `GET /v1/events` (cursor pages, "Load more events"),
+ * `GET /v1/closures`, `GET /v1/schedule-drafts` (open drafts on the grid),
+ * `GET /v1/facilities/{id}/operating-status` (field checks), and the program sessions at the
+ * facility in the same window (`GET /v1/sessions`).
+ *
+ * States: loading (skeleton rows); empty (no events: the spaces are still drawn and every free
+ * hour is bookable; no resources: first setup); permission restriction (facility scope) as not
+ * available; stale version (a refresh brought a changed published revision: banner, the shown data
+ * stays until the user asks for the latest); offline (cached, read-only, with its age; dragging and
+ * booking are off with the reason); errors with code and retry. While more events exist than are
+ * shown, no space reads as free (no free blocks are drawn). Each space's text list ("Bookings by
+ * space") carries the same information as the grid.
  */
 import { idOf, mergePages, pagesReceivedAt, type Schema } from '@sportspark/api-client';
 import { useMemo, useState } from 'react';
-import { Link, useNavigate } from 'react-router';
+import { Link, useNavigate, useSearchParams } from 'react-router';
 import { useApiPages } from '../../api/useApiPages';
 import { useApiQuery } from '../../api/useApiQuery';
 import { useApp, useNow } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { LoadMore } from '../../ui/LoadMore';
 import { QueryBoundary } from '../../ui/QueryBoundary';
-import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
+import { Skeleton, SkeletonGroup } from '../../ui/Skeleton';
+import { PageHeader } from '../../ui/Page';
+import { Drawer } from '../../ui/Drawer';
+import { useToast } from '../../ui/Toast';
+import { useMediaQuery } from '../../layout/useMediaQuery';
 import {
   FacilityGate,
   ZoneCaption,
@@ -52,17 +62,35 @@ import {
 } from '../../features/schedule-facilities/time';
 import { usePinnedData } from '../../features/schedule-facilities/usePinnedData';
 import { Icon } from '../../ui/Icon';
-import {
-  KIND_ORDER,
-  KIND_TOKEN,
-  ResourceTimeline,
-  closureCovers,
-  type Selection,
-} from './ResourceTimeline';
+import { SegmentedControl } from '../../ui/SegmentedControl';
+import { ResourceTimeline, timelineWindow, visibleRows, type Selection } from './ResourceTimeline';
 import { TimelineDetail } from './TimelineDetail';
-import './schedule.css';
 import { FacilitySessions } from './FacilitySessions';
-import { Toolbar } from '../../ui/glass/GlassCard';
+import { WeekHeatmap, useWeekRate } from './WeekHeatmap';
+import { useActionAllowed } from '../../features/schedule-facilities/permission';
+import { FreeSlotPanel } from './FreeSlotPanel';
+import { NewBookingDrawer, type BookingSlot } from './NewBookingDrawer';
+import {
+  KIND_GROUPS,
+  buildBlocks,
+  conflictCount,
+  byRowRank,
+  findConflicts,
+  freeGaps,
+  isDraftBlock,
+  isOpenDraft,
+  kindCounts,
+  passesFilter,
+  weekDates,
+  weekStart,
+  type GridFilter,
+  type SlotMatch,
+  type TimelineBlock,
+} from './schedule-model';
+import { useMoveAbility, useScheduleMove, type MoveProposal } from './useScheduleMove';
+import { RefundNoteDialog, needsRefundNote } from './RefundNoteDialog';
+import './schedule.css';
+import './schedule-redesign.css';
 
 type Resource = Schema<'Resource'>;
 type Event = Schema<'Event'>;
@@ -98,7 +126,7 @@ interface EventPagesRefetch {
 const TRACK_LEGEND: readonly { kind: string; label: string }[] = [
   { kind: 'event', label: 'Booked (colour by activity kind)' },
   { kind: 'draft', label: 'Not published (dashed)' },
-  { kind: 'buffer', label: 'Setup or cleanup' },
+  { kind: 'gap', label: 'Free for an hour or more' },
   { kind: 'shared', label: 'Shared space in use' },
   { kind: 'closure', label: 'Closed' },
   { kind: 'closure-pending', label: 'Closure pending (not applied; still bookable)' },
@@ -181,7 +209,12 @@ function ResourceRow({
       !e.resourceIds.includes(resource.id) &&
       e.resourceIds.some((id) => sharing.some((r) => r.id === id)),
   );
-  const covering = closures.filter((c) => closureCovers(c, resource, resources));
+  const covering = closures.filter(
+    (c) =>
+      c.resourceId === null ||
+      c.resourceId === resource.id ||
+      sharing.some((r) => r.id === c.resourceId),
+  );
   const parent = resource.parentResourceId ? names.get(resource.parentResourceId) : null;
   const headingId = `resource-${resource.id}`;
   return (
@@ -269,26 +302,77 @@ function ResourceRow({
   );
 }
 
+/** Other schedule sections, under the grid (the redesign's page has no section tabs). */
+const MORE = [
+  { to: '/schedule/drafts', label: 'Drafts and publication' },
+  { to: '/schedule/closures', label: 'Closures' },
+  { to: '/schedule/resources', label: 'Resource inventory' },
+  { to: '/schedule/rentals', label: 'Rentals' },
+  { to: '/schedule/parties', label: 'Parties' },
+  { to: '/schedule/public', label: 'Public schedule' },
+] as const;
+
+function TimelineSkeleton() {
+  return (
+    <SkeletonGroup label="the schedule" className="tl-loading">
+      {[0, 1, 2, 3, 4].map((i) => (
+        <div key={i} className="tl-loading-row">
+          <Skeleton width={70} height={16} />
+          <Skeleton width={`${30 + ((i * 17) % 40)}%`} height={44} radius={10} />
+        </div>
+      ))}
+    </SkeletonGroup>
+  );
+}
+
+function plural(n: number, one: string, many = `${one}s`) {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
 function CalendarBody({ facility }: { facility: FacilityContext }) {
   const now = useNow();
   const navigate = useNavigate();
+  const toast = useToast();
   const { online } = useApp();
   const tz = facility.timezone;
   const today = facility.localDate ?? localDateOf(now, tz);
-  const [date, setDate] = useState(today);
-  const [span, setSpan] = useState<1 | 7>(1);
-  const [focusId, setFocusId] = useState('');
-  const [showCanceled, setShowCanceled] = useState(false);
-  const [hiddenKinds, setHiddenKinds] = useState<ReadonlySet<Event['kind']>>(new Set());
-  const [selected, setSelected] = useState<Selection>(null);
-  const toggleKind = (kind: Event['kind']) =>
-    setHiddenKinds((prev) => {
-      const next = new Set(prev);
-      if (next.has(kind)) next.delete(kind);
-      else next.add(kind);
-      return next;
+  const [params, setParams] = useSearchParams();
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(params.get('date') ?? '')
+    ? (params.get('date') as string)
+    : today;
+  const view: 'day' | 'week' = params.get('view') === 'week' ? 'week' : 'day';
+  const setDate = (next: string) =>
+    setParams(
+      (p) => {
+        const n = new URLSearchParams(p);
+        if (next === today) n.delete('date');
+        else n.set('date', next);
+        return n;
+      },
+      { replace: true },
+    );
+  const setView = (next: 'day' | 'week') =>
+    setParams((p) => {
+      const n = new URLSearchParams(p);
+      if (next === 'week') n.set('view', 'week');
+      else n.delete('view');
+      return n;
     });
-  const range = useMemo(() => localDaysWindow(date, span, tz), [date, span, tz]);
+  const [showCanceled, setShowCanceled] = useState(false);
+  const [filter, setFilter] = useState<GridFilter>({ type: 'all' });
+  const [selected, setSelected] = useState<Selection>(null);
+  const [slotPanel, setSlotPanel] = useState(false);
+  const [booking, setBooking] = useState<BookingSlot | null>(null);
+  const [noteFor, setNoteFor] = useState<MoveProposal | null>(null);
+  const [matches, setMatches] = useState<readonly SlotMatch[]>([]);
+  const [announcement, setAnnouncement] = useState('');
+  // Narrow (a phone, or a tablet in portrait): the rail opens over the page.
+  const wide = !useMediaQuery('(max-width: 1099px)');
+  const range = useMemo(
+    () =>
+      view === 'week' ? localDaysWindow(weekStart(date), 7, tz) : localDaysWindow(date, 1, tz),
+    [date, view, tz],
+  );
 
   const resources = useApiQuery({
     path: '/resources',
@@ -304,14 +388,15 @@ function CalendarBody({ facility }: { facility: FacilityContext }) {
     path: '/closures',
     request: { query: { facilityId: facility.id } },
   });
-  // Open drafts for the header shortcut; a viewer who may not read drafts just sees no count.
+  // Open drafts put their changes on the grid; a viewer who may not read drafts sees none.
   const drafts = useApiQuery({
     path: '/schedule-drafts',
     request: { query: { facilityId: facility.id } },
   });
-  const openDrafts = (drafts.data ?? []).filter(
-    (d) => d.status === 'editing' || d.status === 'validated' || d.status === 'failed',
-  ).length;
+  const operating = useApiQuery({
+    path: '/facilities/{id}/operating-status',
+    request: { path: { id: facility.id } },
+  });
   const latest = useMemo<ShownEvents | undefined>(
     () => (eventPages.data ? { items: eventPages.data, more: eventPages.hasNextPage } : undefined),
     [eventPages.data, eventPages.hasNextPage],
@@ -342,102 +427,166 @@ function CalendarBody({ facility }: { facility: FacilityContext }) {
         );
     });
     void closures.refetch();
+    void drafts.refetch();
   };
 
-  const rangeLabel =
-    span === 1
-      ? formatLocalDate(date)
-      : `${formatLocalDate(date)} to ${formatLocalDate(addDaysToLocalDate(date, 6))}`;
+  const inventory = resources.data ?? [];
+  const spaceName = (id: string) => inventory.find((r) => r.id === id)?.name ?? 'another space';
+  const ability = useMoveAbility(facility.id);
+  const mover = useScheduleMove({
+    facilityId: facility.id,
+    timeZone: tz,
+    spaceName,
+    onPublished: () => pinned.showLatest(),
+  });
+  const openDrafts = (drafts.data ?? []).filter(isOpenDraft);
 
   const step = (days: number) => {
     setSelected(null);
     setDate(addDaysToLocalDate(date, days));
   };
+  const span = view === 'week' ? 7 : 1;
+  const rangeLabel =
+    view === 'day'
+      ? formatLocalDate(date)
+      : `${formatLocalDate(weekStart(date))} to ${formatLocalDate(addDaysToLocalDate(weekStart(date), 6))}`;
+
+  const openBooking = (slot: BookingSlot) => {
+    if (!online) {
+      toast.show({ tone: 'warning', message: 'Booking needs a connection.' });
+      return;
+    }
+    setBooking(slot);
+  };
+
+  const onDrop = (proposal: MoveProposal) => {
+    if (needsRefundNote(proposal)) {
+      setNoteFor(proposal);
+      return;
+    }
+    void mover.propose(proposal);
+  };
+
+  const mayReadUse = useActionAllowed('reporting.view_utilization', facility.id);
+  const weekRate = useWeekRate(facility.id, weekDates(date), mayReadUse && view === 'week');
+  // Everything the grid, the chips and the header count, from the data shown.
+  const items = events.data ?? [];
+  const visibleEvents = items.filter((e) => showCanceled || e.status !== 'canceled');
+  const activeClosures = (closures.data ?? []).filter(
+    (c) => (c.status === 'active' || c.status === 'pending') && overlaps(c.interval, range),
+  );
+  const blocks = buildBlocks(visibleEvents, openDrafts).filter(
+    (b) => b.end > Date.parse(range.start) && b.start < Date.parse(range.end),
+  );
+  const conflicts = findConflicts(blocks, inventory, openDrafts);
+  const counts = kindCounts(blocks);
+  const total = blocks.filter((b) => b.status !== 'canceled' && b.type !== 'draft-change').length;
+  const draftCount = blocks.filter(isDraftBlock).length;
+  const rows = byRowRank(orderedInventory(inventory));
+  const win = timelineWindow(range, tz, [
+    ...blocks.map((b) => ({ start: b.start, end: b.end })),
+    ...activeClosures.map((c) => ({
+      start: Date.parse(c.interval.start),
+      end: Date.parse(c.interval.end),
+    })),
+  ]);
+  const shownRows = visibleRows(rows, blocks, activeClosures);
+  // While more events exist than were loaded, no space reads as free.
+  const gaps =
+    truncated || view === 'week' || !events.data
+      ? []
+      : shownRows.flatMap(({ resource }) =>
+          freeGaps(
+            resource,
+            blocks,
+            activeClosures,
+            inventory,
+            { start: win.start, end: win.end },
+            now.getTime(),
+          ),
+        );
+  const visible = (b: TimelineBlock) => passesFilter(b, filter, conflicts);
+  const known = new Set(inventory.map((r) => r.id));
+  const unplaced = visibleEvents.filter((e) => !e.resourceIds.some((id) => known.has(id)));
+  const eyebrow = !events.data
+    ? facility.name
+    : view === 'day'
+      ? `${facility.name} · ${plural(total, 'booking')} · ${plural(gaps.length, 'free block')} over 1 h`
+      : `${facility.name} · week of ${formatLocalDate(weekStart(date))}${weekRate === null ? '' : ` · ${Math.round(weekRate * 100)}% booked`}`;
+
+  const header = (
+    <PageHeader
+      eyebrow={<span data-testid="schedule-eyebrow">{eyebrow}</span>}
+      title="Schedule"
+      titleId="area-schedule"
+      actions={
+        <>
+          <div className="sched-date" role="group" aria-label="Date">
+            <button
+              type="button"
+              className="sched-date-step"
+              aria-label={view === 'day' ? 'Previous day' : 'Previous week'}
+              onClick={() => step(-span)}
+            >
+              ‹
+            </button>
+            <button
+              type="button"
+              className="sched-date-today"
+              aria-pressed={date === today}
+              onClick={() => {
+                setSelected(null);
+                setDate(today);
+              }}
+            >
+              Today
+            </button>
+            <label className="sched-date-pick">
+              <span className="visually-hidden">Date</span>
+              <span aria-hidden="true">{formatLocalDate(date)}</span>
+              <input
+                type="date"
+                value={date}
+                onChange={(e) => e.target.value && setDate(e.target.value)}
+              />
+            </label>
+            <button
+              type="button"
+              className="sched-date-step"
+              aria-label={view === 'day' ? 'Next day' : 'Next week'}
+              onClick={() => step(span)}
+            >
+              ›
+            </button>
+          </div>
+          <SegmentedControl
+            label="View"
+            segments={[
+              { value: 'day', label: 'Day' },
+              { value: 'week', label: 'Week' },
+            ]}
+            value={view}
+            onChange={(v) => {
+              setSelected(null);
+              setView(v);
+            }}
+          />
+          <Button
+            className="sched-find"
+            aria-expanded={slotPanel}
+            onClick={() => setSlotPanel((v) => !v)}
+          >
+            <Icon name="search" size={18} />
+            Find a free slot
+          </Button>
+        </>
+      }
+    />
+  );
 
   return (
-    <div className="schedule-calendar">
-      <ZoneCaption facility={facility} />
-      <Toolbar fill className="cal-toolbar" role="group" aria-label="Calendar range">
-        <div className="cal-stepper">
-          <button
-            type="button"
-            className="cal-step"
-            aria-label={span === 1 ? 'Previous day' : 'Previous week'}
-            onClick={() => step(-span)}
-          >
-            <Icon name="chevron_left" />
-          </button>
-          <p className="range-label" aria-live="polite">
-            <strong>{rangeLabel}</strong>
-          </p>
-          <button
-            type="button"
-            className="cal-step"
-            aria-label={span === 1 ? 'Next day' : 'Next week'}
-            onClick={() => step(span)}
-          >
-            <Icon name="chevron_right" />
-          </button>
-        </div>
-        <Button
-          variant="secondary"
-          onClick={() => {
-            setSelected(null);
-            setDate(today);
-          }}
-        >
-          Today
-        </Button>
-        <label className="cal-field">
-          Date{' '}
-          <input
-            type="date"
-            value={date}
-            onChange={(e) => e.target.value && setDate(e.target.value)}
-          />
-        </label>
-        <label className="cal-field">
-          View{' '}
-          <select value={span} onChange={(e) => setSpan(e.target.value === '7' ? 7 : 1)}>
-            <option value="1">Day</option>
-            <option value="7">Week</option>
-          </select>
-        </label>
-        <label className="cal-field">
-          Space{' '}
-          <select value={focusId} onChange={(e) => setFocusId(e.target.value)}>
-            <option value="">All spaces</option>
-            {(resources.data ?? [])
-              .filter((r) => r.parentResourceId === null)
-              .map((r) => (
-                <option key={r.id} value={r.id}>
-                  {r.name} and its subdivisions
-                </option>
-              ))}
-          </select>
-        </label>
-        <label className="cal-check">
-          <input
-            type="checkbox"
-            checked={showCanceled}
-            onChange={(e) => setShowCanceled(e.target.checked)}
-          />{' '}
-          Show canceled events
-        </label>
-        <span className="cal-toolbar-end">
-          <Button variant="secondary" disabled={!online} onClick={refresh}>
-            <Icon name="refresh" size={18} />
-            Refresh
-          </Button>
-          <Link className="button button-secondary" to="/schedule/drafts">
-            <span className="tone-pending">
-              <Icon name="edit_calendar" size={18} />
-            </span>
-            Drafts
-            {openDrafts > 0 ? <span className="cal-count">{openDrafts} open</span> : null}
-          </Link>
-        </span>
-      </Toolbar>
+    <div className="schedule-calendar" data-view={view}>
+      {header}
       {pinned.changed ? (
         <div className="banner" role="status" data-testid="schedule-changed">
           <StatusBadge tone="warning" label="Schedule changed" />
@@ -457,38 +606,100 @@ function CalendarBody({ facility }: { facility: FacilityContext }) {
           onAction: () => void navigate('/schedule/resources'),
         }}
         unavailableOffline={['refreshing the schedule']}
+        loading={<TimelineSkeleton />}
+        hideAge
       >
-        {(inventory) => (
+        {() => (
           <QueryBoundary
             query={events}
             label="events"
             empty={{ title: '', description: '' }}
-            unavailableOffline={['refreshing the schedule']}
+            unavailableOffline={['refreshing the schedule', 'moving bookings', 'booking']}
+            loading={<TimelineSkeleton />}
+            hideAge
           >
-            {(items) => {
-              const visible = items.filter((e) => showCanceled || e.status !== 'canceled');
-              const activeClosures = (closures.data ?? []).filter(
-                (c) =>
-                  (c.status === 'active' || c.status === 'pending') && overlaps(c.interval, range),
+            {() => {
+              const chip = (
+                f: GridFilter,
+                label: string,
+                extra?: { kind?: string; tone?: string },
+              ) => {
+                const pressed =
+                  filter.type === f.type &&
+                  (f.type !== 'kind' || (filter.type === 'kind' && filter.group === f.group));
+                return (
+                  <button
+                    type="button"
+                    key={label}
+                    className="sched-chip"
+                    data-kind={extra?.kind}
+                    data-tone={extra?.tone}
+                    aria-pressed={pressed}
+                    onClick={() => setFilter(pressed && f.type !== 'all' ? { type: 'all' } : f)}
+                  >
+                    {extra?.kind ? <i className="kind-swatch" aria-hidden="true" /> : null}
+                    {label}
+                  </button>
+                );
+              };
+              const rail = (
+                <TimelineDetail
+                  selected={selected}
+                  blocks={blocks}
+                  closures={activeClosures}
+                  resources={inventory}
+                  operating={operating.data?.resources}
+                  timezone={tz}
+                  facilityId={facility.id}
+                  rangeLabel={rangeLabel}
+                  truncated={truncated}
+                  moveTip={ability.reason}
+                  onClear={() => setSelected(null)}
+                  onPublished={() => pinned.showLatest()}
+                />
               );
-              const focus = inventory.find((r) => r.id === focusId);
-              const rows = orderedInventory(inventory).filter(
-                ({ resource }) =>
-                  !focus || resource.id === focus.id || resource.parentResourceId === focus.id,
-              );
-              const known = new Set(inventory.map((r) => r.id));
-              const unplaced = visible.filter((e) => !e.resourceIds.some((id) => known.has(id)));
-              const kinds = KIND_ORDER.filter((k) => visible.some((e) => e.kind === k));
+              const panel = slotPanel ? (
+                <FreeSlotPanel
+                  facility={facility}
+                  resources={inventory}
+                  fromDate={view === 'week' ? weekStart(date) : date}
+                  onClose={() => {
+                    setSlotPanel(false);
+                    setMatches([]);
+                  }}
+                  onHold={(slot) => openBooking({ ...slot, held: true })}
+                  onMatches={setMatches}
+                />
+              ) : null;
               return (
                 <>
-                  {visible.length === 0 && !truncated ? (
-                    <StateView
-                      variant="empty"
-                      title="No events in this range"
-                      description={`Nothing is booked ${span === 1 ? 'on this day' : 'in this week'}. Plan events in a schedule draft.`}
-                      actionLabel="Open drafts"
-                      onAction={() => void navigate('/schedule/drafts')}
-                    />
+                  {view === 'day' ? (
+                    <div className="sched-chips" role="group" aria-label="Show on the grid">
+                      {chip({ type: 'all' }, `All ${total}`)}
+                      {KIND_GROUPS.filter((g) => counts[g.id] > 0).map((g) =>
+                        chip({ type: 'kind', group: g.id }, `${g.label} ${counts[g.id]}`, {
+                          kind: g.id,
+                        }),
+                      )}
+                      <span className="sched-chips-gap" />
+                      {conflicts.size > 0
+                        ? chip(
+                            { type: 'conflicts' },
+                            `✕ ${plural(conflictCount(conflicts, blocks), 'conflict')}`,
+                            { tone: 'danger' },
+                          )
+                        : null}
+                      {draftCount > 0
+                        ? chip({ type: 'drafts' }, `◷ ${plural(draftCount, 'draft')}`, {
+                            tone: 'pending',
+                          })
+                        : null}
+                    </div>
+                  ) : null}
+                  {visibleEvents.length === 0 && !truncated && view === 'day' ? (
+                    <p className="caption" role="status">
+                      Nothing is booked on this day yet. Tap a free block to book it.
+                    </p>
                   ) : null}
                   {truncated ? (
                     <p className="caption" role="status" data-testid="events-truncated">
@@ -505,73 +716,104 @@ function CalendarBody({ facility }: { facility: FacilityContext }) {
                       marked.
                     </p>
                   ) : null}
-                  <div className="cal-layout">
-                    <section
-                      className="card card-flush cal-timeline"
-                      aria-labelledby="timeline-title"
-                    >
-                      <div className="card-head">
-                        <h4 id="timeline-title">Timeline</h4>
-                        {kinds.length > 0 ? (
-                          <div className="kind-filters" role="group" aria-label="Highlight kinds">
-                            {kinds.map((k) => (
-                              <button
-                                type="button"
-                                key={k}
-                                className="kind-chip"
-                                data-kind={KIND_TOKEN[k]}
-                                aria-pressed={!hiddenKinds.has(k)}
-                                onClick={() => toggleKind(k)}
-                              >
-                                <span className="kind-swatch" aria-hidden="true" />
-                                {EVENT_KIND_LABEL[k]}
-                              </button>
-                            ))}
-                          </div>
-                        ) : null}
-                      </div>
-                      <ResourceTimeline
-                        rows={rows}
+                  {view === 'week' ? (
+                    <div className="sched-layout" data-panel={slotPanel || undefined}>
+                      <WeekHeatmap
+                        facility={facility}
                         resources={inventory}
-                        events={visible}
-                        closures={activeClosures}
-                        range={range}
-                        span={span}
                         date={date}
-                        timezone={tz}
-                        now={now}
-                        hiddenKinds={hiddenKinds}
-                        selected={selected}
-                        onSelect={setSelected}
+                        today={today}
+                        blocks={blocks}
+                        conflicts={conflicts}
+                        closures={activeClosures}
+                        matches={slotPanel ? matches : []}
+                        onOpenDay={(d, resourceId) => {
+                          setSelected(null);
+                          setParams((p) => {
+                            const n = new URLSearchParams(p);
+                            n.delete('view');
+                            if (d === today) n.delete('date');
+                            else n.set('date', d);
+                            if (resourceId) n.set('space', resourceId);
+                            return n;
+                          });
+                        }}
                       />
-                      <div className="card-foot">
-                        <TrackLegend />
-                      </div>
-                    </section>
-                    <TimelineDetail
-                      selected={selected}
-                      events={visible}
-                      closures={activeClosures}
-                      resources={inventory}
-                      timezone={tz}
-                      rangeLabel={rangeLabel}
-                      truncated={truncated}
-                      onClear={() => setSelected(null)}
-                    />
-                  </div>
-                  <section
-                    className="card by-space"
-                    aria-labelledby="by-space-title"
-                    data-testid="bookings-by-space"
-                  >
-                    <h4 id="by-space-title">Bookings by space</h4>
+                      {panel}
+                    </div>
+                  ) : (
+                    <div className="sched-layout">
+                      <section className="card card-flush cal-timeline" aria-label="Day timeline">
+                        <ResourceTimeline
+                          rows={shownRows}
+                          resources={inventory}
+                          blocks={blocks}
+                          closures={activeClosures}
+                          window={win}
+                          timezone={tz}
+                          now={now}
+                          visible={visible}
+                          conflicts={conflicts}
+                          gaps={gaps}
+                          selected={selected}
+                          onSelect={setSelected}
+                          onBook={
+                            online
+                              ? (resourceId, start, end) =>
+                                  openBooking({ resourceId, start, end, held: false })
+                              : undefined
+                          }
+                          move={{
+                            ability,
+                            pending: mover.pending,
+                            onDrop,
+                            onRefused: (message) => {
+                              setAnnouncement(message);
+                              toast.show({ tone: 'error', message });
+                            },
+                          }}
+                        />
+                        <div className="card-foot">
+                          <TrackLegend />
+                        </div>
+                      </section>
+                      {panel ?? (wide ? rail : null)}
+                    </div>
+                  )}
+                  {!wide && view === 'day' && selected ? (
+                    <Drawer
+                      open
+                      onClose={() => setSelected(null)}
+                      labelledBy="sched-drawer-title"
+                      header={<h3 id="sched-drawer-title">Booking</h3>}
+                      testId="schedule-drawer"
+                    >
+                      {rail}
+                    </Drawer>
+                  ) : null}
+                  <p className="visually-hidden" role="status">
+                    {announcement}
+                  </p>
+                  <details className="card by-space" data-testid="bookings-by-space">
+                    <summary>
+                      <h4 id="by-space-title">Bookings by space</h4>
+                      <span className="caption">The day as text, space by space</span>
+                    </summary>
+                    <label className="cal-check">
+                      <input
+                        type="checkbox"
+                        checked={showCanceled}
+                        onChange={(e) => setShowCanceled(e.target.checked)}
+                      />{' '}
+                      Show canceled events
+                    </label>
                     {rows.map(({ resource, depth }) => (
                       <ResourceRow
                         key={resource.id}
                         resource={resource}
                         depth={depth}
                         resources={inventory}
-                        events={visible}
+                        events={visibleEvents}
                         closures={activeClosures}
                         timezone={tz}
                         truncated={truncated}
@@ -590,8 +832,8 @@ function CalendarBody({ facility }: { facility: FacilityContext }) {
                       }}
                       label="events"
                     />
-                  </section>
-                  {unplaced.length > 0 && !focus ? (
+                  </details>
+                  {unplaced.length > 0 ? (
                     <section className="card" aria-labelledby="unplaced-events">
                       <h4 id="unplaced-events">Events on spaces not in this inventory</h4>
                       <ul className="list">
@@ -608,17 +850,51 @@ function CalendarBody({ facility }: { facility: FacilityContext }) {
         )}
       </QueryBoundary>
       <FacilitySessions facility={facility} range={range} showCanceled={showCanceled} />
+      <ZoneCaption facility={facility} />
+      <div className="sched-more">
+        <Button variant="secondary" className="button-sm" disabled={!online} onClick={refresh}>
+          <Icon name="refresh" size={16} />
+          Refresh
+        </Button>
+      </div>
+      {booking ? (
+        <NewBookingDrawer
+          facility={facility}
+          resources={inventory}
+          slot={booking}
+          onClose={() => setBooking(null)}
+        />
+      ) : null}
+      {noteFor ? (
+        <RefundNoteDialog
+          proposal={noteFor}
+          timeZone={tz}
+          onCancel={() => setNoteFor(null)}
+          onConfirm={(note) => {
+            const p = { ...noteFor, note };
+            setNoteFor(null);
+            void mover.propose(p);
+          }}
+        />
+      ) : null}
     </div>
   );
 }
 
 export function ScheduleCalendarScreen() {
   return (
-    <section aria-labelledby="calendar-title">
-      <h3 id="calendar-title">Calendar and resources</h3>
+    <section aria-label="Calendar and resources" className="schedule-screen">
       <FacilityGate purpose="see its schedule">
         {(facility) => <CalendarBody key={facility.id} facility={facility} />}
       </FacilityGate>
+      <nav className="sched-more" aria-label="Schedule sections">
+        <span className="caption">More:</span>
+        {MORE.map((m) => (
+          <Link key={m.to} to={m.to}>
+            {m.label}
+          </Link>
+        ))}
+      </nav>
     </section>
   );
 }

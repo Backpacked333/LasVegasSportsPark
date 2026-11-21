@@ -425,7 +425,8 @@ describe('demo dataset (ADR-007)', () => {
     const rentals = await deskReads<{ items: Json[] }>(
       `/v1/bookings?kind=rental&facilityId=${facility}`,
     );
-    expect(rentals.items).toHaveLength(3);
+    // Three from the rentals seed and the regular Saturday renter of the staff schedule (S 5a).
+    expect(rentals.items).toHaveLength(4);
     const payments = await deskReads<{ items: Array<{ status: string }> }>(
       '/v1/payments?limit=100',
     );
@@ -447,7 +448,8 @@ describe('demo dataset (ADR-007)', () => {
     const disputes = await leagueReads<{ items: Json[] }>(`/v1/disputes?seasonId=${seasonId}`);
     expect(disputes.items).toHaveLength(1);
     const drafts = await leagueReads<Json[]>(`/v1/schedule-drafts?facilityId=${facility}`);
-    expect(drafts).toHaveLength(2);
+    // Two from the league seed, and the staff schedule's make-up and clinic drafts (S 1b).
+    expect(drafts).toHaveLength(4);
 
     const adminReads = await as('dev-admin');
     expect((await adminReads<{ items: Json[] }>('/v1/message-templates')).items).toHaveLength(4);
@@ -494,8 +496,9 @@ describe('demo dataset (ADR-007)', () => {
     expect(tasks.items).toHaveLength(1);
     const closures = await managerRead<Json[]>(`/v1/closures?facilityId=${facility}`);
     // The planned Field 3 closure, and Field 4 closed for its repair during the busy hour that
-    // Today shows (demo/staff-today.ts; the clock of this suite is inside opening hours).
-    expect(closures).toHaveLength(2);
+    // Today shows (demo/staff-today.ts; the clock of this suite is inside opening hours), and
+    // tomorrow's Field 4 repair on the week by use (demo/staff-schedule.ts).
+    expect(closures).toHaveLength(3);
 
     // "My assignments" of the coach and the official.
     const coachReads = await as('dev-coach');

@@ -84,6 +84,14 @@
   --kind-dropin: #5a6660;
   --kind-dropin-bg: #eef0ee;
   --kind-futsal: #0e7c74;
+  /* Week by use (S 2b): five steps of the share of open hours booked. */
+  --heat-0: #ecf5ef;
+  --heat-1: #d9ecdf;
+  --heat-2: #c3e2cd;
+  --heat-3: #a2d2b3;
+  --heat-4: #0a7040;
+  --heat-ink: #111614;
+  --heat-4-ink: #ffffff;
 
   /* Person colours (redesign handoff): each person keeps one for the avatar's initials and ring. */
   --person-1: #8e2152;
@@ -283,6 +291,13 @@
   --kind-dropin: #a6a6ad;
   --kind-dropin-bg: #222225;
   --kind-futsal: #4fd1c5;
+  --heat-0: #121a15;
+  --heat-1: #16261c;
+  --heat-2: #1c3626;
+  --heat-3: #245236;
+  --heat-4: #5fd38d;
+  --heat-ink: #f5f5f7;
+  --heat-4-ink: #0b1a11;
 
   --color-focus: #f0c75a;
   --focus-ring: rgba(242, 201, 76, 0.28);

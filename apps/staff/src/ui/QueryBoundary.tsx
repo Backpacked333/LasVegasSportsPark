@@ -25,6 +25,10 @@ export interface QueryBoundaryProps<T> {
   unavailableOffline?: string[];
   /** Prefix of the age line, e.g. "As of" for the Today workspace. */
   agePrefix?: string;
+  /** Skeletons in the final layout while the first read runs (redesign "Loading"). */
+  loading?: ReactNode;
+  /** Leave out the "Updated …" line while the data is fresh (the shell's banner covers offline). */
+  hideAge?: boolean;
   children: (data: T) => ReactNode;
 }
 
@@ -35,6 +39,8 @@ export function QueryBoundary<T>({
   empty,
   unavailableOffline,
   agePrefix,
+  loading,
+  hideAge = false,
   children,
 }: QueryBoundaryProps<T>) {
   const now = useNow();
@@ -75,7 +81,7 @@ export function QueryBoundary<T>({
         />
       );
     }
-    return <StateView variant="loading" label={label} />;
+    return loading ?? <StateView variant="loading" label={label} />;
   }
 
   const threshold = services.config.staleDataThresholdMs;
@@ -100,7 +106,7 @@ export function QueryBoundary<T>({
           unavailableActions={unavailableOffline}
           onRetry={retry}
         />
-      ) : (
+      ) : hideAge ? null : (
         <LastUpdated at={query.updatedAt} now={now} prefix={agePrefix} />
       )}
       {isEmpty?.(query.data) ? <StateView variant="empty" {...empty} /> : children(query.data)}

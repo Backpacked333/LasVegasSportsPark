@@ -25,7 +25,6 @@ import { AssistedRegistrationScreen } from '../../screens/registrations/Assisted
 import { EnrollmentChangeScreen } from '../../screens/registrations/EnrollmentChangeScreen';
 import { EnrollmentsScreen } from '../../screens/registrations/EnrollmentsScreen';
 import { RegistrationQueueScreen } from '../../screens/registrations/RegistrationQueueScreen';
-import { RegistrationsScreen } from '../../screens/registrations/RegistrationsScreen';
 import { WaitlistScreen } from '../../screens/registrations/WaitlistScreen';
 import {
   RefundRequestScreen,
@@ -39,7 +38,7 @@ const ROUTES: readonly [path: string, element: ReactElement][] = [
   ['/programs/offerings/:offeringId', <OfferingSetupScreen />],
   ['/programs/offerings/:offeringId/publication', <OfferingPublicationScreen />],
   ['/programs/offerings/:offeringId/uniforms', <OfferingUniformsScreen />],
-  ['/registrations', <RegistrationsScreen />],
+  ['/registrations', <RegistrationQueueScreen />],
   ['/registrations/queue', <RegistrationQueueScreen />],
   ['/registrations/assisted', <AssistedRegistrationScreen />],
   ['/registrations/assisted/:basketId', <AssistedRegistrationScreen />],

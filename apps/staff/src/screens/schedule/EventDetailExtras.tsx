@@ -159,10 +159,19 @@ export function EventFacts({ event }: { event: Event }) {
 }
 
 /** Direct move or cancel of a published event: one change, published at once with every check. */
-export function DirectChange({ event, timezone }: { event: Event; timezone: string }) {
+export function DirectChange({
+  event,
+  timezone,
+  startOpen = false,
+}: {
+  event: Event;
+  timezone: string;
+  /** Opened from the rail's Move button: the move form shows at once. */
+  startOpen?: boolean;
+}) {
   const { online } = useApp();
   const mayPublish = useActionAllowed('scheduling.publish_schedule', event.facilityId);
-  const [mode, setMode] = useState<'none' | 'move' | 'cancel'>('none');
+  const [mode, setMode] = useState<'none' | 'move' | 'cancel'>(startOpen ? 'move' : 'none');
   const [start, setStart] = useState<LocalDateTime>(() =>
     localFromInstant(event.scheduledStart, timezone),
   );

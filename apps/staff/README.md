@@ -382,6 +382,94 @@ random salt, constant-time compare) in this browser's storage (`layout/lock/pin.
   depends on the owning modules' notices. The dialog counts people (event attendees), not
   families.
 
+## Schedule and registrations (redesign phase 6: S 1b, S 3e, S 2b, S 5a, S 1c, S 3f, S 2c)
+
+Status words follow §6.7 (Verified = asserted by a jsdom test here; Proposed; Pending decision).
+
+### Schedule (`src/screens/schedule`, `/schedule/calendar`)
+
+- **S 1b day timeline** (`ScheduleCalendarScreen`, `ResourceTimeline`, `TimelineDetail`,
+  `schedule-model.ts`). 68 px rows (fields, then courts and other spaces, then rooms; a
+  subdivision only on a day it is booked or closed on its own); kind chips with counts, and the
+  conflict and draft chips, filter the grid (the other blocks dim; the text list "Bookings by
+  space" keeps everything). Open schedule drafts are drawn on the grid: a draft "create" is a
+  dashed block, a draft move or resize a dashed ghost. Conflicts are blocks holding the same ground
+  at overlapping times (only a draft can overlap a published event; the exclusion constraint is
+  the guarantee) and changes the API's validation flagged. Free hours of 60 min or more from now
+  on are "+ Free 12–2 · book" blocks; a gap or empty time opens New booking with the space and
+  time. The rail lists the readiness checks of Today (`useStartChecks`) with the first failed
+  check's fix as the primary action (Assign referee in place, missing forms, the restriction,
+  payment on the booking), Move (the facility-local move form, the keyboard path of a drag) and
+  Message; a rental or party also shows its booking. A draft block offers Publish
+  (`POST /schedule-drafts/{id}/publish`; an unpublished event outside a draft is put in a
+  one-change draft first) and Delete (discard, or autosave without that change). Day and Week
+  keep the date (`?date=`, `?view=week`). **Verified.**
+- **S 3e drag** (`useScheduleMove`). Pointer: press and move; touch and pen: long-press 400 ms.
+  The block tilts (not with reduced motion), "was here" marks its place, fitting gaps glow, a
+  clash turns it red and names what it hits; dropping there snaps back; Escape cancels; edges
+  resize in 15-minute steps. No new command: a drop writes a one-change schedule draft (`move`,
+  `resize` or `resource_change`) and validates it; a refused validation discards it and says why.
+  A valid move waits with a toast that stays until a choice: **Notify** publishes the draft (the
+  move commits under the exclusion constraint and the change notice goes out; bookings follow
+  their event through enrollment's handler), **Undo** discards it. Nobody is told before Notify;
+  a draft left by a closed page stays in Drafts and on the grid. Shortening a booked rental
+  that is paid needs a refund note (the change's reason); the refund itself is requested on the
+  payment. Only roles holding scheduling.manage_drafts and scheduling.publish_schedule can drag
+  (the front desk reads why). The toast counts people (event attendees), not families.
+  **Verified.**
+- **S 2b week by use** (`WeekHeatmap`). Space by local day (Monday to Sunday); the share of open
+  hours booked comes from `GET /reports/utilization` per day (its per-resource rows), the week's
+  total from `GET /reports/utilization-heatmap` (weekday by hour, summed); both need
+  reporting.view_utilization, so other roles see the cells toned by bookings with a sentence that
+  says so. Closures are hatched ("Closed", "Until 1 PM"), conflicts written in the cell; a cell
+  opens that day. **Verified.**
+- **Find a free slot** (`FreeSlotPanel`): `GET /resource-availability` over 14 days, filtered by
+  space type (format or kind), length, days and hours; the earliest start per space and day, with
+  the matching cells outlined; the no-match sentence of INTERACTIONS 2b row 3. **Verified.**
+- **S 5a New booking** (`NewBookingDrawer`): regulars first (`GET /bookings`, with what they
+  usually book), a people search once typing pauses, Enter picks the top; only the rentals and
+  parties whose booking availability lists the space; `POST /bookings`, then the API's quote
+  (`POST /registration-quotes`) and checkout in assisted registration. **Verified.**
+- **Proposed / pending decision 5 (slot holds and staff-side prices):** the 15-minute hold is
+  kept on the screen only (countdown, amber "Keep holding" at 2:00, released at 0); the server
+  holds nothing. No price is shown before booking; the price shown after is the API's quote.
+  Add-ons on a booking are not in the API (shown as proposed). "Text a pay link" is proposed
+  (no payment links in the API). A card on file does not exist in the API (DEC-019 provider
+  behaviour pending): "Charge card" opens the checkout.
+- Not built: dragging on Today's field board (INTERACTIONS 1a row 4). The board's mini timeline
+  is a decorative strip; moves happen on the day timeline with the same rules.
+
+### Registrations (`src/screens/registrations`, `/registrations`, also `/registrations/queue`)
+
+- **S 1c triage** (`RegistrationQueueScreen`, `TriageQueue`, `TriageRail`, `triage-model.ts`):
+  tabs with live counts (Needs a decision, Waitlist offers, Forms missing from
+  `GET /reports/enrollment-completeness`, All). Reasons in plain words with glyph badges (age
+  reasons from the date of birth: "Turns 5 on Dec 4"). Checkbox or X selects; rows sharing one
+  reason get the night bulk bar (Approve N, Decline…), each command on its own record. J/K/X/A/O/D
+  (not while typing or in a dialog); on narrow screens the rail is a bottom sheet. Approve is
+  optimistic with a 5 s Undo; the commands go after the window (an exception is
+  `override-eligibility` with the reason, then `accept` with the new revision), so the family is
+  told after it; a failure brings the row back with Try again. Over capacity: "Approve and
+  over-fill by 1" (`POST /capacity-pools/{id}/adjust`) or "Waitlist" (`POST /waitlist-entries`,
+  then decline with that reason). Deciding is offered to roles holding
+  enrollment.review_application (the front desk sees the facts). **Verified.**
+- **S 3f decline**: a reason (radio) and the family's message, prefilled per reason and
+  editable; the button follows the choices; when the API names an alternative offering with
+  places it is ticked by default and travels in the message. **Verified.**
+- **S 2c waitlist offers** (`WaitlistOffersTab`): `GET /waitlist-queue` (enrollment.manage_waitlist;
+  the front desk is told who manages offers). Time left with a bar; under 2 h the row turns amber
+  and suggests Call family (the payer's phone from `GET /people/{id}`); Withdraw (confirm) ends
+  the offer through `POST /waitlist-entries/{id}/remove`; a passed or lapsed offer goes to the
+  next family with `POST /waitlist-entries/{id}/offer`. The API does not record whether a family
+  opened an offer, so "not opened" is never claimed. **Verified.**
+- **Pending decision DEC-006** (offer expiry): Extend +12 h / +24 h is shown disabled (no
+  command moves an offer's expiry). **Pending decision 4** (auto-offer): "Offer the next family
+  by itself" is a read-only proposed switch. **Proposed:** the call note ("Called 8:52") is kept
+  on this device only (no contact log in the API). The median time to accept is worked out from
+  the settled offers listed.
+- The old area home (`RegistrationsScreen`) is replaced by the triage; its sections are linked
+  under "More".
+
 ## Conventions for screen builders
 
 - **Layout.** One directory per screen under `src/screens/<area>/`, the screen in
