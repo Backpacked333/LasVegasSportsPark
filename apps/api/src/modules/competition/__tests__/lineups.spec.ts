@@ -46,6 +46,7 @@ describe('team sheet: lineups and game logs (SPK-CAP-001, SPK-CAP-003, SPK-UX-00
   const assignments: AssignmentCheckPort = {
     isAcceptedOfficial: async (_organizationId, fixture, personId) =>
       accepted.has(`${fixture}:${personId}`),
+    sessionCoverage: async () => null,
   };
 
   const post = (path: string, actor: Actor, body: object, k: string = key()) =>
