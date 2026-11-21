@@ -1,5 +1,5 @@
 /**
- * Legends mode (a dark theme with a gold accent, switched at runtime and kept between launches)
+ * Legends mode (night green with floodlight accents, handoff M 5d; switched at runtime and kept between launches)
  * and the theme tokens behind it: SPK-UX-009 (the switch is exposed to assistive technology with
  * its state, the state is also in words, text keeps its contrast in both themes) and SPK-UX-010
  * (one visual system: no screen keeps a colour of its own).
@@ -335,16 +335,22 @@ describe('contrast of the theme tokens (SPK-UX-009)', () => {
     });
   });
 
-  it('Legends mode is dark with a gold accent; the classic theme is unchanged in kind', () => {
+  it('Legends mode (handoff M 5d) is night green with a floodlight accent; the classic theme is unchanged in kind', () => {
     expect(legendsTheme.dark).toBe(true);
     expect(classicTheme.dark).toBe(false);
     expect(luminance(legendsTheme.colors.page)).toBeLessThan(0.02);
-    // Gold: red above green above blue, and bright.
-    const [r, g, b] = [1, 3, 5].map((i) =>
-      parseInt(legendsTheme.colors.primary.slice(i, i + 2), 16),
-    ) as [number, number, number];
-    expect(r).toBeGreaterThan(g);
-    expect(g).toBeGreaterThan(b);
+    // Night green: the page and the cards lean green (green above red and blue).
+    for (const surface of [legendsTheme.colors.page, legendsTheme.colors.background]) {
+      const [r, g, b] = [1, 3, 5].map((i) => parseInt(surface.slice(i, i + 2), 16)) as [
+        number,
+        number,
+        number,
+      ];
+      expect(g).toBeGreaterThan(r);
+      expect(g).toBeGreaterThan(b);
+    }
+    // The accent is the floodlight, the same as classic's floodlight, and bright.
+    expect(legendsTheme.colors.primary).toBe(classicTheme.colors.floodlight);
     expect(luminance(legendsTheme.colors.primary)).toBeGreaterThan(0.4);
     // The same token names in both themes.
     expect(Object.keys(legendsTheme.colors).sort()).toEqual(
