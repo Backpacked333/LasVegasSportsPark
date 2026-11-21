@@ -851,18 +851,12 @@ function CalendarBody({ facility }: { facility: FacilityContext }) {
       </QueryBoundary>
       <FacilitySessions facility={facility} range={range} showCanceled={showCanceled} />
       <ZoneCaption facility={facility} />
-      <nav className="sched-more" aria-label="Schedule sections">
-        <span className="caption">More:</span>
-        {MORE.map((m) => (
-          <Link key={m.to} to={m.to}>
-            {m.label}
-          </Link>
-        ))}
+      <div className="sched-more">
         <Button variant="secondary" className="button-sm" disabled={!online} onClick={refresh}>
           <Icon name="refresh" size={16} />
           Refresh
         </Button>
-      </nav>
+      </div>
       {booking ? (
         <NewBookingDrawer
           facility={facility}
@@ -893,6 +887,14 @@ export function ScheduleCalendarScreen() {
       <FacilityGate purpose="see its schedule">
         {(facility) => <CalendarBody key={facility.id} facility={facility} />}
       </FacilityGate>
+      <nav className="sched-more" aria-label="Schedule sections">
+        <span className="caption">More:</span>
+        {MORE.map((m) => (
+          <Link key={m.to} to={m.to}>
+            {m.label}
+          </Link>
+        ))}
+      </nav>
     </section>
   );
 }

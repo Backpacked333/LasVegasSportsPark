@@ -111,8 +111,10 @@ approval. **Pending decision** = needs an operator answer; the screen shows the 
   permission read is unknown or failed nothing is hidden, and the command's own ACCESS_DENIED still
   decides. NOT_FOUND reads "not available" without implying the record exists; CAPABILITY_DISABLED
   reads as turned off.
-- **No drag.** Events are moved with date and time fields, so keyboard and pointer users have the
-  same path (SPK-UX-009).
+- **Drag and the move form.** A booking can be dragged on the day timeline (S 3e, through a
+  one-change schedule draft, validated, then Notify or Undo; see the staff README "Schedule and
+  registrations"); the rail's Move opens date and time fields, so keyboard and pointer users have
+  the same path (SPK-UX-009).
 
 ## Pending decisions shown on these screens
 
