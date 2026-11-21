@@ -387,7 +387,7 @@ function RefundRequest({ request, onChanged }: { request: CaseDetail; onChanged:
             </label>
           </div>
         ) : null}
-        {blockedReason ? <p className="rr-blocked">{blockedReason}</p> : null}
+        {blockedReason && !done ? <p className="rr-blocked">{blockedReason}</p> : null}
         {done ? (
           <p className="rr-done" role="status">
             ✓ {done}

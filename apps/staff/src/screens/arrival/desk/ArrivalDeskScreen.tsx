@@ -89,7 +89,7 @@ export function ArrivalDeskScreen() {
   const [checkedIn, setCheckedIn] = useState<CheckedIn | null>(null);
   const [signing, setSigning] = useState<SignRequest | null>(null);
   /** People who signed on the tablet during this family, and when (shown on the green answer). */
-  const [signedAt, setSignedAt] = useState<Record<string, string>>({});
+  const [signedAt, setSignedAt] = useState<Record<string, { at: string; what: string }>>({});
   const [lastScanAt, setLastScanAt] = useState<string | null>(null);
   const [opener, setOpener] = useState<{ pending: boolean; error: ApiError | null }>({
     pending: false,
@@ -245,7 +245,11 @@ export function ArrivalDeskScreen() {
           onHandBack={() => setSigning(null)}
           onSigned={(ids) => {
             const at = services.now().toISOString();
-            setSignedAt((prev) => ({ ...prev, ...Object.fromEntries(ids.map((id) => [id, at])) }));
+            const what = signing.issue.code === 'missing_acknowledgment' ? 'form' : 'waiver';
+            setSignedAt((prev) => ({
+              ...prev,
+              ...Object.fromEntries(ids.map((id) => [id, { at, what }])),
+            }));
             setSigning(null);
             // The verdict re-checks by itself: the family is opened again.
             if (opening) void open(opening.value.reopen);
@@ -951,7 +955,7 @@ function CheckedInAnswer({
 }: {
   result: CheckedIn;
   timezone: string | null;
-  signedAt: Record<string, string>;
+  signedAt: Record<string, { at: string; what: string }>;
   onNext: () => void;
 }) {
   const [held, setHeld] = useState(false);
@@ -988,7 +992,10 @@ function CheckedInAnswer({
               <span>
                 {activity.title} · {deskClock(activity.scheduledStart, timezone)}
                 {signedAt[person.personId]
-                  ? ` · waiver signed ${deskClock(signedAt[person.personId]!, timezone)}`
+                  ? ` · ${signedAt[person.personId]!.what} signed ${deskClock(
+                      signedAt[person.personId]!.at,
+                      timezone,
+                    )}`
                   : ''}
               </span>
             </span>
