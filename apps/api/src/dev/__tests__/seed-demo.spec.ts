@@ -438,7 +438,8 @@ describe('demo dataset (ADR-007)', () => {
     expect(uniforms).toHaveLength(2);
 
     const leagueReads = await as('dev-league');
-    expect(await leagueReads<Json[]>('/v1/competitions')).toHaveLength(2);
+    // The adult league, the cup being planned, and the parent app's youth league (parent-core).
+    expect(await leagueReads<Json[]>('/v1/competitions')).toHaveLength(3);
     const awaiting = await leagueReads<{ items: Json[] }>(
       `/v1/seasons/${seasonId}/result-revisions?status=submitted`,
     );
@@ -522,7 +523,8 @@ describe('demo dataset (ADR-007)', () => {
       `/v1/me/family-calendar?from=${from}&to=${to}`,
     );
     expect(calendar.items.length).toBeGreaterThan(0);
-    expect(await parentReads<Json[]>('/v1/me/team-entries')).toHaveLength(1);
+    // The parent's own team and the child's youth team (parent-core).
+    expect(await parentReads<Json[]>('/v1/me/team-entries')).toHaveLength(2);
     const owed = await parentReads<{
       items: Array<{ status: string; totals: { remainingMinor: number } }>;
     }>(`/v1/obligations?debtorPersonId=${parent?.personId}&status=open`);
