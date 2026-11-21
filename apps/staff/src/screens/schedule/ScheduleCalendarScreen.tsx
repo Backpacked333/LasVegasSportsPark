@@ -40,6 +40,7 @@ import { useToast } from '../../ui/Toast';
 import { useMediaQuery } from '../../layout/useMediaQuery';
 import {
   FacilityGate,
+  ZoneCaption,
   type FacilityContext,
 } from '../../features/schedule-facilities/facility-scope';
 import { orderedInventory, sharesSpace } from '../../features/schedule-facilities/inventory';
@@ -365,7 +366,8 @@ function CalendarBody({ facility }: { facility: FacilityContext }) {
   const [noteFor, setNoteFor] = useState<MoveProposal | null>(null);
   const [matches, setMatches] = useState<readonly SlotMatch[]>([]);
   const [announcement, setAnnouncement] = useState('');
-  const wide = useMediaQuery('(min-width: 1100px)');
+  // Narrow (a phone, or a tablet in portrait): the rail opens over the page.
+  const wide = !useMediaQuery('(max-width: 1099px)');
   const range = useMemo(
     () =>
       view === 'week' ? localDaysWindow(weekStart(date), 7, tz) : localDaysWindow(date, 1, tz),
@@ -431,7 +433,12 @@ function CalendarBody({ facility }: { facility: FacilityContext }) {
   const inventory = resources.data ?? [];
   const spaceName = (id: string) => inventory.find((r) => r.id === id)?.name ?? 'another space';
   const ability = useMoveAbility(facility.id);
-  const mover = useScheduleMove({ facilityId: facility.id, timeZone: tz, spaceName });
+  const mover = useScheduleMove({
+    facilityId: facility.id,
+    timeZone: tz,
+    spaceName,
+    onPublished: () => pinned.showLatest(),
+  });
   const openDrafts = (drafts.data ?? []).filter(isOpenDraft);
 
   const step = (days: number) => {
@@ -483,7 +490,7 @@ function CalendarBody({ facility }: { facility: FacilityContext }) {
       end: Date.parse(c.interval.end),
     })),
   ]);
-  const shownRows = visibleRows(rows, blocks);
+  const shownRows = visibleRows(rows, blocks, activeClosures);
   // While more events exist than were loaded, no space reads as free.
   const gaps =
     truncated || view === 'week' || !events.data
@@ -648,6 +655,7 @@ function CalendarBody({ facility }: { facility: FacilityContext }) {
                   truncated={truncated}
                   moveTip={ability.reason}
                   onClear={() => setSelected(null)}
+                  onPublished={() => pinned.showLatest()}
                 />
               );
               const panel = slotPanel ? (
@@ -842,6 +850,7 @@ function CalendarBody({ facility }: { facility: FacilityContext }) {
         )}
       </QueryBoundary>
       <FacilitySessions facility={facility} range={range} showCanceled={showCanceled} />
+      <ZoneCaption facility={facility} />
       <nav className="sched-more" aria-label="Schedule sections">
         <span className="caption">More:</span>
         {MORE.map((m) => (

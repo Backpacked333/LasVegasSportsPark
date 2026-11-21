@@ -135,7 +135,7 @@ describe('schedule timeline extras', () => {
     render(app.at('/schedule/calendar'));
     const { block, rail } = await selectHoops();
     expect(block).toHaveAttribute('data-kind', 'basketball');
-    expect(within(rail).getByText(/Game · Basketball/)).toBeInTheDocument();
+    expect(within(rail).getByText(/^League · .*Basketball$/)).toBeInTheDocument();
   });
 
   it('SPK-SCHED-009: the rail shows teams with roster sizes, staff by name, attendee counts and readiness by check', async () => {
@@ -162,7 +162,8 @@ describe('schedule timeline extras', () => {
     });
     render(app.at('/schedule/calendar'));
     const { user, rail } = await selectHoops();
-    await user.click(within(rail).getByRole('button', { name: 'Move now' }));
+    // The rail's Move opens the move form: the keyboard path of a drag (SPK-UX-009).
+    await user.click(within(rail).getByRole('button', { name: 'Move' }));
     const form = within(rail).getByRole('form', { name: 'Move this event' });
     const startTime = within(form).getAllByLabelText(/time/i)[0] as HTMLInputElement;
     await user.clear(startTime);
@@ -202,6 +203,7 @@ describe('schedule timeline extras', () => {
     });
     render(app.at('/schedule/calendar'));
     const { user, rail } = await selectHoops();
+    await user.click(within(rail).getByRole('button', { name: 'Move' }));
     await user.click(within(rail).getByRole('button', { name: 'Cancel event' }));
     const form = within(rail).getByRole('form', { name: 'Cancel this event' });
     await user.click(within(form).getByRole('button', { name: 'Cancel and notify' }));
@@ -225,9 +227,12 @@ describe('schedule timeline extras', () => {
       }),
     });
     render(app.at('/schedule/calendar'));
-    const { rail } = await selectHoops();
+    const { user, rail } = await selectHoops();
+    await user.click(within(rail).getByRole('button', { name: 'Move' }));
     expect(within(rail).queryByRole('button', { name: 'Move now' })).toBeNull();
-    expect(within(rail).getByRole('link', { name: 'Change in a draft' })).toBeInTheDocument();
+    expect(within(rail).getByRole('status')).toHaveTextContent(
+      'Moving a booking needs a scheduler or a manager who publishes the schedule.',
+    );
   });
 
   it('SPK-COMMS-003: "Message attendees" opens the composer with the teams and participants as the audience', async () => {
@@ -239,11 +244,11 @@ describe('schedule timeline extras', () => {
     expect(rail).toHaveTextContent(PLAYER);
   });
 
-  it('SPK-SCHED-008: the page header counts the facility-local day', async () => {
+  it('S 1b: the page header counts the bookings of the facility-local day', async () => {
     const app = createTestApp({ routes: routes() });
     render(app.at('/schedule/calendar'));
-    expect(await screen.findByTestId('day-summary')).toHaveTextContent(
-      'Today: 41 activities · 1 active restriction',
+    await waitFor(() =>
+      expect(screen.getByTestId('schedule-eyebrow')).toHaveTextContent(/· 1 booking ·/),
     );
   });
 });

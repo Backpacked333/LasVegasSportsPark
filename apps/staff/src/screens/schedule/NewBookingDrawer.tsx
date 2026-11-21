@@ -23,7 +23,8 @@
  *   the provider's own card entry or a desk tender). "Text a pay link" is proposed: the API sends
  *   no payment links yet.
  */
-import type { Schema } from '@sportspark/api-client';
+import { apiQueryKey, type Schema } from '@sportspark/api-client';
+import { useQueries } from '@tanstack/react-query';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { usePersonNameRecords } from '../../api/person-names';
@@ -31,9 +32,13 @@ import { useApiPages } from '../../api/useApiPages';
 import { useApiQuery } from '../../api/useApiQuery';
 import { asApiError, useIntentSend } from '../../api/useIntentSend';
 import type { FacilityContext } from '../../features/schedule-facilities/facility-scope';
-import { formatLocalDate, localDateOf } from '../../features/schedule-facilities/time';
+import {
+  formatLocalDate,
+  localDateOf,
+  startOfLocalDay,
+} from '../../features/schedule-facilities/time';
 import { formatMoney } from '../../features/operations/format';
-import { useApp, useNow } from '../../providers/AppProviders';
+import { useApi, useApp, useNow } from '../../providers/AppProviders';
 import { Avatar } from '../../ui/Avatar';
 import { Button } from '../../ui/Button';
 import { Drawer } from '../../ui/Drawer';
@@ -83,6 +88,7 @@ export function NewBookingDrawer({
   onClose: () => void;
 }) {
   const { online } = useApp();
+  const api = useApi();
   const now = useNow(1_000);
   const tz = facility.timezone;
   const { send } = useIntentSend([...SCHEDULE_INVALIDATE, ['api', '/baskets']]);
@@ -111,6 +117,13 @@ export function NewBookingDrawer({
     enabled: searched.length >= 2,
   });
   const [customer, setCustomer] = useState<Customer | null>(null);
+  // The search runs once typing pauses (at least two letters, the API's minimum).
+  useEffect(() => {
+    const value = term.trim();
+    if (value.length < 2 || value === searched) return;
+    const id = setTimeout(() => setSearched(value), 400);
+    return () => clearTimeout(id);
+  }, [term, searched]);
   const lower = term.trim().toLowerCase();
   const regularMatches: Customer[] = regulars
     .map((r): Customer | null => {
@@ -137,9 +150,37 @@ export function NewBookingDrawer({
     path: '/offerings',
     request: { query: { kind: 'party', view: 'staff', limit: 200, facilityId: facility.id } },
   });
-  const offerings = [...(rentals.data?.items ?? []), ...(parties.data?.items ?? [])].filter(
-    (o) => BOOKABLE.has(o.publicationState) && o.bookingTermsPolicyVersionId !== null,
+  const bookable = [...(rentals.data?.items ?? []), ...(parties.data?.items ?? [])].filter(
+    (o, i, all) =>
+      BOOKABLE.has(o.publicationState) &&
+      o.bookingTermsPolicyVersionId !== null &&
+      all.findIndex((x) => x.id === o.id) === i,
   );
+  // Only offerings that book this space: their booking availability lists it for the day.
+  const dayStart = startOfLocalDay(localDateOf(slot.start, tz), tz);
+  const dayEnd = new Date(Date.parse(dayStart) + 26 * 60 * MINUTE).toISOString();
+  const spaceFits = useQueries({
+    queries: bookable.map((o) => ({
+      queryKey: apiQueryKey('/offerings/{id}/booking-availability', {
+        path: { id: o.id },
+        query: { from: dayStart, to: dayEnd },
+      }),
+      queryFn: async ({ signal }: { signal: AbortSignal }) =>
+        (
+          await api.request('get', '/offerings/{id}/booking-availability', {
+            path: { id: o.id },
+            query: { from: dayStart, to: dayEnd },
+            signal,
+          })
+        ).data,
+      staleTime: 60_000,
+      retry: false,
+    })),
+  });
+  const offerings = bookable.filter((o, i) =>
+    (spaceFits[i]?.data?.resources ?? []).some((r) => r.resourceId === slot.resourceId),
+  );
+  const checkingOfferings = spaceFits.some((q) => q.isPending);
   const [offeringId, setOfferingId] = useState('');
   useEffect(() => {
     if (!offeringId && offerings.length > 0) {
@@ -452,7 +493,11 @@ export function NewBookingDrawer({
                 onChange={(e) => setOfferingId(e.target.value)}
                 aria-invalid={errors.offering ? true : undefined}
               >
-                {offerings.length === 0 ? <option value="">No bookable offering</option> : null}
+                {offerings.length === 0 ? (
+                  <option value="">
+                    {checkingOfferings ? 'Checking…' : 'Nothing is booked on this space'}
+                  </option>
+                ) : null}
                 {offerings.map((o) => (
                   <option key={o.id} value={o.id}>
                     {o.name}
@@ -460,6 +505,12 @@ export function NewBookingDrawer({
                 ))}
               </select>
               {errors.offering ? <span className="error-text">{errors.offering}</span> : null}
+              {!checkingOfferings && offerings.length === 0 ? (
+                <span className="caption">
+                  No rental or party is set up for {resource?.name ?? 'this space'}. Spaces are
+                  added to an offering in Programs.
+                </span>
+              ) : null}
             </label>
             <label className="nb-field">
               {offering?.kind === 'party' ? 'Guests' : 'Players (about)'}

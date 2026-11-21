@@ -147,9 +147,16 @@ export function timelineWindow(
 export type Row = { resource: Resource; depth: number };
 
 /** The rows of S 1b: every top-level space, and a subdivision only on a day it is booked. */
-export function visibleRows(rows: readonly Row[], blocks: readonly TimelineBlock[]): Row[] {
+export function visibleRows(
+  rows: readonly Row[],
+  blocks: readonly TimelineBlock[],
+  closures: readonly Closure[] = [],
+): Row[] {
   return rows.filter(
-    (r) => r.depth === 0 || blocks.some((b) => b.resourceIds.includes(r.resource.id)),
+    (r) =>
+      r.depth === 0 ||
+      blocks.some((b) => b.resourceIds.includes(r.resource.id)) ||
+      closures.some((c) => c.resourceId === r.resource.id),
   );
 }
 
@@ -374,13 +381,8 @@ export function ResourceTimeline({
       active: false,
     };
     press.current = { x: e.clientX, y: e.clientY, dragged: false };
-    const target = e.currentTarget;
     const activate = () => {
-      try {
-        target.setPointerCapture(state.pointerId);
-      } catch {
-        // jsdom and some browsers refuse capture for synthetic pointers; moves still arrive.
-      }
+      pressTimer.current = null;
       setDrag((d) => (d ? { ...d, active: true } : { ...state, active: true }));
     };
     setDrag(state);
@@ -392,7 +394,11 @@ export function ResourceTimeline({
     }
   };
 
-  const onPointerMove = (e: ReactPointerEvent<HTMLElement>) => {
+  // Moves and the drop are followed on the window while a block is pressed: the block's own
+  // element is replaced by its "was here" mark once the drag starts.
+  const onMove = useRef<(e: PointerEvent) => void>(() => undefined);
+  const onUp = useRef<(e: PointerEvent) => void>(() => undefined);
+  onMove.current = (e) => {
     const d = dragRef.current;
     const p = press.current;
     if (!d || !p || e.pointerId !== d.pointerId) return;
@@ -404,18 +410,12 @@ export function ResourceTimeline({
         return;
       }
       if (moved <= DRAG_SLOP) return;
-      try {
-        e.currentTarget.setPointerCapture(d.pointerId);
-      } catch {
-        // see above
-      }
     }
     p.dragged = true;
-    e.preventDefault();
+    if (e.cancelable) e.preventDefault();
     setDrag(evaluate({ ...d, active: true }, e.clientX, e.clientY));
   };
-
-  const onPointerUp = (e: ReactPointerEvent<HTMLElement>) => {
+  onUp.current = (e) => {
     const d = dragRef.current;
     if (pressTimer.current) clearTimeout(pressTimer.current);
     pressTimer.current = null;
@@ -424,7 +424,11 @@ export function ResourceTimeline({
     press.current = null;
     setDrag(null);
     if (!d.active || !dragged) return;
+    // The click that follows a drop is not a selection.
     suppressClick.current = true;
+    setTimeout(() => {
+      suppressClick.current = false;
+    }, 0);
     const final = evaluate(d, e.clientX, e.clientY);
     const unchanged =
       final.start === final.block.start &&
@@ -448,6 +452,21 @@ export function ResourceTimeline({
       mode: final.mode === 'move' ? 'move' : 'resize',
     });
   };
+  const pressed = drag !== null;
+  useEffect(() => {
+    if (!pressed) return;
+    const follow = (e: PointerEvent) => onMove.current(e);
+    const drop = (e: PointerEvent) => onUp.current(e);
+    const cancel = () => cancelDrag();
+    window.addEventListener('pointermove', follow, { passive: false });
+    window.addEventListener('pointerup', drop);
+    window.addEventListener('pointercancel', cancel);
+    return () => {
+      window.removeEventListener('pointermove', follow);
+      window.removeEventListener('pointerup', drop);
+      window.removeEventListener('pointercancel', cancel);
+    };
+  }, [pressed, cancelDrag]);
 
   const onTrackClick = (e: ReactMouseEvent<HTMLDivElement>, resource: Resource) => {
     if (!onBook || resource.status !== 'active') return;
@@ -636,9 +655,6 @@ export function ResourceTimeline({
                             aria-label={blockLabel(b, tz, conflict)}
                             aria-roledescription={canDrag ? 'draggable booking' : undefined}
                             onPointerDown={(e) => onPointerDown(e, b, 'move')}
-                            onPointerMove={onPointerMove}
-                            onPointerUp={onPointerUp}
-                            onPointerCancel={() => cancelDrag()}
                             onClick={() => {
                               if (suppressClick.current) {
                                 suppressClick.current = false;
@@ -661,16 +677,12 @@ export function ResourceTimeline({
                                   data-edge="start"
                                   aria-hidden="true"
                                   onPointerDown={(e) => onPointerDown(e, b, 'resize-start')}
-                                  onPointerMove={onPointerMove}
-                                  onPointerUp={onPointerUp}
                                 />
                                 <span
                                   className="tl-edge"
                                   data-edge="end"
                                   aria-hidden="true"
                                   onPointerDown={(e) => onPointerDown(e, b, 'resize-end')}
-                                  onPointerMove={onPointerMove}
-                                  onPointerUp={onPointerUp}
                                 />
                               </>
                             ) : null}

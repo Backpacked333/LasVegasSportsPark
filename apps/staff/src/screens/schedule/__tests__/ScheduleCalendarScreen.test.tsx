@@ -150,19 +150,20 @@ describe('SCR-S-03 ScheduleCalendarScreen', () => {
         '2026-10-25T07:00:00.000Z',
       ),
     );
-    await user.selectOptions(screen.getByRole('combobox', { name: 'View' }), 'Week');
+    // Week (S 2b) keeps the date: the Monday-to-Sunday week holding Sunday 2026-10-25.
+    await user.click(screen.getByRole('radio', { name: 'Week' }));
     await waitFor(() =>
-      expect(app.fake.requests.filter((r) => r.route === '/events').at(-1)?.query.end).toBe(
-        // Seven local days from 2026-10-25: local midnight of 2026-11-01 is still PDT.
-        '2026-11-01T07:00:00.000Z',
-      ),
+      expect(app.fake.requests.filter((r) => r.route === '/events').at(-1)?.query).toMatchObject({
+        start: '2026-10-19T07:00:00.000Z',
+        end: '2026-10-26T07:00:00.000Z',
+      }),
     );
     await user.click(screen.getByRole('button', { name: 'Next week' }));
     await waitFor(() =>
       expect(app.fake.requests.filter((r) => r.route === '/events').at(-1)?.query).toMatchObject({
-        start: '2026-11-01T07:00:00.000Z',
+        start: '2026-10-26T07:00:00.000Z',
         // The week holds the 25-hour day of 2026-11-01 and ends at midnight PST.
-        end: '2026-11-08T08:00:00.000Z',
+        end: '2026-11-02T08:00:00.000Z',
       }),
     );
   });
@@ -210,9 +211,7 @@ describe('SCR-S-03 ScheduleCalendarScreen', () => {
       routes: routes({ 'GET /events': page([]), 'GET /closures': { status: 200, body: [] } }),
     });
     render(app.at('/schedule/calendar'));
-    expect(
-      await screen.findByRole('heading', { name: 'No events in this range' }),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/Nothing is booked on this day yet/)).toBeInTheDocument();
     expect(screen.getByTestId(`calendar-resource-${PITCH}`)).toHaveTextContent(
       'Free for the whole range.',
     );
@@ -608,12 +607,12 @@ describe('SCR-S-03 ScheduleCalendarScreen', () => {
     render(app.at('/schedule/calendar'));
     const pitchRow = await screen.findByRole('group', { name: 'Timeline, Pitch 1' });
     const block = within(pitchRow).getByRole('button', {
-      name: /^U12 Red v Blue, Game, .*18:00 to 19:30 PDT, published/,
+      name: /^U12 Red v Blue, Game, .*18:00 to 19:30 PDT, Published/,
     });
     const south = screen.getByTestId(`timeline-row-${HALF_B}`);
     expect(
       within(south).getByRole('button', {
-        name: /U9 practice \(planned\), Practice, .*draft: not published/,
+        name: /U9 practice \(planned\), Practice, .*Not published/,
       }),
     ).toHaveAttribute('data-status', 'draft');
     // The rail summarizes the day until a block is chosen.
@@ -625,12 +624,10 @@ describe('SCR-S-03 ScheduleCalendarScreen', () => {
     expect(
       within(rail).getByText(/17:45 to 19:40 PDT \(setup 15 min, cleanup 10 min\)/),
     ).toBeVisible();
-    expect(within(rail).getByRole('link', { name: 'Change in a draft' })).toHaveAttribute(
-      'href',
-      '/schedule/drafts',
-    );
+    // The rail's actions: the fix of a failed check (or check-in), Move, Message.
+    expect(within(rail).getByRole('button', { name: 'Move' })).toBeInTheDocument();
     // The maintenance restriction on the north half is a block too, leading to its impact.
-    const north = screen.getByTestId(`timeline-row-${HALF_A}`);
+    const north = await screen.findByTestId(`timeline-row-${HALF_A}`);
     await user.click(
       within(north).getByRole('button', { name: /^Maintenance restriction: Goal mouth repair/ }),
     );
@@ -642,18 +639,32 @@ describe('SCR-S-03 ScheduleCalendarScreen', () => {
     expect(within(rail).getByRole('heading', { name: 'At a glance' })).toBeInTheDocument();
   });
 
-  it('kind chips dim the other kinds on the timeline without hiding any text', async () => {
+  it('S 1b: kind chips count and filter the grid to that kind, without hiding any text', async () => {
     const user = userEvent.setup();
-    const app = createTestApp({ routes: routes() });
+    const RENTAL = event({
+      id: 'e-rental',
+      title: 'Ortiz rental',
+      kind: 'rental',
+      resourceIds: [ROOM],
+      scheduledStart: '2026-10-24T20:00:00.000Z',
+      scheduledEnd: '2026-10-24T21:00:00.000Z',
+    });
+    const app = createTestApp({ routes: routes({ 'GET /events': page([GAME, SMALL, RENTAL]) }) });
     render(app.at('/schedule/calendar'));
-    const chip = await screen.findByRole('button', { name: 'Game' });
-    expect(chip).toHaveAttribute('aria-pressed', 'true');
-    await user.click(chip);
-    expect(chip).toHaveAttribute('aria-pressed', 'false');
+    const all = await screen.findByRole('button', { name: 'All 3' });
+    expect(all).toHaveAttribute('aria-pressed', 'true');
+    const rental = screen.getByRole('button', { name: 'Rental 1' });
+    await user.click(rental);
+    expect(rental).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByRole('button', { name: /^U12 Red v Blue, Game/ })).toHaveAttribute(
       'data-dim',
       'true',
     );
+    expect(screen.getByRole('button', { name: /^Ortiz rental, Rental/ })).not.toHaveAttribute(
+      'data-dim',
+    );
     expect(bySpace().getByText('U12 Red v Blue')).toBeInTheDocument();
+    await user.click(rental);
+    expect(all).toHaveAttribute('aria-pressed', 'true');
   });
 });

@@ -59,7 +59,11 @@ export interface SpaceType {
 /** The space types of the facility: each format a space plays, then rooms and other spaces. */
 export function spaceTypes(resources: readonly Resource[]): SpaceType[] {
   const active = resources.filter((r) => r.status === 'active');
-  const formats = [...new Set(active.flatMap((r) => r.compatibleFormats))].sort();
+  // Larger games first ("7v7" before "5v5"), then the other formats by name.
+  const players = (f: string) => Number(/^(\d+)v\d+$/.exec(f)?.[1] ?? 0);
+  const formats = [...new Set(active.flatMap((r) => r.compatibleFormats))].sort(
+    (a, b) => players(b) - players(a) || a.localeCompare(b),
+  );
   const types: SpaceType[] = formats.map((f) => ({
     value: f,
     label: /^\d+v\d+$/.test(f) ? `${f} field` : plainWords(f),

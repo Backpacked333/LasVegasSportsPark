@@ -159,6 +159,7 @@ export function WeekHeatmap({
     .map((r) => r.resource);
   const cells = heatCells({
     resources: spaces.length > 0 ? spaces : resources,
+    inventory: resources,
     dates,
     blocks,
     conflicts,

@@ -119,6 +119,8 @@ export function useScheduleMove(context: {
   facilityId: string;
   timeZone: string;
   spaceName: (id: string) => string;
+  /** After a publication: show the latest schedule (the change is the viewer's own). */
+  onPublished?: () => void;
 }) {
   const api = useApi();
   const toast = useToast();
@@ -231,7 +233,11 @@ export function useScheduleMove(context: {
       const where = p.resourceIds.map(spaceName).join(', ');
       const what = `${event.title} → ${where}, ${hourLabel(p.start, timeZone)}`;
       const count =
-        people === null ? '' : ` ${people} ${people === 1 ? 'person' : 'people'} affected.`;
+        people === null
+          ? ''
+          : people === 0
+            ? ' Nobody is booked on it yet.'
+            : ` ${people} ${people === 1 ? 'person' : 'people'} affected.`;
       const notifyLabel =
         people === null || people === 0
           ? 'Publish'
@@ -252,6 +258,7 @@ export function useScheduleMove(context: {
             body: {},
           });
           await refresh();
+          contextRef.current.onPublished?.();
           update(event.id, null);
           toast.show({
             tone: 'success',

@@ -574,7 +574,10 @@ export function shortClock(t: number, timeZone: string): string {
  * report (null when the viewer may not read it), and a closure written as "Closed" or "Until 1 PM".
  */
 export function heatCells(input: {
+  /** The rows (top-level spaces). */
   resources: readonly Resource[];
+  /** Every space, so a booking of a subdivision counts on its pitch (shared ground). */
+  inventory?: readonly Resource[];
   dates: readonly string[];
   blocks: readonly TimelineBlock[];
   conflicts: ReadonlyMap<string, Conflict>;
@@ -584,6 +587,7 @@ export function heatCells(input: {
   dayWindow: (date: string) => { start: number; end: number };
 }): HeatCell[] {
   const cells: HeatCell[] = [];
+  const all = input.inventory ?? input.resources;
   for (const resource of input.resources) {
     for (const date of input.dates) {
       const own = input.blocks.filter(
@@ -591,13 +595,13 @@ export function heatCells(input: {
           b.status !== 'canceled' &&
           b.type !== 'draft-change' &&
           localDateOf(b.start, input.timeZone) === date &&
-          sameSpace([resource.id], b.resourceIds, input.resources),
+          sameSpace([resource.id], b.resourceIds, all),
       );
       const day = input.dayWindow(date);
       const closure = input.closures.find(
         (c) =>
           c.status === 'active' &&
-          closureCoversResource(c, resource, input.resources) &&
+          closureCoversResource(c, resource, all) &&
           ms(c.interval.start) < day.end &&
           ms(c.interval.end) > day.start,
       );

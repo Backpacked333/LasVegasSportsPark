@@ -25,7 +25,7 @@ import { namesOf, resourceNames } from '../../features/schedule-facilities/inven
 import { CLOSURE_BADGE, EVENT_KIND_LABEL } from '../../features/schedule-facilities/labels';
 import { useActionAllowed } from '../../features/schedule-facilities/permission';
 import { sportLabel } from '../../features/schedule-facilities/sport';
-import { formatRange, localTimeOf } from '../../features/schedule-facilities/time';
+import { formatRange, localTimeOf, occupiedRange } from '../../features/schedule-facilities/time';
 import { useApp } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { Icon } from '../../ui/Icon';
@@ -242,6 +242,21 @@ function EventDetail({
         </span>
         <h4 className="tl-detail-title">{event.title}</h4>
         <span className="caption">{timeLine(block, timezone, spaces)}</span>
+        {event.setupMinutes > 0 || event.cleanupMinutes > 0 ? (
+          <span className="caption">
+            Space held{' '}
+            {(() => {
+              const occ = occupiedRange(
+                event.scheduledStart,
+                event.scheduledEnd,
+                event.setupMinutes,
+                event.cleanupMinutes,
+              );
+              return formatRange(occ.start, occ.end, timezone);
+            })()}{' '}
+            (setup {event.setupMinutes} min, cleanup {event.cleanupMinutes} min)
+          </span>
+        ) : null}
       </div>
       {event.status === 'canceled' ? (
         <p className="tl-detail-alert tone-neutral">
@@ -584,6 +599,7 @@ export function TimelineDetail({
   truncated,
   moveTip,
   onClear,
+  onPublished,
 }: {
   selected: Selection;
   blocks: readonly TimelineBlock[];
@@ -597,6 +613,8 @@ export function TimelineDetail({
   /** Why dragging is off for this viewer (replaces the tip), or null. */
   moveTip: string | null;
   onClear: () => void;
+  /** After a publication from the rail: show the latest schedule. */
+  onPublished?: () => void;
 }) {
   const block = selected?.type === 'block' ? blocks.find((b) => b.key === selected.key) : undefined;
   const closure =
@@ -611,7 +629,10 @@ export function TimelineDetail({
           resources={resources}
           timezone={timezone}
           facilityId={facilityId}
-          onDone={onClear}
+          onDone={() => {
+            onPublished?.();
+            onClear();
+          }}
         />
       ) : block?.event ? (
         <EventDetail
