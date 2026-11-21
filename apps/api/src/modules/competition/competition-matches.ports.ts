@@ -19,12 +19,25 @@ export interface AssignmentCheckPort {
     personId: string,
     trx?: Trx,
   ): Promise<boolean>;
+  /**
+   * Workforce over catalog (S 4d, SPK-DISC-001, SPK-STAFF-002): a program session's facility, and
+   * whether the person holds an accepted (or completed) coach assignment for it. Null when the
+   * session is not a scheduled session of the offering.
+   */
+  sessionCoverage(
+    organizationId: string,
+    offeringId: string,
+    sessionId: string,
+    personId: string | null,
+    trx?: Trx,
+  ): Promise<{ facilityId: string; acceptedCoach: boolean } | null>;
 }
 export const ASSIGNMENT_CHECK_PORT = Symbol('ASSIGNMENT_CHECK_PORT');
 export const ASSIGNMENT_CHECK_IMPL = Symbol('ASSIGNMENT_CHECK_IMPL');
 /** Default: no assignment facts exist, so no official is accepted (league administration submits). */
 export const noAssignments: AssignmentCheckPort = {
   isAcceptedOfficial: async () => false,
+  sessionCoverage: async () => null,
 };
 
 export type ConditionStatus = 'satisfied' | 'unsatisfied' | 'unknown';

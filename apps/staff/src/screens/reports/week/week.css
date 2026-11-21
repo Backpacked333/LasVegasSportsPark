@@ -1,0 +1,335 @@
+/* Staff S 4e "this week at a glance" (desktop 1440). Tokens from styles.css; the chart uses the
+ * schedule's kind colours (programs league green, rentals rental amber, desk sales program blue). */
+
+.week {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.mw-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.mw-kicker {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+.shell-main .mw-title,
+.mw-title {
+  margin: 2px 0 0;
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+.mw-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.mw-export {
+  position: relative;
+}
+.mw-export-button {
+  min-height: 44px;
+  padding: 0 18px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  background: var(--card);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+.mw-export-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 30;
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+  min-width: 260px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: var(--shadow-pop);
+}
+.mw-export-menu button {
+  width: 100%;
+  text-align: left;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+.mw-export-menu button:hover,
+.mw-export-menu button:focus-visible {
+  background: var(--track);
+}
+
+.mw-kpis {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+.mw-kpi {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  box-shadow: var(--shadow-card);
+}
+.mw-kpi[data-alarm] {
+  border-color: var(--tone-danger-line);
+}
+.mw-kpi-label {
+  font-size: 13px;
+  color: var(--ink-2, var(--muted));
+}
+.mw-kpi-value {
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.mw-kpi-value[data-alarm] {
+  color: var(--tone-danger);
+}
+.mw-kpi-reason {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.mw-kpi-reason[data-tone='success'] {
+  color: var(--tone-success);
+}
+.mw-kpi-reason[data-tone='danger'] {
+  color: var(--tone-danger);
+}
+.mw-kpi-reason[data-tone='pending'] {
+  color: var(--tone-pending);
+}
+.mw-kpi[data-tone='pending'] .mw-kpi-value {
+  color: var(--faint);
+}
+
+.mw-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+@media (max-width: 1100px) {
+  .mw-grid,
+  .mw-kpis {
+    grid-template-columns: 1fr;
+  }
+}
+.mw-card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 16px 18px;
+  box-shadow: var(--shadow-card);
+}
+.mw-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.shell-main .mw-card-head h2 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+}
+.mw-legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  gap: 14px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.mw-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.mw-legend i {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  background: var(--series);
+}
+[data-series='programs'] {
+  --series: var(--kind-league);
+}
+[data-series='rentals'] {
+  --series: var(--kind-rental);
+}
+[data-series='desk'] {
+  --series: var(--kind-program);
+}
+
+.mw-bars {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  height: 420px;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: 12px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.mw-bars li {
+  display: flex;
+}
+.mw-bar {
+  flex: 1;
+  border: 0;
+  background: none;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 8px;
+  cursor: pointer;
+  font: inherit;
+}
+.mw-bar-stack {
+  flex: 1;
+  display: flex;
+  flex-direction: column-reverse;
+  justify-content: flex-start;
+  border-radius: 10px;
+  padding: 3px;
+  border: 2px solid transparent;
+  gap: 2px;
+}
+.mw-bar-stack > span[data-series] {
+  display: block;
+  background: var(--series);
+  border-radius: 4px;
+  min-height: 0;
+}
+.mw-bar[data-best] .mw-bar-stack,
+.mw-bar:hover .mw-bar-stack,
+.mw-bar:focus-visible .mw-bar-stack {
+  border-color: var(--ink);
+}
+.mw-bar:focus-visible {
+  outline: none;
+}
+.mw-bar-label {
+  font-size: 12px;
+  color: var(--muted);
+  text-align: center;
+  padding-bottom: 6px;
+}
+.mw-bar[data-best] .mw-bar-label {
+  color: var(--ink);
+  font-weight: 700;
+}
+.mw-chart-note {
+  margin: 8px 0 0;
+}
+
+.mw-look-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.mw-look-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 12px;
+  border-radius: 14px;
+  background: var(--sunk, var(--track));
+  font-size: 14px;
+}
+.mw-look-list li[data-tone='danger'] {
+  background: var(--danger-wash);
+}
+.mw-look-list li[data-tone='warning'] {
+  background: var(--warning-wash);
+}
+.mw-look-list li[data-tone='success'] {
+  background: var(--success-wash);
+}
+.mw-look-list p {
+  margin: 0;
+  flex: 1;
+  line-height: 1.45;
+}
+.mw-look-glyph {
+  font-weight: 700;
+  width: 18px;
+  text-align: center;
+  flex: none;
+}
+li[data-tone='danger'] > .mw-look-glyph {
+  color: var(--tone-danger);
+}
+li[data-tone='warning'] > .mw-look-glyph {
+  color: var(--tone-warning);
+}
+li[data-tone='success'] > .mw-look-glyph {
+  color: var(--tone-success);
+}
+li[data-tone='neutral'] > .mw-look-glyph {
+  color: var(--tone-neutral);
+}
+.mw-look-action {
+  border: 0;
+  background: none;
+  padding: 0 4px;
+  min-height: 24px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--pitch);
+  cursor: pointer;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.mw-look-action:disabled {
+  color: var(--faint);
+  cursor: default;
+}
+.mw-proposed {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--tone-pending);
+}
+
+@media print {
+  .mw-export,
+  .ia-subnav {
+    display: none;
+  }
+}

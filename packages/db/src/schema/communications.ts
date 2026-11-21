@@ -32,7 +32,9 @@ export type NotificationKind =
   | 'result_reminder'
   /** Migration 1014 (SPK-COMP-006): the team waiting list. */
   | 'team_place_offer'
-  | 'team_waiting_list';
+  | 'team_waiting_list'
+  /** Migration 1072 (S 4d, SPK-DISC-001): an injury reported about a child, to the guardians. */
+  | 'injury_report';
 export type NotificationCategory = 'operational' | 'promotional';
 export type NotificationStatus = 'composed' | 'queued' | 'dispatched' | 'suppressed';
 export type SuppressionReason = 'obsolete' | 'no_recipients' | 'authority_revoked';

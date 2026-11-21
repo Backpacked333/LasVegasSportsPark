@@ -297,6 +297,8 @@ export function toIncident(row: Selectable<IncidentsTable>): Incident {
     fixtureId: row.fixture_id,
     seasonId: row.season_id,
     competitionId: row.competition_id,
+    sessionId: row.offering_session_id,
+    facilityId: row.facility_id,
     subjectPersonId: row.subject_person_id,
     teamEntryId: row.team_entry_id,
     resultRevisionId: row.result_revision_id,

@@ -18,6 +18,7 @@ import { NotificationScreen } from '../../screens/communications/NotificationScr
 import { NotificationsScreen } from '../../screens/communications/NotificationsScreen';
 import { AssignmentDetailScreen } from '../../screens/staff/AssignmentDetailScreen';
 import { AssignmentsScreen } from '../../screens/staff/AssignmentsScreen';
+import { TeamWeekScreen } from '../../screens/staff/team/TeamWeekScreen';
 import { AvailabilityQualificationsScreen } from '../../screens/staff/AvailabilityQualificationsScreen';
 import { FeeApprovalsScreen } from '../../screens/staff/FeeApprovalsScreen';
 import { AssignmentWorkspaceScreen } from '../../screens/workspace/AssignmentWorkspaceScreen';
@@ -31,6 +32,9 @@ import {
 } from '../../screens/workspace/WorkspaceActivityScreens';
 import { ReportProblemScreen } from '../../screens/workspace/ReportProblemScreen';
 import { WorkspaceScreen } from '../../screens/workspace/WorkspaceScreen';
+import { InjuryReportScreen } from '../../screens/workspace/coach/InjuryReport';
+import { PickupReleaseScreen } from '../../screens/workspace/coach/PickupRelease';
+import { SkillsAssessmentScreen } from '../../screens/workspace/coach/SkillsAssessment';
 import { WORKSPACE_TABS } from './AreaTabs';
 import './operations.css';
 
@@ -48,6 +52,7 @@ const ROUTES: readonly [path: string, element: ReactElement][] = [
   ['/arrival/release', <SupervisedReleaseScreen />],
   ['/arrival/offline', <OfflineQueueScreen />],
   ['/staff', <AssignmentsScreen />],
+  ['/staff/week', <TeamWeekScreen />],
   ['/staff/assignments/:assignmentId', <AssignmentDetailScreen />],
   ['/staff/availability', <AvailabilityQualificationsScreen />],
   ['/staff/fees', <FeeApprovalsScreen />],
@@ -59,10 +64,13 @@ const ROUTES: readonly [path: string, element: ReactElement][] = [
   [`${WORKSPACE_PATH}/assignments/:assignmentId/attendance`, <WorkspaceAttendanceScreen />],
   [`${WORKSPACE_PATH}/assignments/:assignmentId/report`, <MatchReportScreen />],
   [`${WORKSPACE_PATH}/assignments/:assignmentId/release`, <WorkspaceReleaseScreen />],
+  [`${WORKSPACE_PATH}/assignments/:assignmentId/pickup`, <PickupReleaseScreen />],
   [`${WORKSPACE_PATH}/assignments/:assignmentId/message`, <WorkspaceMessageScreen />],
   [`${WORKSPACE_PATH}/fees`, <MyFeesScreen />],
-  [`${WORKSPACE_PATH}/assessments`, <AssessmentsScreen />],
+  [`${WORKSPACE_PATH}/assessments`, <SkillsAssessmentScreen />],
+  [`${WORKSPACE_PATH}/assessments/records`, <AssessmentsScreen />],
   [`${WORKSPACE_PATH}/report-problem`, <ReportProblemScreen />],
+  [`${WORKSPACE_PATH}/issues`, <InjuryReportScreen />],
   [
     `${WORKSPACE_PATH}/offline`,
     <OfflineQueueScreen tabs={WORKSPACE_TABS} tabsLabel="Workspace screens" />,

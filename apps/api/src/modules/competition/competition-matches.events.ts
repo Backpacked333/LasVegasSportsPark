@@ -154,6 +154,9 @@ export const MatchEvents = {
       severity: z.string(),
       fixtureId: z.uuid().nullable(),
       subjectPersonId: z.uuid().nullable(),
+      /** S 4d (0472): the program session and facility of a session incident; absent before. */
+      sessionId: z.uuid().nullable().optional(),
+      facilityId: z.uuid().nullable().optional(),
     }),
   ),
   incidentChanged: defineEvent(

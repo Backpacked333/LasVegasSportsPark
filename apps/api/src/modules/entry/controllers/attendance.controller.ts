@@ -2,7 +2,10 @@ import { Body, Controller, Get, Headers, HttpCode, Inject, Param, Post } from '@
 import {
   AccessControlWebhookBody,
   AttendanceQuery,
+  AuthorizedCollectorsQuery,
   CollectorCheckBody,
+  ParticipantCareFlagsQuery,
+  ParticipantCareNotesQuery,
   CorrectAttendanceObservationBody,
   errors,
   ListOfflineSyncBatchesQuery,
@@ -13,11 +16,14 @@ import {
   TakeOccupancySnapshotBody,
   z,
   type ActivityAttendance,
+  type AuthorizedCollectors,
   type CollectorCheck,
   type Occupancy,
   type OccupancySnapshot,
   type OfflineSyncBatch,
   type OfflineSyncBatchSummary,
+  type ParticipantCareFlags,
+  type ParticipantCareNotes,
   type Page,
   type Principal,
   type RecordedObservation,
@@ -46,6 +52,7 @@ import {
   FakeAccessControlProvider,
 } from '../providers/fake-access-control.provider';
 import { AttendanceService } from '../services/attendance.service';
+import { ParticipantCareService } from '../services/participant-care.service';
 import { OccupancyService } from '../services/occupancy.service';
 import { OfflineSyncService } from '../services/offline-sync.service';
 import { ReleasesService } from '../services/releases.service';
@@ -56,7 +63,29 @@ const IdParams = z.object({ id: z.uuid() });
 /** Attendance observations (§4.8 POST /v1/attendance-observations, SPK-ENTRY-005). */
 @Controller()
 export class AttendanceController {
-  constructor(private readonly attendance: AttendanceService) {}
+  constructor(
+    private readonly attendance: AttendanceService,
+    private readonly care: ParticipantCareService,
+  ) {}
+
+  /** S 2d: which participants have care notes, by kind (no text, nothing audited). */
+  @Get('attendance/care-flags')
+  careFlags(
+    @CurrentPrincipal() principal: Principal,
+    @ZodQuery(ParticipantCareFlagsQuery) query: ParticipantCareFlagsQuery,
+  ): Promise<ParticipantCareFlags> {
+    return this.care.flags(principal, query);
+  }
+
+  /** S 2d: one participant's care notes for the assigned coach (every read audited, §4.14). */
+  @Get('attendance/care-notes')
+  careNotes(
+    @CurrentPrincipal() principal: Principal,
+    @ZodQuery(ParticipantCareNotesQuery) query: ParticipantCareNotesQuery,
+    @CorrelationId() correlationId: string,
+  ): Promise<ParticipantCareNotes> {
+    return this.care.notes(principal, query, correlationId);
+  }
 
   @Post('attendance-observations')
   @Idempotent()
@@ -116,6 +145,15 @@ export class ReleasesController {
     @ZodBody(CollectorCheckBody) body: CollectorCheckBody,
   ): Promise<CollectorCheck> {
     return this.releases.collectorCheck(principal, body);
+  }
+
+  /** S 3g (SPK-ENTRY-007): who may collect a participant of the activity now (names only). */
+  @Get('authorized-collectors')
+  authorizedCollectors(
+    @CurrentPrincipal() principal: Principal,
+    @ZodQuery(AuthorizedCollectorsQuery) query: AuthorizedCollectorsQuery,
+  ): Promise<AuthorizedCollectors> {
+    return this.releases.authorizedCollectors(principal, query);
   }
 
   @Get(':id')

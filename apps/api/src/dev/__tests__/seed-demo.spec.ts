@@ -504,11 +504,12 @@ describe('demo dataset (ADR-007)', () => {
     const coachReads = await as('dev-coach');
     type Mine = { items: Array<{ assignment: { status: string } }> };
     const coach = await coachReads<Mine>('/v1/me/assignments');
-    expect(coach.items.map((a) => a.assignment.status).sort()).toEqual([
-      'accepted',
-      'accepted',
-      'offered',
-    ]);
+    // demo/assignments.ts: today's class and the futsal club accepted, next week's class offered;
+    // demo/staff-coach.ts: the Sunday class the coach declined (the swap to approve), and Little
+    // Kickers now when the coach is free at the seed's clock.
+    expect(coach.items.map((a) => a.assignment.status).sort()).toEqual(
+      expect.arrayContaining(['accepted', 'accepted', 'declined', 'offered']),
+    );
     const officialReads = await as('dev-official');
     const official = await officialReads<Mine>('/v1/me/assignments');
     expect(official.items.map((a) => a.assignment.status).sort()).toEqual(['accepted', 'offered']);
@@ -565,12 +566,18 @@ describe('demo dataset late on a Sunday evening', () => {
       expect(summary.demo.notCreated).toEqual([]);
       expect(Object.keys(summary.demo.tourLinks)).toHaveLength(16);
       const assignments = await t.db.selectFrom('assignments').select(['status']).execute();
+      // demo/staff-coach.ts adds next Sunday's class: its duty manager (accepted), the coach's
+      // decline and the replacement proposed for it (the swap); Little Kickers "now" would cross
+      // midnight, so it is skipped at this hour.
       expect(assignments.map((a) => a.status).sort()).toEqual([
         'accepted',
         'accepted',
         'accepted',
+        'accepted',
+        'declined',
         'offered',
         'offered',
+        'proposed',
       ]);
     } finally {
       await t.close();

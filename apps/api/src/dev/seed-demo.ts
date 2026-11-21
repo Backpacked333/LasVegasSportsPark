@@ -28,6 +28,7 @@ import { seedReports } from './demo/reports';
 import { seedSpaces } from './demo/spaces';
 import { seedStaffToday } from './demo/staff-today';
 import { seedStaffSchedule } from './demo/staff-schedule';
+import { seedStaffCoach } from './demo/staff-coach';
 import {
   assertSeedAllowed,
   seedDevelopment,
@@ -155,6 +156,7 @@ export async function seedDemo(
   await seedParentRegister(ctx, staff, families, base.child.personId);
   // Last: it fills the free time it finds and skips anything that would clash.
   await seedStaffSchedule(ctx, staff, spaces, catalog, families);
+  await seedStaffCoach(ctx, staff);
   ctx.log('done');
 
   const slug = ctx.organizationSlug;

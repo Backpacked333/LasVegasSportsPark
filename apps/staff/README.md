@@ -470,6 +470,50 @@ Status words follow §6.7 (Verified = asserted by a jsdom test here; Proposed; P
 - The old area home (`RegistrationsScreen`) is replaced by the triage; its sections are linked
   under "More".
 
+## Coach, manager and team (redesign phase 7: S 2d, S 3g, S 4d, S 5c, S 5b, S 4e)
+
+Screen ids are the handoff's (`docs/design/redesign-handoff`, staff board). Status words follow
+§6.7 (verified implementation, proposed behaviour, pending decision).
+
+**Verified implementation** (tests named after the requirement in each `__tests__/`):
+
+| Screen                 | Route / file                                                                           | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ---------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| S 2d Coach attendance  | `/workspace` (`screens/workspace/coach/CoachNow.tsx`)                                  | The coach's session on now (or within the hour, or at pickup) opens as tap tiles; `?view=list` shows every assignment. Tap cycles Unmarked → ✓ Here → ◷ Late (time stamped) → Unmarked; a 0.5 s press (or A) marks ✕ Absent with `navigator.vibrate(15)`. A mark waits on the device during its 5 s Undo and is sent when the toast closes (`POST /attendance-observations`, then corrections with a reason: observations are append-only, so a sent mark never returns to Unmarked); offline it is queued like check-ins. Flags: ▲ form (a required waiver missing, `GET /people/{id}/waivers`), ✕ allergy / ℹ care (`GET /attendance/care-flags`, kinds only); tapping opens a bottom sheet, care-note text read on tap (`GET /attendance/care-notes`, audited). |
+| S 3g Release at pickup | `/workspace/assignments/:id/pickup` (`coach/PickupRelease.tsx`)                        | Children marked here; big tiles of only the adults who may collect now (`GET /releases/authorized-collectors`); "Release Leo to Dana" (`POST /releases`, never optimistic; a refusal sends the coach to the desk); "Someone else" is a dead end ("Not authorised. Call the desk."); offline unavailable (DEC-034). Full screen: the tab bar hides (`workspace-tabs.ts`).                                                                                                                                                                                                                                                                                                                                                                                           |
+| S 4d Injury report     | `/workspace/issues` (Issues tab, `coach/InjuryReport.tsx`)                             | Who → what (where, what was done) → review; a head injury adds a concussion check. Send records one restricted `injury` incident on the session (`POST /incidents` with `offeringId`/`sessionId`): the API raises a `competition.injury_incident` issue on the managers' Today and composes an `injury_report` notice to the child's guardians. The summary carries no name (it is the Today title); concussion signs and notes go in the restricted narrative. The field problem report stays at `/workspace/report-problem` (the Issues tab stays current there).                                                                                                                                                                                                |
+| S 5c Skills assessment | `/workspace/assessments` (Assess tab, `coach/SkillsAssessment.tsx`)                    | One child at a time on the program's approved template (plain-word levels), a note, a suggested next class (the class this coach already suggested most, else the first upcoming offering of the program). Save drafts and moves on (optimistic, "Go back" on failure); arrows or a swipe skip; "Send all to families" submits each draft and shares each suggestion. The detailed records (corrections, review, templates) moved to `/workspace/assessments/records`.                                                                                                                                                                                                                                                                                             |
+| S 5b Team week         | `/staff/week` (first Staff and officials tab, `screens/staff/team/TeamWeekScreen.tsx`) | Shifts composed from assignments (one chip per person and day, first start to last end, coloured and written by role); open shifts from `GET /reports/uncovered-assignments` as a red dashed row, each listing who is free and qualified with Ask (`POST /assignments`, `offer: true`); a swap is a declined assignment with a proposed replacement, checked by `GET /assignments/{id}/replacements` and the week's hours; Approve offers the replacement (`POST /assignments/{id}/offer`), Decline withdraws it.                                                                                                                                                                                                                                                  |
+| S 4e Manager week      | `/reports/week` (first Reports tab, `screens/reports/week/ManagerWeekScreen.tsx`)      | Sales (sales by product line, against the previous period, reason = the line that moved most), fields booked (utilization, reason = the longest closure), no-shows (attendance); stacked sales by day (week) or week (month, season) in the schedule's kind colours, a day opens the schedule; Worth a look (families waiting → Add a session opens New booking on the first free hour tomorrow; applications waiting → Review; offers accepted → Details; injuries → Open; Promote → composer); Export CSV (stored run + export download) and PDF (print).                                                                                                                                                                                                        |
+
+The workspace phone tabs are one list (`screens/workspace/workspace-tabs.ts`); a future coach home
+(Phase 8 "My week") or a new tab changes that file only.
+
+**API added for these screens** (owning modules, CLAUDE.md): `GET /releases/authorized-collectors`,
+`GET /attendance/care-flags`, `GET /attendance/care-notes` (entry); session incidents and the Today
+issue (competition, migration 0472; workforce implements the `sessionCoverage` port); the
+`injury_report` notice (communications, migration 1072).
+
+**Proposed behaviour** (purple pending tone, never faked):
+
+- Assigned coaches read the operational care notes of their own session's participants (each read
+  audited). Identity's care-note readers stay the desk and the managers; whether coaches should
+  read them is a privacy decision for the operator.
+- The voice note in the injury report (the API stores no attachments); a typed note stands in.
+  The parent's name and a "Call" button are not shown: the coach reads no contacts.
+- Desk check-in time on the manager week (no timing is recorded); a "past players" audience for
+  Promote (the composer opens without it; a bulk-message composer is not specified yet).
+- The 40-hour weekly limit of a swap check (`WEEKLY_HOURS_LIMIT`, a constant, not a policy);
+  telling families of a coach change (no notice exists); "Add shift" (shifts without an activity
+  are not in the API); a coach asking for a swap from the phone (the request is today the
+  decline reason and the manager's proposed replacement).
+
+**Pending decisions and limits:** messaging (open decision 8) for the family texts beyond the
+injury notice; assessments reach families only after a program manager approves them
+(SPK-YOUTH-005); the demo's sales all fall on the seed day (payments cannot be backdated), so the
+chart shows one bar; approving a swap offers the slot: the session's coach changes once the person
+accepts (§4.8).
+
 ## Conventions for screen builders
 
 - **Layout.** One directory per screen under `src/screens/<area>/`, the screen in
