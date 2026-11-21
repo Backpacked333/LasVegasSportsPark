@@ -195,9 +195,10 @@ describe('primary navigation (SPK-UX-002)', () => {
     expect(screen.queryByLabelText('Link not available')).toBeNull();
   });
 
-  it('offers the pass and the inbox in the body of Home as well (SPK-UX-002 Home: quick access to pass)', async () => {
+  it("offers the pass beside Home's greeting (SPK-UX-002 Home: quick access to pass; handoff 1b)", async () => {
     const { router } = renderApp('/');
-    fireEvent.press(await screen.findByRole('button', { name: 'Show facility pass' }));
+    const pass = await screen.findAllByRole('button', { name: 'Facility pass' });
+    fireEvent.press(pass[0] as never);
     expect(router.getPathname()).toBe('/pass');
   });
 

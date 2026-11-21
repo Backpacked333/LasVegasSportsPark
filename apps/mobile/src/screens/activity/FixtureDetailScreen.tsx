@@ -72,6 +72,7 @@ import { StatusBadge } from '../../ui/StatusBadge';
 import { SupportDetails } from '../../ui/SupportDetails';
 import { layout, makeStyles, radius, spacing, type } from '../../ui/theme';
 import { ActivityHero } from './ActivityHero';
+import { GameDay } from './GameDay';
 
 type FixtureDetail = Schema<'FixtureDetail'>;
 type FixtureSide = Schema<'FixtureSide'>;
@@ -270,6 +271,8 @@ function FixtureContent({ fixtureId }: { fixtureId: string }) {
 
   return (
     <View testID="fixture-detail">
+      {/* Handoff 1i: the Game day band, who's playing, check in and standings first. */}
+      <GameDay fixture={detail} mine={mine} workspace={workspace} zone={zone.zone} />
       <LastUpdated
         at={oldestUpdate([fixture.updatedAt, readiness.updatedAt, results.updatedAt])}
         now={now}

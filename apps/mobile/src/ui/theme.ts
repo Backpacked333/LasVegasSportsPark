@@ -263,7 +263,41 @@ export interface Theme {
   readonly kindColors: ThemeKindColors;
   /** Initials-avatar tones; the same number in both themes, so a person keeps their slot. */
   readonly avatarTones: readonly AvatarTone[];
+  /** Household person colours, children in order (`src/ui/person-colors.ts`). */
+  readonly personColors: readonly PersonColor[];
+  /** The account holder's own person colour. */
+  readonly selfPersonColor: PersonColor;
 }
+
+/**
+ * Person colours (redesign handoff, "Person colours"): each member of a household keeps one colour
+ * everywhere it appears: the filter chip, the calendar stripe and week-strip dot, the avatar ring
+ * and the initials fallback. `accent` draws stripes, dots and rings; `tint` is the initials fill
+ * and `onTint` the initials on it (4.5:1 or more). The colour is never the only cue: the person's
+ * name or initials are always beside it (SPK-UX-009). `src/ui/person-colors.ts` assigns them.
+ */
+export interface PersonColor {
+  readonly accent: string;
+  readonly tint: string;
+  readonly onTint: string;
+}
+
+/** The children's colours in order: pink, blue, orange, teal, purple (then they repeat). */
+const classicPersonColors: readonly PersonColor[] = [
+  { accent: '#B0306B', tint: '#F8DDE8', onTint: '#8E2152' },
+  { accent: '#1D409E', tint: '#E0E8FB', onTint: '#1D409E' },
+  { accent: '#E08A1E', tint: '#FBEBCB', onTint: '#734600' },
+  { accent: '#0E8A8A', tint: '#D9EEF0', onTint: '#0E5A62' },
+  { accent: '#5B3FA8', tint: '#E9E2F8', onTint: '#4E3497' },
+];
+
+const legendsPersonColors: readonly PersonColor[] = [
+  { accent: '#F07CB1', tint: '#3A1828', onTint: '#F59AC3' },
+  { accent: '#7DA2FF', tint: '#18264A', onTint: '#9DBBFF' },
+  { accent: '#E8A34F', tint: '#3A2810', onTint: '#F2B865' },
+  { accent: '#5FC9C9', tint: '#123236', onTint: '#7FD6DE' },
+  { accent: '#B9A2FF', tint: '#272044', onTint: '#C4B2FF' },
+];
 
 export const classicTheme: Theme = {
   name: 'classic',
@@ -272,6 +306,8 @@ export const classicTheme: Theme = {
   toneBackgrounds: classicToneBackgrounds,
   kindColors: classicKindColors,
   avatarTones: classicAvatarTones,
+  personColors: classicPersonColors,
+  selfPersonColor: { accent: '#0B5A33', tint: '#DCEFE3', onTint: '#0B5A33' },
 };
 
 export const legendsTheme: Theme = {
@@ -281,6 +317,8 @@ export const legendsTheme: Theme = {
   toneBackgrounds: legendsToneBackgrounds,
   kindColors: legendsKindColors,
   avatarTones: legendsAvatarTones,
+  personColors: legendsPersonColors,
+  selfPersonColor: { accent: '#5FD38D', tint: '#173322', onTint: '#7FE0A6' },
 };
 
 export const THEMES: Readonly<Record<ThemeName, Theme>> = {

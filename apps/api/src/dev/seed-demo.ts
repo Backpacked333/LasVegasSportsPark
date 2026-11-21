@@ -17,6 +17,7 @@ import {
 import { seedCompetitions, seedLeague } from './demo/league';
 import { seedMessageSequence, seedSeasonSchedule } from './demo/messages';
 import { seedFrontDesk } from './demo/front-desk';
+import { nameParentHousehold, seedParentCore } from './demo/parent-core';
 import { seedFamilies, seedStaff } from './demo/people';
 import { seedRegister } from './demo/register';
 import { seedRegistrations } from './demo/registrations';
@@ -137,6 +138,8 @@ export async function seedDemo(
   ctx.log('register');
   const register = await seedRegister(ctx, staff, families);
   ctx.log('staff assignments');
+  // The desk scans the parent app's family: name it (Dana, Maya, Leo) before the desk's seed.
+  await nameParentHousehold(ctx, base.child.personId);
   await seedFrontDesk(ctx, staff, spaces);
   await seedAssignments(ctx, staff, catalog, league);
   await seedStaffToday(ctx, staff, spaces, catalog, league);
@@ -144,6 +147,7 @@ export async function seedDemo(
   ctx.log('reports');
   await seedReports(ctx, staff);
   await settle(ctx);
+  await seedParentCore(ctx, staff, spaces, base.child.personId);
   ctx.log('done');
 
   const slug = ctx.organizationSlug;

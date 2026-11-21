@@ -20338,10 +20338,7 @@
             },
             "maxItems": 20
           }
-        },
-        "required": [
-          "token"
-        ]
+        }
       },
       "RevokeTeamInvitationRequest": {
         "type": "object",

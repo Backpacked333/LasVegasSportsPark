@@ -438,7 +438,8 @@ describe('demo dataset (ADR-007)', () => {
     expect(uniforms).toHaveLength(2);
 
     const leagueReads = await as('dev-league');
-    expect(await leagueReads<Json[]>('/v1/competitions')).toHaveLength(2);
+    // The adult league, the cup being planned, and the parent app's youth league (parent-core).
+    expect(await leagueReads<Json[]>('/v1/competitions')).toHaveLength(3);
     const awaiting = await leagueReads<{ items: Json[] }>(
       `/v1/seasons/${seasonId}/result-revisions?status=submitted`,
     );
@@ -517,22 +518,25 @@ describe('demo dataset (ADR-007)', () => {
     const enrollments = await parentReads<{ items: Array<{ status: string }> }>(
       `/v1/enrollments?participantPersonId=${child}`,
     );
-    expect(enrollments.items).toEqual([expect.objectContaining({ status: 'confirmed' })]);
+    // The term class, plus the front desk's training today and camp week (front-desk.ts: the desk
+    // scans this same family). The camp week may already be cancelled by the refund the desk shows.
+    expect(enrollments.items.filter((e) => e.status === 'confirmed').length).toBeGreaterThanOrEqual(
+      2,
+    );
     const from = new Date(t.clock.now().getTime() - 12 * 3_600_000).toISOString();
     const to = new Date(t.clock.now().getTime() + 12 * 3_600_000).toISOString();
     const calendar = await parentReads<{ items: Json[] }>(
       `/v1/me/family-calendar?from=${from}&to=${to}`,
     );
     expect(calendar.items.length).toBeGreaterThan(0);
-    expect(await parentReads<Json[]>('/v1/me/team-entries')).toHaveLength(1);
+    // The parent's own team and the child's youth team (parent-core).
+    expect(await parentReads<Json[]>('/v1/me/team-entries')).toHaveLength(2);
     const owed = await parentReads<{
       items: Array<{ status: string; totals: { remainingMinor: number } }>;
     }>(`/v1/obligations?debtorPersonId=${parent?.personId}&status=open`);
-    expect(owed.items).toEqual([
-      expect.objectContaining({
-        status: 'open',
-        totals: expect.objectContaining({ remainingMinor: 2_200 }),
-      }),
+    // The register's amount owed and the front desk's two league instalments (front-desk.ts).
+    expect(owed.items.map((o) => o.totals.remainingMinor).sort((a, b) => a - b)).toEqual([
+      2_200, 4_000, 4_000,
     ]);
     const waivers = await parentReads<{ waivers: Array<{ status: string }> }>(
       `/v1/people/${child}/waivers`,

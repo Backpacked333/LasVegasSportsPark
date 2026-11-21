@@ -94,6 +94,8 @@ function soonSlot(ctx: DemoContext, leadMinutes: number): string | null {
   return time;
 }
 
+const FIRST_FEE = 'Spring Rec League · instalment 2 of 3 · Maya';
+
 export async function seedFrontDesk(
   ctx: DemoContext,
   staff: DemoStaff,
@@ -103,7 +105,7 @@ export async function seedFrontDesk(
   const manager = staff.manager.principal;
 
   const family = await optional(ctx, 'the Ortiz household at the front desk', () =>
-    ensureFamily(ctx, calendar),
+    ensureFamily(ctx, calendar, manager),
   );
   if (!family) return { householdId: null, parentPersonId: null };
   const { dana, maya, leo, householdId } = family;
@@ -178,7 +180,7 @@ export async function seedFrontDesk(
     const obligations = service(ctx, ObligationsService);
     const owed = await obligations.list(manager, { debtorPersonId: dana.personId, limit: 50 });
     for (const [description, dueDay, amount] of [
-      ['Spring Rec League · instalment 2 of 3 · Maya', 6, 4_000],
+      [FIRST_FEE, 6, 4_000],
       ['Spring Rec League · instalment 3 of 3 · Maya', 37, 4_000],
     ] as const) {
       if (owed.items.some((o) => o.description === description)) continue;
@@ -219,11 +221,21 @@ export async function seedFrontDesk(
   return { householdId, parentPersonId: dana.personId };
 }
 
-async function ensureFamily(ctx: DemoContext, calendar: DemoCalendar) {
-  const subject = 'demo-family-ortiz';
+/**
+ * The demo parent's own household (the development seed's parent, named Dana Ortiz with Maya and
+ * Leo by `parent-core.ts`, which runs first), so the family the desk scans is the family the
+ * parent app shows. Without it (a seed run without the parent), a separate Ortiz family is made.
+ */
+async function ensureFamily(
+  ctx: DemoContext,
+  calendar: DemoCalendar,
+  manager: DemoContext['system'],
+) {
+  const subject = (await principalOf(ctx, 'dev-parent'))?.personId
+    ? 'dev-parent'
+    : 'demo-family-ortiz';
   const people = service(ctx, PeopleService);
   let principal = await principalOf(ctx, subject);
-  const created = !principal?.personId;
   if (!principal?.personId) {
     const person = await people.createPerson(
       ctx.system,
@@ -290,6 +302,13 @@ async function ensureFamily(ctx: DemoContext, calendar: DemoCalendar) {
     }
     householdId = household.id;
   }
+  // First run of this seed: its first fee is not there yet. (Not read from the care notes: every
+  // care-note read is audited, §4.14.)
+  const owed = await service(ctx, ObligationsService).list(manager, {
+    debtorPersonId: dana.personId,
+    limit: 50,
+  });
+  const created = !owed.items.some((o) => o.description.startsWith(FIRST_FEE));
   return { dana, maya, leo, householdId, created };
 }
 
@@ -456,8 +475,9 @@ async function ensureOfferings(
       first !== null
         ? await ensure({
             name: 'Desert Foxes U9 training',
-            resourceId: spaces.field2,
-            label: 'Field 2',
+            // Field 1's north half: Field 2 and Field 3 hold the busy hour's games (staff-today.ts).
+            resourceId: spaces.field1North,
+            label: 'Field 1 north',
             time: first,
             startsOn: calendar.today,
             endsOn: calendar.today,

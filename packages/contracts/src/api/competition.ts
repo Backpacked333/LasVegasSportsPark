@@ -959,7 +959,12 @@ export const TeamInvitationIssuedSchema = TeamInvitationSchema.extend({
 export type TeamInvitationIssued = z.infer<typeof TeamInvitationIssuedSchema>;
 
 export const AcceptTeamInvitationBody = withCommandMeta({
-  token: z.string().min(16).max(512),
+  /**
+   * The link's secret. Optional for the signed-in recipient accepting from their own invitation
+   * list (`GET /v1/me/team-invitations`: the invitation names them, or one of their verified
+   * contact points), as for decline; anyone else without it gets NOT_FOUND (§4.10).
+   */
+  token: z.string().min(16).max(512).optional(),
   /** A guardian holding `register` accepts for the invited child; defaults to the acting person. */
   personId: z.uuid().optional(),
 }).openapi('AcceptTeamInvitationRequest');

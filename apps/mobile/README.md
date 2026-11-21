@@ -315,9 +315,10 @@ choices). What a screen builder can rely on, and what each part promises:
   corners, the Android ripple, the platform switch's own colours, and the stored choice across a
   reinstall or a restore from backup. Contrast was checked by calculation, not measured on a
   device.
-- The design's scannable pass symbol (**Pending decision** DEC-023), choosing whose pass to show
-  and "Add to Wallet" are not built; "Maybe" RSVP stays **Pending decision** DEC-064, and arrival
-  notes and directions on the next-up card **Pending decision** POL-046.
+- The design's scannable pass symbol and "Add to Wallet" are not built (**Pending decision**
+  DEC-023); choosing whose pass to show, "Maybe" (offered as **Proposed**, DEC-064) and Directions
+  are part of the redesign (section "Parent-app redesign" below); arrival notes stay **Pending
+  decision** POL-046.
 
 ### Park UI wiring of the new API reads (verified in jest)
 
@@ -437,6 +438,78 @@ stage-3 operations; what the screens use now, and the API issues still open, are
 
 Discover, registration and checkout (SCR-C-07 to SCR-C-16) are described, with their status and
 pending decisions, in [`src/screens/registration/README.md`](src/screens/registration/README.md).
+
+## Parent-app redesign: Phase 0 primitives and Phase 1 core loop (handoff M 1b and friends)
+
+Status legend as above (§6.7). Everything here is ADR-008 visual system v2, **Proposed**; nothing
+has been seen on a device (§6.2). **Verified** = asserted by the named jest tests.
+
+Primitives for the screens that follow (Calendar, Explore and You reuse them):
+
+| Primitive                                                                                                                                                                                                                                                               | Where                                                      | Tests                                                           |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- | --------------------------------------------------------------- |
+| Person colours: the account holder's own, then pink, blue, orange, teal, purple per child in creation order, in both themes (`theme.personColors`, `selfPersonColor`)                                                                                                   | `src/ui/person-colors.ts`                                  | `src/ui/__tests__/household-primitives.test.tsx` (**Verified**) |
+| Avatar: photo (`photoUri`) → initials on the person colour (`personColor`), optional `ring`                                                                                                                                                                             | `src/ui/Avatar.tsx`                                        | same                                                            |
+| Household "who" filter: `PersonFilterProvider` (in `AppProviders`, remembered on the device through `services.personFilterStore`), `usePersonFilter(people)`, `PersonChipRow` (Everyone + each person, selected night-filled, hidden with one person, scrolls sideways) | `src/ui/PersonFilter.tsx`, `src/ui/person-filter-store.ts` | same                                                            |
+| Toast with an action: 2.4 s plain, 5 s with Undo / Try again, one at a time, `danger` tone                                                                                                                                                                              | `src/ui/Toast.tsx`                                         | same, `Toast.test.tsx`                                          |
+| Optimistic write: show at once, Undo for 5 s (sends the inverse write), revert + "didn't save" with Try again                                                                                                                                                           | `src/ui/optimistic.ts`                                     | same                                                            |
+| Sheet: `locked` (no grabber, ✕ disabled, scrim/drag/back/escape ignored), `eyebrow`, `headerContent`                                                                                                                                                                    | `src/ui/Sheet.tsx`                                         | same, `Sheet.test.tsx`                                          |
+| SegmentedControl `variant="filled"` (answer control: primary fill + check glyph), `disabled`, `value: null`                                                                                                                                                             | `src/ui/SegmentedControl.tsx`                              | same                                                            |
+
+The dev gallery shows each one in every state (`src/dev-gallery/specimens-household.tsx`).
+
+Screens (Phase 1):
+
+- **M 1b Home "Today first"** (`src/screens/home/HomeScreen.tsx`, `TodayHero.tsx`, `TodoList.tsx`,
+  `WeekStrip.tsx`; models in `src/features/home/`): greeting with the pass and the inbox beside it,
+  the who chips filtering the whole page, the hero with the live countdown, kickoff and place,
+  the answer control, Directions (maps at the facility address) and Show pass; To do acting in place
+  (Pay sheet, Sign sheet, Join sheet) with "3 left · about 2 min" and "✓ Paid" for 3 s (M 3a); This
+  week (day strip with person dots, rows, Calendar); "Picked for Maya"; skeleton, nothing today
+  ("Next up"), no activities (Explore prompt), offline (M 3f) and a cancelled game (M 3g).
+  **Verified**: `src/screens/home/__tests__/HomeSurfaces.test.tsx`, `HomeScreen.test.tsx`,
+  `src/features/home/__tests__/home-model.test.ts`.
+- **M 2b / 3b Pay sheet** (`src/features/money/PaySheet.tsx`): `POST /v1/obligations/{id}/payments`,
+  never optimistic (spinner, locked sheet, Idempotency-Key); declined keeps the sheet open, "You
+  weren't charged.", the next method picked and named on the button; unknown outcomes never read as
+  success or failure (SPK-PAY-007). **Verified** in `HomeSurfaces.test.tsx`.
+- **M 2c Sign sheet** (`src/features/waivers/SignSheet.tsx`): summary first (the version's
+  `summary`), the full text of the version recorded, typed name prefilled and kept until the app
+  closes, "Also sign for Maya" for a sibling's same waiver that is missing or ends within 30 days,
+  one acceptance per person, partial success named. **Verified** in `HomeSurfaces.test.tsx`.
+- **M 3c Join sheet** (`src/features/teams/JoinTeamSheet.tsx`): accepts from the recipient's own
+  invitation list (`POST /v1/team-invitations/{id}/accept` without the link token, an API change
+  of this work); "Not now" hides it for 7 days (kept in memory until the app closes: **Proposed**
+  follow-up, a device store). **Verified** in `HomeSurfaces.test.tsx`.
+- **M 1j Pass** (`src/screens/pass/PassPeople.tsx` on `PassScreen`): a switch between the household
+  members and "All", each with today's activity and "✓ Cleared to play" / "▲ Waiver needed first"
+  from their waivers ("as of" offline); `?person=` preselects. The code stays the holder's own
+  opaque reference (SPK-ENTRY-002).
+- **M 1i Game day** (`src/screens/activity/GameDay.tsx` at the top of `/fixtures/{id}`): scoreboard
+  band with the countdown, field card with Map, who's playing (bar and words) with the household
+  child's answer (shared with Home), "Check in with Maya's pass", form and mini standings with the
+  playoff line.
+- **Shell**: the Home tab's badge is the To do count (hidden at 0, "9+"); pull to refresh says
+  "Updated just now" for 2 s.
+
+Not built here, and why: per-tab stacks (every detail route is on the root stack today, a
+navigation change of its own); "Arrive by" (arrival guidance, **Pending decision** POL-046);
+"✓ Checked in" on the countdown pill (no customer read of a desk check-in); screen brightness on the
+pass (no brightness module is installed); gate pins (the API has no gates: the facility address is
+used); the full-screen night layout of the pass (the existing pass page keeps its frame); a coach's
+name in "The coach can see it" (not in the reads Home makes).
+
+Proposed behaviour and pending decisions (one switch each in `src/features/home/proposed.ts`):
+
+- "Maybe" (`tentative`) is offered as drawn: **Proposed**, **Pending decision** DEC-064 (handoff
+  DEC-021). A parent answering for a child: **Proposed**, **Pending decision** DEC-090 (the API's
+  `register` mapping).
+- Instalments ("3 × $40"): hidden, **Pending decision** (no price rule offers them to customers).
+- Paying in the app: the methods are the fake provider's scenarios in development builds only;
+  release builds say "Pay at the front desk for now", **Pending decision** DEC-019.
+- Wallet and a scannable code on the pass: hidden, **Pending decision** DEC-023.
+- "Enough to play" (players needed per game): hidden, **Pending decision**. "Team chat": shown
+  disabled with "Proposed", **Pending decision** (messaging API).
 
 ## Conventions for screen builders
 
