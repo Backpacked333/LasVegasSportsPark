@@ -75,12 +75,13 @@ interface DeclineState {
   reason: DeclineReason;
 }
 
+/** Typing in a field or working in a dialog: the queue's keys stay out of the way. */
 function isTyping(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
+  if (target.closest('[role="dialog"]')) return true;
+  if (target.isContentEditable || ['TEXTAREA', 'SELECT'].includes(target.tagName)) return true;
   return (
-    target.isContentEditable ||
-    ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) ||
-    !!target.closest('[role="dialog"]')
+    target instanceof HTMLInputElement && !['checkbox', 'radio', 'button'].includes(target.type)
   );
 }
 
@@ -102,7 +103,8 @@ export function TriageQueue() {
   const now = useNow();
   const toast = useToast();
   const permissions = usePermissions();
-  const wide = useMediaQuery('(min-width: 1100px)');
+  // Narrow (a phone, or a tablet in portrait): the rail opens over the page.
+  const wide = !useMediaQuery('(max-width: 1099px)');
   const { submitted, awaiting } = useDecisionPages();
   const { send } = useIntentSend(QUEUE_INVALIDATE);
   const [hidden, setHidden] = useState<ReadonlySet<string>>(new Set());
@@ -119,8 +121,17 @@ export function TriageQueue() {
   );
   const list = all.filter((a) => !hidden.has(a.id));
   const people = usePeople(all.map((a) => a.participantPersonId));
-  const offerings = useOfferings(all.map((a) => a.offeringId));
-  const places = useAvailability(all.map((a) => a.offeringId));
+  // Each application's offering, and the alternatives the API names (offered on decline).
+  const offeringIds = [
+    ...all.map((a) => a.offeringId),
+    ...all.flatMap((a) =>
+      (a.eligibility?.alternatives ?? [])
+        .map((x) => x.offeringId)
+        .filter((id): id is string => !!id),
+    ),
+  ];
+  const offerings = useOfferings(offeringIds);
+  const places = useAvailability(offeringIds);
   const today = now.toISOString().slice(0, 10);
   const nameOf = (a: Application) => personName(people.get(a.participantPersonId)) ?? 'Participant';
   const chipsFor = (a: Application): ReasonChip[] => {

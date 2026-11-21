@@ -536,8 +536,10 @@ kbd {
   grid-template-columns: 1fr 1fr;
   gap: 14px;
 }
-.wl-setting {
+.wl .wl-setting {
   display: flex;
+  flex-direction: row;
+  text-align: left;
   align-items: center;
   gap: 14px;
   border-radius: 20px;

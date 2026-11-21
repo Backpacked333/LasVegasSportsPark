@@ -148,6 +148,7 @@ export function WaitlistOffersTab() {
 
   const people = usePeople([
     ...rows.map((r) => r.item.participantPersonId),
+    ...rows.map((r) => r.item.payerPersonId).filter((x): x is string => !!x),
     ...rows.map((r) => nextOf(r.item)?.participantPersonId).filter((x): x is string => !!x),
   ]);
   const nameOf = (id: string | undefined | null) =>
@@ -290,7 +291,9 @@ export function WaitlistOffersTab() {
                         <span className="wl-who-text">
                           <b>{nameOf(item.participantPersonId)}</b>
                           <span className="caption">
-                            #{item.priorityRank || item.position || 1}
+                            {item.payerPersonId && people.get(item.payerPersonId)
+                              ? `by ${nameOf(item.payerPersonId)}`
+                              : `${item.offerCount} offer${item.offerCount === 1 ? '' : 's'}`}
                             {called ? ` · Called ${clockOf(called)}` : ''}
                           </span>
                         </span>
