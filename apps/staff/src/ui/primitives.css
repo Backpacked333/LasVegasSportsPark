@@ -94,6 +94,13 @@
 .ui-toast-button:hover {
   background: rgba(255, 255, 255, 0.08);
 }
+.ui-toast-button[data-primary] {
+  background: var(--toast-action);
+  color: var(--night);
+}
+.ui-toast-button[data-primary]:hover {
+  background: var(--floodlight-hover);
+}
 .ui-toast-close {
   width: 36px;
   height: 36px;
@@ -354,4 +361,49 @@
     background: var(--flash);
     color: var(--night);
   }
+}
+
+/* ---------- Centred dialog (S 3f, S 1b refund note) ---------- */
+.ui-dialog {
+  position: relative;
+  max-height: calc(100dvh - 32px);
+  display: flex;
+  flex-direction: column;
+  background: var(--card);
+  color: var(--ink);
+  border-radius: 28px;
+  box-shadow: var(--shadow-pop);
+  overflow: hidden;
+  outline: none;
+  animation: ui-fade-in 0.2s ease;
+}
+.ui-dialog-head {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 20px 64px 16px 22px;
+  border-bottom: 1px solid var(--line);
+}
+.ui-dialog-head h3 {
+  margin: 0;
+  font-size: 20px;
+  letter-spacing: -0.01em;
+}
+.ui-dialog-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 22px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.ui-dialog-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 22px;
+  border-top: 1px solid var(--line);
+  background: var(--sand-2);
 }

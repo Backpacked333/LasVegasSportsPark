@@ -26,7 +26,7 @@ import './primitives.css';
 export const TOAST_MS = 2_400;
 export const TOAST_UNDO_MS = 5_000;
 
-export type ToastTone = 'neutral' | 'success' | 'error' | 'warning';
+export type ToastTone = 'neutral' | 'success' | 'error' | 'warning' | 'info';
 export type ToastCloseReason = 'timeout' | 'undo' | 'dismissed' | 'replaced' | 'action';
 
 export interface ToastInput {
@@ -35,10 +35,19 @@ export interface ToastInput {
   /** Undo for the write the toast reports. */
   onUndo?: () => void;
   /** A second action (e.g. "Try again", "Notify"). */
-  action?: { label: string; onClick: () => void };
+  action?: {
+    label: string;
+    onClick: () => void;
+    /** Drawn as a floodlight pill (S 3e Notify). */ primary?: boolean;
+  };
   durationMs?: number;
   /** Write the time left in the Undo label ("Undo (1:59)"). */
   countdown?: boolean;
+  /**
+   * Stays until its action or Undo is chosen (S 3e: a moved booking waits for Notify or Undo): no
+   * timer and no dismiss button. A newer toast still replaces it (`onClose('replaced')`).
+   */
+  persistent?: boolean;
   onClose?: (reason: ToastCloseReason) => void;
 }
 
@@ -93,7 +102,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       };
       current.current = shown;
       setToast(shown);
-      timer.current = setTimeout(() => close('timeout', shown.id), duration);
+      if (!input.persistent) timer.current = setTimeout(() => close('timeout', shown.id), duration);
       return shown.id;
     },
     [close, services],
@@ -163,7 +172,9 @@ function ToastView({
         ? STATUS_GLYPHS.danger
         : tone === 'warning'
           ? STATUS_GLYPHS.warning
-          : null;
+          : tone === 'info'
+            ? STATUS_GLYPHS.info
+            : null;
   return (
     <div
       className="ui-toast"
@@ -178,7 +189,12 @@ function ToastView({
       ) : null}
       <span className="ui-toast-message">{toast.message}</span>
       {toast.action ? (
-        <button type="button" className="ui-toast-button" onClick={onAction}>
+        <button
+          type="button"
+          className="ui-toast-button"
+          data-primary={toast.action.primary || undefined}
+          onClick={onAction}
+        >
           {toast.action.label}
         </button>
       ) : null}
@@ -187,14 +203,16 @@ function ToastView({
           {toast.countdown ? `Undo (${clock(toast.endsAt - now())})` : 'Undo'}
         </button>
       ) : null}
-      <button
-        type="button"
-        className="ui-toast-close"
-        aria-label="Dismiss message"
-        onClick={onDismiss}
-      >
-        <Icon name="close" size={16} />
-      </button>
+      {toast.persistent ? null : (
+        <button
+          type="button"
+          className="ui-toast-close"
+          aria-label="Dismiss message"
+          onClick={onDismiss}
+        >
+          <Icon name="close" size={16} />
+        </button>
+      )}
     </div>
   );
 }
