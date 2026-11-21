@@ -383,7 +383,8 @@ function Fields({ facility }: { facility: FacilityContext }) {
     [status.data, preparations.data, events.data, now],
   );
   const readyCount = days.filter((d) => progressOf(d.preparation).ready).length;
-  const used = days.filter((d) => d.firstUse && !d.closed);
+  // Pitches still to be used today (a finished day needs no preparation).
+  const used = days.filter((d) => d.nextUse && !d.closed);
   return (
     <>
       <CrewHero
