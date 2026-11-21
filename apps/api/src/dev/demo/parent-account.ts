@@ -39,7 +39,9 @@ export const COMETS = 'Comets U9';
 
 /** Played rounds: [round, days from today, home, away, home score, away score]. */
 const PLAYED: ReadonlyArray<readonly [number, number, string, string, number, number]> = [
-  [3, -21, HOME_TEAM, AWAY_TEAM, 2, 1],
+  // Lions at home: parent-core finds today's game as Foxes (home) vs Lions, so no other fixture
+  // may have that pairing.
+  [3, -21, AWAY_TEAM, HOME_TEAM, 1, 2],
   [3, -21, RED_ROCKS, COMETS, 3, 0],
   [4, -14, HOME_TEAM, RED_ROCKS, 1, 1],
   [4, -14, COMETS, AWAY_TEAM, 2, 2],
