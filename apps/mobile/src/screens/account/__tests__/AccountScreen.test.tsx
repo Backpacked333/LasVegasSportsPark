@@ -42,13 +42,9 @@ function recoveryCheckout() {
 /** The hub's groups and their rows, in order (Package G rows only with their switch on). */
 const GROUPS: readonly (readonly [string, readonly string[]])[] = [
   ['Family', ['Family and permissions', 'Invitations']],
-  ['Bookings and plans', ['Registrations', 'Waitlists']],
-  ['Money', ['Payments', 'Credits and makeups']],
-  ['Forms', ['Forms and waivers']],
-  [
-    'Settings',
-    ['Notifications and calendar', 'Legends mode', 'Account setup', 'Access after recovery'],
-  ],
+  ['Bookings and plans', ['Waitlists']],
+  ['Money', ['Credits and makeups']],
+  ['Settings', ['Notifications and calendar', 'Account setup', 'Access after recovery']],
   ['Help', ['Support']],
 ];
 
@@ -72,22 +68,21 @@ describe('SCR-C-30 AccountScreen', () => {
       },
     });
     render(<AccountScreen />, { wrapper: app.wrapper });
-    expect(await screen.findByLabelText('Alex Morgan, Signed in, Linked')).toBeOnTheScreen();
+    expect(await screen.findByTestId('you-hub')).toBeOnTheScreen();
     // The groups are headers, in order, and each lists its rows in order.
-    expect(screen.getAllByRole('header').map((h) => String(h.props.children))).toEqual(
-      GROUPS.map(([group]) => group),
-    );
+    // Handoff M 2f first (the account holder's name heads the family card), then "More".
+    expect(screen.getAllByRole('header').map((h) => String(h.props.children))).toEqual([
+      'Alex Morgan',
+      ...GROUPS.map(([group]) => group),
+    ]);
     for (const [group, rows] of GROUPS) expect(rowNames(group)).toEqual(rows);
     const family = screen.getByRole('button', {
       name: 'Family and permissions, You may act for 1 person',
     });
     expect(family).toHaveProp('accessibilityHint', 'Opens Family and permissions');
     for (const title of [
-      'Registrations',
       'Waitlists',
-      'Payments',
       'Credits and makeups',
-      'Forms and waivers',
       'Notifications and calendar',
       'Support',
     ]) {
@@ -233,7 +228,7 @@ describe('SCR-C-30 AccountScreen', () => {
     act(() => app.sources.setReachable(false));
     expect(screen.getAllByLabelText('You are offline').length).toBeGreaterThan(0);
     expect(screen.getByText('Showing information from just now.')).toBeOnTheScreen();
-    expect(screen.getByLabelText('Alex Morgan, Signed in, Linked')).toBeOnTheScreen();
+    expect(screen.getByTestId('you-hub')).toBeOnTheScreen();
   });
 
   it('Legends mode (SPK-UX-009): the switch sits under Settings, signed in, and turns the hub dark at once', async () => {
@@ -245,14 +240,15 @@ describe('SCR-C-30 AccountScreen', () => {
       },
     });
     render(<AccountScreen />, { wrapper: app.wrapper });
-    await screen.findByLabelText('Alex Morgan, Signed in, Linked');
+    await screen.findByTestId('you-hub');
     // Once, in Settings, described as the app's appearance.
     expect(screen.getAllByRole('switch', { name: 'Legends mode' })).toHaveLength(1);
-    const toggle = within(screen.getByLabelText('Settings')).getByRole('switch', {
-      name: 'Legends mode',
-    });
+    const toggle = screen.getByRole('switch', { name: 'Legends mode' });
     expect(toggle).not.toBeChecked();
-    expect(toggle).toHaveProp('accessibilityHint', 'Appearance: a dark look with gold accents');
+    expect(toggle).toHaveProp(
+      'accessibilityHint',
+      'Appearance: night green with floodlight accents',
+    );
     fireEvent.press(toggle);
     expect(screen.getByRole('switch', { name: 'Legends mode' })).toBeChecked();
     expect(app.themeStore.read()).toBe('legends');
@@ -345,7 +341,7 @@ describe('SCR-C-30 navigation into the account screens', () => {
     const done = renderApp('/account', {
       'GET /me/baskets': page([basket({ status: 'fulfilled', lines: [line()] })]),
     });
-    await routerScreen.findByLabelText('Alex Morgan, Signed in, Linked');
+    await routerScreen.findByTestId('you-hub');
     await waitFor(() =>
       expect(done.app.fake.requests.some((r) => r.route === '/me/baskets')).toBe(true),
     );
@@ -358,7 +354,7 @@ describe('SCR-C-30 navigation into the account screens', () => {
     const cart = await routerScreen.findByRole('button', {
       name: 'Cart, The registration you started',
     });
-    expect(rowNames('Bookings and plans')).toEqual(['Registrations', 'Waitlists', 'Cart']);
+    expect(rowNames('Bookings and plans')).toEqual(['Waitlists', 'Cart']);
     fireEvent.press(cart);
     expect(router.getPathname()).toBe(`/registration/basket/${IDS.basket}`);
   });
@@ -378,7 +374,7 @@ describe('SCR-C-30 navigation into the account screens', () => {
 
   it('opens Forms and waivers from You (SCR-C-13 signed forms)', async () => {
     const { router } = renderApp();
-    fireEvent.press(await routerScreen.findByRole('button', { name: 'Forms and waivers' }));
+    fireEvent.press(await routerScreen.findByRole('button', { name: 'Forms' }));
     expect(router.getPathname()).toBe('/forms');
     expect((await routerScreen.findAllByRole('header', { name: 'No forms signed' })).length).toBe(
       2,
@@ -391,9 +387,9 @@ describe('SCR-C-30 navigation into the account screens', () => {
       'Access after recovery, What this account may access, and what recovery restores',
       '/recovery',
     ],
-    ['Registrations', '/enrollments'],
+    [/^Registrations/, '/enrollments'],
     ['Waitlists', '/registration/waitlists'],
-    ['Payments', '/payments'],
+    ['Payments & receipts', '/payments'],
     ['Credits and makeups', '/credits'],
     ['Support', '/support'],
   ])('opens "%s" from You (%s)', async (name, path) => {

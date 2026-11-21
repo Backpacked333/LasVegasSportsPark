@@ -92,6 +92,17 @@ export function RootNavigator() {
           <Stack.Screen name="memberships/index" options={{ title: 'Memberships' }} />
           <Stack.Screen name="session-packages/index" options={{ title: 'Class packs' }} />
           <Stack.Screen name="pos-receipts/index" options={{ title: 'In-person receipts' }} />
+          {/* Parent-app redesign Phase 3 (handoff M 3e, 5c, 3h, 4c, 4d, 4a, 4b). */}
+          <Stack.Screen name="people/[id]/index" options={{ title: '' }} />
+          <Stack.Screen
+            name="people/[id]/care-notes"
+            options={{ headerShown: false, presentation: 'modal', gestureEnabled: false }}
+          />
+          <Stack.Screen name="people/new" options={{ headerShown: false, presentation: 'modal' }} />
+          <Stack.Screen name="notifications" options={{ title: 'Notifications' }} />
+          <Stack.Screen name="messages/coach" options={{ headerShown: false }} />
+          <Stack.Screen name="payments/receipt/[paymentId]" options={{ title: '' }} />
+          <Stack.Screen name="payments/all" options={{ title: 'All payments' }} />
           <Stack.Screen name="+not-found" options={{ title: 'Not available' }} />
         </Stack>
         {DemoOverlay ? <DemoOverlay /> : null}
