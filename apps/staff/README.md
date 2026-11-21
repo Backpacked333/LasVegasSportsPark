@@ -159,6 +159,35 @@ Routes: `/today`, `/today/exceptions/:exceptionId`, `/people`, `/people/:personI
 what stays open are in `src/features/people/README.md`; tests live in
 `src/screens/{today,people,support}/__tests__/`.
 
+## Front desk (redesign phase 5: S 2a, S 3c, S 3d, S 4a, S 4b, S 4c)
+
+**Verified implementation** (tests named after the requirement in each `__tests__/`):
+
+| Screen                    | Route                                                   | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| ------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| S 2a Arrival desk         | `/arrival` (`screens/arrival/desk`)                     | Scan a pass (`POST /passes/scan`) or search by name (`GET /people`, then `POST /arrival-lookups`); one ✓ Cleared / ✕ Not cleared answer per person from the arrival checks the scan returns; care-note pill re-read on tap (`GET /people/{id}/care-notes`, audited); "Check in Maya and Leo" records the arrival, the check-in and the attendance of the cleared only (a cleared child can be left out: "Not today"); Sessions now, Still expected (names as the role may read them) |
+| S 3c Tablet to the parent | overlay on `/arrival`                                   | Full-screen form, rail and staff shortcuts out of reach; finger signature (or the typed name); one digital acceptance per child (`POST /waiver-acceptances`, signer named, staff never sign); "Thanks, Dana. Please hand the tablet back."; the family re-opens so the verdict re-checks                                                                                                                                                                                             |
+| S 3d Checked in, offline  | `/arrival`                                              | One big green answer with faces, clears in 3 s (a tap holds it). Offline, each check-in is queued as its facility arrival and attendance observation (§4.15) through the existing queue (`features/operations/offline`, `purpose: 'desk_checkin'`), counted on the rail's Arrival badge (`useQueuedCheckinCount`) and listed under "Waiting to sync"; sent in order on reconnection                                                                                                  |
+| S 4a Front desk sale      | `/finance/point-of-sale/desk?household=`                | Owed fees first (each with the child it names), tap to add or remove; family credit applied as a line (`POST /credits/{id}/redeem`); products through a register sale; fees settled by cash or the card terminal (`POST /cash-tenders`); never optimistic                                                                                                                                                                                                                            |
+| S 4b Refund request       | `/finance/refund-requests`, `/:caseId`                  | The family's request (a support request) with the amount worked out by the cancellation preview; Refund cancels, refunds through the case, offers the place to the next family when ticked and resolves the request; Family credit; Change amount and Decline need a note; finance commands only                                                                                                                                                                                     |
+| S 4c Household record     | `/people/households/:id`, `/people/:personId/household` | Balance, credit, forms, visits; each child's activities, care flag and who may pick up; the family timeline; Take payment opens S 4a for the family                                                                                                                                                                                                                                                                                                                                  |
+
+The one-by-one selection (visitor categories, held check-ins, adults without a session) stays at
+`/arrival/select` ("One by one" tab, "Record arrivals one by one" on the desk).
+
+**Proposed behaviour** (shown in the purple pending tone, never faked): "Mark not coming" on a
+still-expected row (no staff attendance intent for sessions); the "+10%" bonus on a family credit
+(no policy; the credit is issued without it); "Over $200 needs a manager" (a constant,
+`MANAGER_REFUND_THRESHOLD_MINOR`, not an approved policy); a saved card on file at the desk
+(no payment-method read in the API); a staff note on a household.
+
+**Pending decisions and limits:** instalment plans (open decision 2: the demo's "instalment" fees
+are plain obligations); auto-offering a freed place (open decision 4: staff tick "the place goes to
+the waitlist" and the offer is their command); card tenders in release builds (DEC-019); a sibling
+whose waiver is current but ends soon cannot be signed for again (the API renews only a lapsed
+acceptance); offline, a new pass cannot be opened (no encrypted roster on the device, DEC-032), a
+family opened before the drop can still be checked in.
+
 ## Screen coverage (SCR-S-01 to SCR-S-57, SCR-W-01 to SCR-W-10)
 
 State: **Implemented and tested** = built and asserted by vitest and Testing Library in jsdom

@@ -9,6 +9,7 @@ import type { ReactElement } from 'react';
 import { Outlet, Route } from 'react-router';
 import { WORKSPACE_PATH } from '../../navigation/areas';
 import { ArrivalScannerScreen } from '../../screens/arrival/ArrivalScannerScreen';
+import { ArrivalDeskScreen } from '../../screens/arrival/desk/ArrivalDeskScreen';
 import { OfflineQueueScreen } from '../../screens/arrival/OfflineQueueScreen';
 import { SessionAttendanceScreen } from '../../screens/arrival/SessionAttendanceScreen';
 import { SupervisedReleaseScreen } from '../../screens/arrival/SupervisedReleaseScreen';
@@ -39,7 +40,10 @@ function OperationsLayout() {
 }
 
 const ROUTES: readonly [path: string, element: ReactElement][] = [
-  ['/arrival', <ArrivalScannerScreen />],
+  // Staff S 2a: the desk is the area's home; the one-by-one selection stays for the cases it
+  // covers (visitor categories, a held check-in, adults without a session).
+  ['/arrival', <ArrivalDeskScreen />],
+  ['/arrival/select', <ArrivalScannerScreen />],
   ['/arrival/attendance', <SessionAttendanceScreen />],
   ['/arrival/release', <SupervisedReleaseScreen />],
   ['/arrival/offline', <OfflineQueueScreen />],

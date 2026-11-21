@@ -173,20 +173,14 @@ export function SessionsNow({
   );
 }
 
-function SessionFillRow({
-  session,
-  timezone,
-  now,
-  staff,
-}: {
-  session: FacilitySession;
-  timezone: string | null;
-  now: Date;
-  staff: readonly string[];
-}) {
+/**
+ * A session's observed fill (also the arrival desk's "Sessions now", staff S 2a): people recorded
+ * present or late of the expected participants (confirmed enrollments and session bookings, plus
+ * anyone with an observation), from the same reads (and cache entries) as the attendance screen.
+ * `expected` holds their person ids; `waiting` those not yet recorded present or late.
+ */
+export function useSessionFill(session: FacilitySession) {
   const activity = sessionActivity(session);
-  const zone = session.timezone ?? timezone;
-  // The same reads (and cache entries) as the attendance screen's panel.
   const attendance = useApiQuery({
     path: '/attendance',
     request: { query: attendanceQuery(activity) },
@@ -203,13 +197,41 @@ function SessionFillRow({
   for (const p of attendance.data?.people ?? []) expected.add(p.personId);
   for (const e of enrollments.data?.items ?? []) expected.add(e.participantPersonId);
   for (const b of bookings.data ?? []) if (b) expected.add(b.participantPersonId);
-  const present = (attendance.data?.people ?? []).filter(
-    (p) => p.effectiveState === 'present' || p.effectiveState === 'late',
-  ).length;
-  const more = Boolean(enrollments.data?.nextCursor);
-  const known = attendance.data !== undefined;
-  const started = new Date(session.scheduledStart).getTime() <= now.getTime();
+  const here = new Set(
+    (attendance.data?.people ?? [])
+      .filter((p) => p.effectiveState === 'present' || p.effectiveState === 'late')
+      .map((p) => p.personId),
+  );
+  const present = here.size;
+  const waiting = [...expected].filter((id) => !here.has(id));
   const pct = expected.size > 0 ? Math.min(100, Math.round((present / expected.size) * 100)) : 0;
+  return {
+    activity,
+    present,
+    expected,
+    waiting,
+    pct,
+    more: Boolean(enrollments.data?.nextCursor),
+    known: attendance.data !== undefined,
+    error: attendance.error,
+  };
+}
+
+function SessionFillRow({
+  session,
+  timezone,
+  now,
+  staff,
+}: {
+  session: FacilitySession;
+  timezone: string | null;
+  now: Date;
+  staff: readonly string[];
+}) {
+  const activity = sessionActivity(session);
+  const zone = session.timezone ?? timezone;
+  const { present, expected, more, known, error, pct } = useSessionFill(session);
+  const started = new Date(session.scheduledStart).getTime() <= now.getTime();
   const place = sessionPlace(session);
   const capacity = sessionCapacity(session);
   return (
@@ -256,7 +278,7 @@ function SessionFillRow({
               {more ? '+' : ''}
               <span className="ops-sr"> present of expected</span>
             </>
-          ) : attendance.error ? (
+          ) : error ? (
             <span className="caption">Not available</span>
           ) : (
             <span className="caption">…</span>

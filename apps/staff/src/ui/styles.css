@@ -85,6 +85,18 @@
   --kind-dropin-bg: #eef0ee;
   --kind-futsal: #0e7c74;
 
+  /* Person colours (redesign handoff): each person keeps one for the avatar's initials and ring. */
+  --person-1: #8e2152;
+  --person-1-bg: #f8dde8;
+  --person-2: #1d409e;
+  --person-2-bg: #e2e8f8;
+  --person-3: #8a5300;
+  --person-3-bg: #fbe8cc;
+  --person-4: #0e5a62;
+  --person-4-bg: #d9f0f0;
+  --person-5: #4e3497;
+  --person-5-bg: #eae3f8;
+
   /* Names used across the feature stylesheets, mapped onto the palette. */
   --color-bg: var(--card);
   --color-page: var(--sand);

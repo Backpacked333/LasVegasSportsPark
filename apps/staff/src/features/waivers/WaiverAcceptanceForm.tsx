@@ -33,11 +33,16 @@ export function waiverText(content: Record<string, unknown>): string | null {
 }
 
 /** The people who may sign for the participant: the adult themselves, or a `complete_forms` holder. */
-export function useSigners(personId: string) {
-  const subject = useApiQuery({ path: '/people/{id}', request: { path: { id: personId } } });
+export function useSigners(personId: string, enabled = true) {
+  const subject = useApiQuery({
+    path: '/people/{id}',
+    request: { path: { id: personId } },
+    enabled: enabled && personId !== '',
+  });
   const authority = useApiQuery({
     path: '/people/{id}/authority',
     request: { path: { id: personId } },
+    enabled: enabled && personId !== '',
   });
   const signers: { value: string; label: string }[] = [];
   if (subject.data?.kind === 'adult') {

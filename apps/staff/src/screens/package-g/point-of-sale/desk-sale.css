@@ -1,0 +1,304 @@
+/* Staff S 4a: the front desk sale (tablet 1180). Desk controls are 52-56 px. Tokens only. */
+.ds {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  gap: 14px;
+  align-items: stretch;
+  min-height: 760px;
+}
+@media (max-width: 900px) {
+  .ds {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.ds-main {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+.ds-top {
+  display: flex;
+  gap: 10px;
+}
+.ds-search {
+  flex: 1;
+  height: 50px;
+  border-radius: 14px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 14px;
+  color: var(--muted);
+}
+.ds .ds-search input:not([type='checkbox']):not([type='radio']):not([type='file']) {
+  flex: 1;
+  border: 0;
+  min-height: 0;
+  height: 100%;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+  font-size: 16px;
+}
+.ds-scan {
+  min-height: 50px;
+  padding: 0 18px;
+  border-radius: 14px;
+  border: 0;
+  background: var(--night);
+  color: var(--floodlight);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.ds-chips {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.ds-chips button {
+  min-height: 40px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 600;
+  font-size: 13.5px;
+  cursor: pointer;
+}
+.ds-chips button[aria-selected='true'] {
+  background: var(--night);
+  border-color: var(--night);
+  color: var(--on-tone);
+}
+.ds-tiles {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  align-content: start;
+}
+@media (max-width: 700px) {
+  .ds-tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+.ds-tile {
+  position: relative;
+  min-height: 128px;
+  padding: 14px 14px 12px;
+  border-radius: 20px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  text-align: left;
+  font: inherit;
+  color: var(--ink);
+  cursor: pointer;
+}
+.ds-tile[aria-pressed='true'] {
+  border: 2px solid var(--pitch);
+  padding: 13px 13px 11px;
+}
+.ds-tile-kind {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.ds-tile-icon {
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  background: var(--sand-2);
+  border: 1px solid var(--line);
+  display: grid;
+  place-items: center;
+}
+.ds-tile-name {
+  font-size: 15px;
+}
+.ds-tile-meta {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.ds-tile-meta[data-tone='warning'] {
+  color: var(--tone-warning);
+  font-weight: 600;
+}
+.ds-tile-price {
+  margin-top: auto;
+  font-size: 19px;
+}
+.ds-tile-check,
+.ds-tile-count {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--pitch);
+  color: var(--on-primary);
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 700;
+}
+.ds-skeleton {
+  background: var(--line-soft);
+  border-color: transparent;
+}
+.ds-note {
+  padding: 16px;
+  border-radius: 16px;
+  background: var(--card);
+  border: 1px solid var(--line);
+}
+.ds-cart {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.ds-family {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.ds-family-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+.ds-picker {
+  flex: 1;
+}
+.ds-text {
+  border: 0;
+  background: none;
+  color: var(--link);
+  font: inherit;
+  font-weight: 600;
+  font-size: 13px;
+  min-height: 44px;
+  cursor: pointer;
+}
+.ds-lines {
+  list-style: none;
+  margin: 0;
+  padding: 0 16px;
+  flex: 1;
+}
+.ds-lines li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line-soft);
+  font-size: 14px;
+}
+.ds-lines li > span:first-child {
+  flex: 1;
+}
+.ds-credit {
+  color: var(--tone-success);
+}
+.ds-stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.ds-stepper button {
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  background: var(--card);
+  font: inherit;
+  cursor: pointer;
+}
+.ds-pay {
+  border-top: 2px solid var(--ink);
+  padding: 14px 16px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ds-total {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-weight: 700;
+}
+.ds-total b {
+  font-size: 26px;
+}
+.ds-pay-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.ds-button {
+  min-height: 52px;
+  border-radius: 14px;
+  font: inherit;
+  font-weight: 600;
+  font-size: 15px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+.ds-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.ds-secondary {
+  background: var(--card);
+  border-color: var(--line-strong);
+  color: var(--ink);
+}
+.ds-primary {
+  min-height: 56px;
+  border-radius: 999px;
+  background: var(--pitch);
+  color: var(--on-primary);
+  font-size: 16px;
+}
+.ds-proposed {
+  color: var(--tone-pending);
+}
+.ds-paid {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 24px;
+  text-align: center;
+  color: var(--tone-success);
+}
+.ds-paid span {
+  color: var(--ink-2);
+}
