@@ -6,6 +6,7 @@ import type { CatalogTables } from './catalog';
 import type { CommunicationsSequencesTables } from './communications-sequences';
 import type { CommunicationsTables } from './communications';
 import type { CompetitionFieldTables } from './competition-field';
+import type { CompetitionLineupsTables } from './competition-lineups';
 import type { CompetitionMatchesTables } from './competition-matches';
 import type { CompetitionTables } from './competition';
 import type { EnrollmentExtrasTables } from './enrollment-extras';
@@ -13,6 +14,7 @@ import type { EnrollmentPackageGTables } from './enrollment-package-g';
 import type { EnrollmentRostersTables } from './enrollment-rosters';
 import type { EnrollmentTables } from './enrollment';
 import type { EntryTables } from './entry';
+import type { FacilitiesFieldPrepTables } from './facilities-field-prep';
 import type { FacilitiesTables } from './facilities';
 import type { FinanceAccountingTables } from './finance-accounting';
 import type { FinancePosTables } from './finance-pos';
@@ -32,6 +34,7 @@ export * from './catalog';
 export * from './communications-sequences';
 export * from './communications';
 export * from './competition-field';
+export * from './competition-lineups';
 export * from './competition-matches';
 export * from './competition';
 export * from './enrollment-extras';
@@ -39,6 +42,7 @@ export * from './enrollment-package-g';
 export * from './enrollment-rosters';
 export * from './enrollment';
 export * from './entry';
+export * from './facilities-field-prep';
 export * from './facilities';
 export * from './finance-accounting';
 export * from './finance-pos';
@@ -54,30 +58,4 @@ export * from './workforce';
  * The complete database type. Each module contributes its own table interfaces from
  * `./<module>.ts`; run `node scripts/regenerate-registrations.mjs` after adding one.
  */
-export interface Database
-  extends
-    CoreTables,
-    AutomationTables,
-    CatalogExtrasTables,
-    CatalogWaiversTables,
-    CatalogTables,
-    CommunicationsSequencesTables,
-    CommunicationsTables,
-    CompetitionFieldTables,
-    CompetitionMatchesTables,
-    CompetitionTables,
-    EnrollmentExtrasTables,
-    EnrollmentPackageGTables,
-    EnrollmentRostersTables,
-    EnrollmentTables,
-    EntryTables,
-    FacilitiesTables,
-    FinanceAccountingTables,
-    FinancePosTables,
-    FinanceTables,
-    IdentityTables,
-    MigrationTables,
-    ReportingTables,
-    SchedulingTables,
-    SupportTables,
-    WorkforceTables {}
+export interface Database extends CoreTables, AutomationTables, CatalogExtrasTables, CatalogWaiversTables, CatalogTables, CommunicationsSequencesTables, CommunicationsTables, CompetitionFieldTables, CompetitionLineupsTables, CompetitionMatchesTables, CompetitionTables, EnrollmentExtrasTables, EnrollmentPackageGTables, EnrollmentRostersTables, EnrollmentTables, EntryTables, FacilitiesFieldPrepTables, FacilitiesTables, FinanceAccountingTables, FinancePosTables, FinanceTables, IdentityTables, MigrationTables, ReportingTables, SchedulingTables, SupportTables, WorkforceTables {}

@@ -9,6 +9,8 @@ export * from './competition-matches.ports';
 export * from './competition-matches.state-machines';
 export * from './competition-field.actions';
 export * from './competition-field.events';
+export * from './competition-lineups.actions';
+export * from './competition-lineups.events';
 export {
   proposedRuleSetContent,
   TEAM_INVITATION_DEFAULT_HOURS,
