@@ -76,14 +76,21 @@ function NextPayment({ fee, onPay }: { fee: Obligation; onPay: () => void }) {
       <Text style={styles.nextLine}>{`${due} · ${fee.description}`}</Text>
       <View style={styles.nextButtons}>
         <View style={styles.flex}>
-          <Button
-            label="Pay now"
-            variant="onMedia"
-            block
-            disabled={offline}
+          <Pressable
             onPress={onPay}
+            disabled={offline}
+            accessibilityRole="button"
+            accessibilityLabel="Pay now"
+            accessibilityState={{ disabled: offline }}
+            style={({ pressed }) => [
+              styles.payNow,
+              offline ? styles.payNowDisabled : null,
+              pressed ? styles.pressed : null,
+            ]}
             testID="payments-pay-now"
-          />
+          >
+            <Text style={styles.payNowText}>Pay now</Text>
+          </Pressable>
         </View>
         <View style={[styles.flex, styles.proposed]}>
           <Button
@@ -333,6 +340,16 @@ const useStyles = makeStyles(({ colors }) => ({
   nextLine: { ...type.callout, color: colors.onNightBody },
   nextButtons: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.md },
   proposed: { alignItems: 'center', gap: spacing.xs },
+  // Floodlight on night: the design's primary action on the next-payment card.
+  payNow: {
+    height: 48,
+    borderRadius: radius.pill,
+    backgroundColor: colors.floodlight,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  payNowDisabled: { backgroundColor: colors.nightLine },
+  payNowText: { ...fonts.bold, fontSize: 16, color: colors.onFloodlight },
   allPaid: {
     marginHorizontal: layout.gutter,
     marginTop: spacing.sm,

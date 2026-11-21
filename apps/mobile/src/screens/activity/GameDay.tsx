@@ -64,9 +64,17 @@ type Workspace = Schema<'TeamEntryWorkspace'>;
 type ResultRevision = Schema<'ResultRevision'>;
 type StandingsRow = Schema<'StandingsRow'>;
 
-/** "DF" for "Desert Foxes U9": the first letters of the first two words, age groups left out. */
+/**
+ * "DF" for "Desert Foxes U9": the first letters of the first two words, age groups left out; a
+ * one-word name gives its first two letters ("LI" for "Lions U9").
+ */
 export function teamInitials(name: string): string {
   const words = name.split(/\s+/u).filter((w) => /^\p{L}/u.test(w) && !/^U\d+$/iu.test(w));
+  if (words.length === 1)
+    return Array.from(words[0] as string)
+      .slice(0, 2)
+      .join('')
+      .toLocaleUpperCase();
   const picked = words.length > 0 ? words.slice(0, 2) : [initialsFor(name)];
   return picked
     .map((w) => Array.from(w)[0] ?? '')

@@ -24,7 +24,7 @@ import {
 } from '../../../features/today/__tests__/fixtures';
 import { createTestApp } from '../../../testing/test-app';
 import { FixtureDetailScreen } from '../FixtureDetailScreen';
-import { ordinal, recordLine, shortTeamName } from '../GameDay';
+import { ordinal, recordLine, shortTeamName, teamInitials } from '../GameDay';
 
 jest.mock('../../../features/today/device-time-zone', () => ({
   deviceTimeZone: () => 'America/Los_Angeles',
@@ -207,5 +207,7 @@ describe('Game day words', () => {
     expect(recordLine(TABLE.rows[1])).toBe('2nd · 5-1-1');
     expect(shortTeamName('Desert Foxes U9')).toBe('Desert Foxes');
     expect(shortTeamName('U9')).toBe('U9');
+    expect(teamInitials('Desert Foxes U9')).toBe('DF');
+    expect(teamInitials('Lions U9')).toBe('LI');
   });
 });

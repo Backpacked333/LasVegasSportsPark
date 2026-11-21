@@ -480,7 +480,7 @@ function NoticeRow({
             </>
           )}
           <View style={styles.badges}>
-            {look === 'change' ? (
+            {item.kind === 'schedule_changed' || item.kind === 'cancellation' ? (
               <StatusBadge
                 tone={item.kind === 'cancellation' ? 'danger' : 'warning'}
                 label={item.kind === 'cancellation' ? 'Cancelled' : 'Change'}
