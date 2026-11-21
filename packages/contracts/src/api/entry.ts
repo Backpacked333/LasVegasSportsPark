@@ -190,6 +190,14 @@ export const ScanActivitySchema = z
     checkin: z
       .object({ id: z.uuid(), status: z.enum(['held', 'admitted']), revision: Revision })
       .nullable(),
+    /**
+     * S 2a arrival desk (SPK-ENTRY-004): the arrival checks for this person and activity as they
+     * stand at the scan, judged exactly as a check-in would judge them, so the desk can say
+     * "cleared" or "not cleared" before anyone is checked in. Nothing is recorded (SPK-ENTRY-003);
+     * a check-in evaluates them again when it is recorded. A `blocking` issue keeps the person
+     * not cleared; warnings and information never do.
+     */
+    issues: z.array(ArrivalIssueSchema),
   })
   .openapi('ScanActivity');
 export type ScanActivity = z.infer<typeof ScanActivitySchema>;
@@ -229,6 +237,21 @@ export const PassScanSchema = z
   })
   .openapi('PassScan');
 export type PassScan = z.infer<typeof PassScanSchema>;
+
+/**
+ * S 2a arrival desk "Name, phone or pass reference" (SPK-ENTRY-003, SPK-ENTRY-004): a family found
+ * by name opens the same selection a pass of that holder opens (a household's members, or a person
+ * and the people they may view), with the same arrival checks. Records nobody.
+ */
+export const ArrivalLookupBody = z
+  .object({ facilityId: z.uuid(), holder: PassHolderSchema })
+  .openapi('ArrivalLookupRequest');
+export type ArrivalLookupBody = z.infer<typeof ArrivalLookupBody>;
+
+export const ArrivalLookupSchema = PassScanSchema.omit({ pass: true })
+  .extend({ holder: PassHolderSchema })
+  .openapi('ArrivalLookup');
+export type ArrivalLookup = z.infer<typeof ArrivalLookupSchema>;
 
 // ---------------------------------------------------------------------------------------------
 // Visits: facility arrival (SPK-ENTRY-001, SPK-ENTRY-006)
@@ -930,6 +953,14 @@ command(
   "Scan a pass: resolve the people and today's sessions for selection; records nobody as present (SPK-ENTRY-003)",
   ScanPassBody,
   PassScanSchema,
+  200,
+  false,
+);
+command(
+  '/arrival-lookups',
+  'Open the arrival selection for a household or person found by name, as a scan of their pass would (S 2a; records nobody, SPK-ENTRY-003)',
+  ArrivalLookupBody,
+  ArrivalLookupSchema,
   200,
   false,
 );

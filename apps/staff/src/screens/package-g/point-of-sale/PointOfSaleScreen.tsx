@@ -19,11 +19,12 @@
  * Registrations, memberships, packages and bookings are never sold here (SPK-PAY-012): products
  * are merchandise, concessions or services, priced by the API (SPK-PAY-001).
  */
-import { Route, Routes } from 'react-router';
+import { Route, Routes, useMatch } from 'react-router';
 import { FINANCE_LINKS, SectionNav } from '../../../features/registration-finance/SectionNav';
 import { CapabilityGate } from '../../../ui/CapabilityGate';
 import { PageHeader } from '../../../ui/Page';
 import { StateView } from '../../../ui/StateView';
+import { DeskSalePage } from './DeskSalePage';
 import { POINT_OF_SALE } from './meta';
 import { POS_PATHS } from './paths';
 import { ProductsPage } from './ProductsPage';
@@ -36,11 +37,27 @@ import './pos.css';
 
 const POS_LINKS = [
   { to: POS_PATHS.base, label: 'Registers and sales', end: true },
+  { to: `${POS_PATHS.base}/desk`, label: 'Front desk sale' },
   { to: POS_PATHS.products, label: 'Products' },
 ] as const;
 
 export function PointOfSaleScreen() {
   const headingId = `package-g-${POINT_OF_SALE.slug}`;
+  // Staff S 4a: the front desk sale is a tablet screen of its own (no page header or tabs),
+  // behind the same capability switch.
+  const desk = useMatch(`${POS_PATHS.base}/desk`);
+  if (desk) {
+    return (
+      <CapabilityGate
+        capability={POINT_OF_SALE.capability}
+        subject={POINT_OF_SALE.title}
+        whenOff="notice"
+        stillAvailable="Fees can still be paid by the family in their app."
+      >
+        <DeskSalePage />
+      </CapabilityGate>
+    );
+  }
   return (
     <section aria-labelledby={headingId} data-testid={headingId} className="pg-screen pos-screen">
       <PageHeader

@@ -75,7 +75,7 @@ describe('SCR-S-28 care notes on the scan', () => {
         },
       },
     });
-    render(app.at('/arrival'));
+    render(app.at('/arrival/select'));
     const people = await typeAndScan(user);
     const alex = within(people).getByRole('listitem', { name: 'Alex Rivera' });
     const notes = within(alex).getByRole('list', { name: 'Care notes for Alex Rivera' });
@@ -94,7 +94,7 @@ describe('SCR-S-28 care notes on the scan', () => {
         'POST /passes/scan': { status: 200, body: scanWithNotes(null) },
       },
     });
-    render(app.at('/arrival'));
+    render(app.at('/arrival/select'));
     const people = await typeAndScan(user);
     const alex = within(people).getByRole('listitem', { name: 'Alex Rivera' });
     expect(within(alex).getByText('Care notes are not shown to your role.')).toBeInTheDocument();
@@ -186,7 +186,7 @@ describe('SCR-S-28 missing form at the desk', () => {
         },
       },
     });
-    render(app.at('/arrival'));
+    render(app.at('/arrival/select'));
     await typeAndScan(user);
     await user.click(
       screen.getByRole('checkbox', { name: 'Check Alex Rivera in to Junior skills' }),
@@ -240,7 +240,7 @@ describe('SCR-S-28 camera scanning', () => {
     const app = createTestApp({
       routes: { 'GET /me': oneFacilityMe(), 'GET /facilities/{id}/occupancy': occupancy },
     });
-    render(app.at('/arrival'));
+    render(app.at('/arrival/select'));
     expect(await screen.findByTestId('camera-unsupported')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Scan with camera/ })).toBeNull();
     expect(screen.getByLabelText('Pass reference')).toBeInTheDocument();
@@ -267,7 +267,7 @@ describe('SCR-S-28 camera scanning', () => {
         'POST /passes/scan': { status: 200, body: householdScan() },
       },
     });
-    render(app.at('/arrival'));
+    render(app.at('/arrival/select'));
     await user.click(await screen.findByRole('button', { name: /Scan with camera/ }));
     expect(
       await screen.findByRole('list', { name: 'People on this pass' }, { timeout: 3000 }),

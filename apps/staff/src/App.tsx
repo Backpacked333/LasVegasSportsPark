@@ -23,6 +23,10 @@ import { DuplicateReviewScreen } from './screens/people/DuplicateReviewScreen';
 import { InvitationsScreen } from './screens/people/InvitationsScreen';
 import { OpenAccessReviewScreen } from './screens/people/OpenAccessReviewScreen';
 import { PeopleScreen } from './screens/people/PeopleScreen';
+import {
+  HouseholdRecordScreen,
+  PersonHouseholdRedirect,
+} from './screens/people/household/HouseholdRecordScreen';
 import { PersonRecordScreen } from './screens/people/PersonRecordScreen';
 import { publicRoutes } from './screens/public/routes';
 import { RelationshipsScreen } from './screens/people/RelationshipsScreen';
@@ -66,6 +70,8 @@ export function AppRoutes() {
         <Route path="/people/duplicates" element={<DuplicateReviewScreen />} />
         <Route path="/people/duplicates/:candidateId" element={<DuplicateCandidateScreen />} />
         <Route path="/people/invitations" element={<InvitationsScreen />} />
+        <Route path="/people/households/:householdId" element={<HouseholdRecordScreen />} />
+        <Route path="/people/:personId/household" element={<PersonHouseholdRedirect />} />
         <Route path="/people/:personId" element={<PersonRecordScreen />} />
         <Route path="/people/:personId/relationships" element={<RelationshipsScreen />} />
         <Route path="/support/cases" element={<SupportCasesScreen />} />

@@ -123,7 +123,7 @@ describe('workspace: report a problem', () => {
   });
 
   it('the tab bar is not shown outside the workspace', async () => {
-    render(app().at('/arrival'));
+    render(app().at('/arrival/select'));
     await screen.findByRole('heading', { name: 'Arrival scanner' });
     expect(screen.queryByRole('navigation', { name: 'Workspace tabs' })).toBeNull();
   });

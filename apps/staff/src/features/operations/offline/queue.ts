@@ -60,6 +60,14 @@ export interface QueuedItem {
   queuedAt: string;
   /** Non-personal context for the review list, e.g. the activity title. */
   context: string | null;
+  /**
+   * Why it was queued, when a screen needs to find its own items again: `desk_checkin` marks the
+   * attendance observation the arrival desk queues for an offline check-in (staff S 3d), counted
+   * on the navigation's Arrival badge. Absent for everything else (and in older queues).
+   */
+  purpose?: 'desk_checkin';
+  /** Groups the items of one desk check-in (its arrival and its attendance), in queue order. */
+  groupId?: string;
   /** Set when a synchronisation attempt included the item; reused on every retry. */
   batchId: string | null;
 }

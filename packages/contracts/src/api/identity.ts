@@ -1170,6 +1170,15 @@ register({
   idempotent: true,
 });
 register({
+  method: 'get',
+  path: '/households/{id}',
+  summary:
+    "Read a household and its members (staff who read people's authority; S 4c household record)",
+  requirements: 'SPK-IAM-001, SPK-IAM-003, §4.5, §4.10',
+  params: IdParams,
+  response: HouseholdSchema,
+});
+register({
   method: 'post',
   path: '/households/{id}/members',
   summary: 'Add a person to a household',

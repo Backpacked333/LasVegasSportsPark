@@ -16,6 +16,7 @@
  * for a list the viewer cannot read), and nothing is shown while the read fails.
  */
 import type { Schema } from '@sportspark/api-client';
+import type { ReactNode } from 'react';
 import { NavLink } from 'react-router';
 import { usePermissions } from '../api/permissions';
 import { useApiQuery } from '../api/useApiQuery';
@@ -44,6 +45,39 @@ function AttentionPill({
       </span>
       <span className="nav-count-text">
         {title}: {shown} {count.counts}
+      </span>
+    </>
+  );
+}
+
+/**
+ * A count kept on this device (the arrival desk's queued check-ins, staff S 3d): shown like the
+ * attention pill, in the warning tone, and said in words after the link.
+ */
+function DeviceCountPill({
+  title,
+  useCount,
+  otherwise,
+}: {
+  title: string;
+  useCount: () => number;
+  /** What shows while nothing is waiting on the device (the API's attention count). */
+  otherwise: ReactNode;
+}) {
+  const count = useCount();
+  if (count === 0) return <>{otherwise}</>;
+  return (
+    <>
+      <span
+        className="nav-count"
+        data-tone="warning"
+        aria-hidden="true"
+        data-testid="nav-device-count"
+      >
+        {count}
+      </span>
+      <span className="nav-count-text">
+        {title}: {count} waiting to sync on this device
       </span>
     </>
   );
@@ -153,7 +187,17 @@ export function AreaNav({ onNavigate }: { onNavigate: () => void }) {
                           </>
                         )}
                       </NavLink>
-                      <AttentionPill title={area.title} count={countOf.get(area.id)} />
+                      {area.useDeviceCount ? (
+                        <DeviceCountPill
+                          title={area.title}
+                          useCount={area.useDeviceCount}
+                          otherwise={
+                            <AttentionPill title={area.title} count={countOf.get(area.id)} />
+                          }
+                        />
+                      ) : (
+                        <AttentionPill title={area.title} count={countOf.get(area.id)} />
+                      )}
                     </li>
                   ))}
                 </ul>

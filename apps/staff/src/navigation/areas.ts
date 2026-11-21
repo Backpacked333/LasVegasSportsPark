@@ -8,6 +8,7 @@
  * areas the inventory assigns them, behind their capability switches (DEC-016).
  */
 import type { NavigationAreaId } from '@sportspark/api-client';
+import { useQueuedCheckinCount } from '../features/operations/offline/deskCheckins';
 import type { IconName } from '../ui/Icon';
 
 /**
@@ -37,6 +38,11 @@ export interface StaffArea {
   }[];
   /** With `links`: the screens of the area not built yet, and why (shown as the placeholder). */
   pending?: { screenIds: string; purpose: string };
+  /**
+   * A count kept on this device to show beside the area (a hook, called once per render of the
+   * area's item), e.g. the arrival desk's check-ins waiting to sync (staff S 3d).
+   */
+  useDeviceCount?: () => number;
 }
 
 export const STAFF_AREAS: readonly StaffArea[] = [
@@ -120,6 +126,7 @@ export const STAFF_AREAS: readonly StaffArea[] = [
     screenIds: 'SCR-S-28 to SCR-S-31',
     purpose: 'Arrival scanning, attendance, supervised release, offline queue review.',
     ownRoutes: true,
+    useDeviceCount: useQueuedCheckinCount,
   },
   {
     id: 'staff',
