@@ -8,7 +8,7 @@
 import { apiErrorBody, type FakeRequest } from '@sportspark/api-client/testing';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   ADULT,
   CHECKIN_1,
@@ -47,8 +47,9 @@ const notOnSite = {
 };
 
 /** Sam (adult, no session), Alex (cleared, 9:00) and Blake (not cleared: waiver, 9:00). */
-function deskScan(options: { blakeBlocked?: boolean } = {}) {
+function deskScan(options: { blakeBlocked?: boolean; blocker?: object } = {}) {
   const blocked = options.blakeBlocked ?? true;
+  const blocker = options.blocker ?? waiverIssue;
   return {
     pass: { id: PASS, holderKind: 'household' },
     facilityId: FACILITY_A,
@@ -68,7 +69,7 @@ function deskScan(options: { blakeBlocked?: boolean } = {}) {
         ...scanPerson(CHILD_2, 'Blake', 'child', 'household_member', [
           {
             ...sessionActivity(SESSION_2, 'Mini kickers'),
-            issues: blocked ? [waiverIssue, notOnSite] : [notOnSite],
+            issues: blocked ? [blocker, notOnSite] : [notOnSite],
           },
         ]),
         careNotes: [],
@@ -310,6 +311,35 @@ describe('S 2a arrival desk', () => {
     expect(screen.getByLabelText('Name, phone or pass reference')).toBeInTheDocument();
   });
 
+  describe('the green answer', () => {
+    afterEach(() => vi.useRealTimers());
+
+    it('S 3d: clears itself after 3 s for the next family unless a tap holds it', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      const app = createTestApp({
+        routes: routes({
+          'POST /visits': { status: 201, body: { visits: [visit(VISIT_1, CHILD_1)] } },
+          'POST /session-checkins': {
+            status: 201,
+            body: checkin(CHECKIN_1, CHILD_1, SESSION_1, 'admitted'),
+          },
+          'POST /attendance-observations': { status: 201, body: {} },
+        }),
+      });
+      render(app.at('/arrival'));
+      await scan(user);
+      await user.click(screen.getByRole('button', { name: 'Check in Alex' }));
+      expect(await screen.findByRole('heading', { name: 'Checked in' })).toBeInTheDocument();
+      expect(
+        screen.getByText('Ready for the next family in 3 s · tap anywhere to stay'),
+      ).toBeVisible();
+      act(() => vi.advanceTimersByTime(3_000));
+      expect(screen.queryByRole('heading', { name: 'Checked in' })).toBeNull();
+      expect(screen.queryByRole('region', { name: /Rivera household/ })).toBeNull();
+    });
+  });
+
   it('SPK-AT-015: a cleared child left out with "Not today" is not checked in', async () => {
     const user = userEvent.setup();
     const app = createTestApp({ routes: routes() });
@@ -444,6 +474,61 @@ describe('S 3c the tablet handed to the parent', () => {
     // The family is opened again: Blake is cleared now and both are checked in together.
     await waitFor(() => expect(scans).toBe(2));
     expect(await screen.findByRole('button', { name: 'Check in Alex and Blake' })).toBeEnabled();
+  });
+
+  it('SPK-REG-009: a required form the class asks for is named by its title and signed on the tablet as an acknowledgment', async () => {
+    const user = userEvent.setup();
+    const form = {
+      code: 'missing_acknowledgment',
+      severity: 'blocking',
+      message: 'A required form has not been acknowledged for this participant.',
+      nextAction: 'complete_acknowledgment',
+      reference: { type: 'policy_version', id: POLICY_VERSION },
+    };
+    const app = createTestApp({
+      routes: routes({
+        'POST /passes/scan': { status: 200, body: deskScan({ blocker: form }) },
+        'GET /policy-versions/{id}': {
+          ...policy,
+          body: {
+            ...policy.body,
+            kind: 'form',
+            key: 'desk-form',
+            content: { text: 'Sport has risks.' },
+          },
+        },
+        'POST /acknowledgments': { status: 201, body: {} },
+      }),
+    });
+    render(app.at('/arrival'));
+    await scan(user);
+    expect(await within(blakeCard()).findByText('Liability waiver not signed')).toBeInTheDocument();
+    expect(
+      screen.getByText('Blake can be checked in once the form is signed. It refreshes by itself.'),
+    ).toBeInTheDocument();
+    await user.click(await screen.findByRole('button', { name: 'Sam signs on this tablet' }));
+    const sheet = await screen.findByRole('dialog', { name: 'Liability waiver' });
+    await user.click(within(sheet).getByRole('button', { name: 'Type your name instead' }));
+    await user.type(within(sheet).getByLabelText('Type your full name to sign'), 'Sam Rivera');
+    await user.click(within(sheet).getByRole('button', { name: 'Sign for Blake' }));
+    expect(
+      await screen.findByRole('heading', { name: 'Thanks, Sam. Please hand the tablet back.' }),
+    ).toBeInTheDocument();
+    expect(
+      app.fake.requests.filter((r) => r.route === '/acknowledgments').map((r) => r.body),
+    ).toEqual([
+      {
+        subjectPersonId: CHILD_2,
+        policyVersionId: POLICY_VERSION,
+        signedByPersonId: ADULT,
+        evidence: {
+          method: 'desk_tablet',
+          signerPresent: true,
+          signature: { kind: 'typed', name: 'Sam Rivera' },
+        },
+      },
+    ]);
+    expect(app.fake.requests.filter((r) => r.route === '/waiver-acceptances')).toHaveLength(0);
   });
 
   it('SPK-REG-011: handing back without signing returns with the verdict unchanged and records nothing', async () => {

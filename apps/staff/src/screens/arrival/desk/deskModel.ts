@@ -116,12 +116,17 @@ export function blockerWords(issue: ArrivalIssue): string {
   }
 }
 
-/** A blocking waiver the parent can sign here, with the version to accept. */
+/**
+ * A blocking waiver or required form the parent can sign here, with the version it names (a
+ * waiver acceptance, SPK-REG-011, or a form acknowledgment, SPK-REG-009).
+ */
 export function signableWaiver(issues: readonly ArrivalIssue[]): ArrivalIssue | null {
   return (
     issues.find(
       (i) =>
-        (i.code === 'waiver_missing' || i.code === 'waiver_lapsed') &&
+        (i.code === 'waiver_missing' ||
+          i.code === 'waiver_lapsed' ||
+          i.code === 'missing_acknowledgment') &&
         i.reference?.type === 'policy_version',
     ) ?? null
   );

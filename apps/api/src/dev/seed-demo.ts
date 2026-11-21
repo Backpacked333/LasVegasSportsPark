@@ -16,6 +16,7 @@ import {
 } from './demo/context';
 import { seedCompetitions, seedLeague } from './demo/league';
 import { seedMessageSequence, seedSeasonSchedule } from './demo/messages';
+import { seedFrontDesk } from './demo/front-desk';
 import { seedFamilies, seedStaff } from './demo/people';
 import { seedRegister } from './demo/register';
 import { seedRegistrations } from './demo/registrations';
@@ -135,6 +136,7 @@ export async function seedDemo(
   ctx.log('register');
   const register = await seedRegister(ctx, staff, families);
   ctx.log('staff assignments');
+  await seedFrontDesk(ctx, staff, spaces);
   await seedAssignments(ctx, staff, catalog, league);
   await settle(ctx);
   ctx.log('reports');

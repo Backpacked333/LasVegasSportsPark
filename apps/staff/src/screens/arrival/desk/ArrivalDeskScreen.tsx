@@ -607,7 +607,11 @@ function Household({
     .map(({ person, verdict }) =>
       verdict.kind === 'not_cleared'
         ? signableWaiver(verdict.blocking)
-          ? `${person.givenName} can be checked in once the waiver is signed. It refreshes by itself.`
+          ? `${person.givenName} can be checked in once the ${
+              signableWaiver(verdict.blocking)?.code === 'missing_acknowledgment'
+                ? 'form'
+                : 'waiver'
+            } is signed. It refreshes by itself.`
           : `${person.givenName} can't be checked in yet: ${blockerWords(verdict.blocking[0]!).toLowerCase()}.`
         : '',
     )
@@ -799,12 +803,22 @@ function Blocker({
 }) {
   const waiver = signableWaiver(verdict.blocking);
   const { signers, loaded } = useSigners(person.personId, waiver !== null);
+  // A form or waiver is named by its title ("Liability waiver not signed").
+  const form = useApiQuery({
+    path: '/policy-versions/{id}',
+    request: { path: { id: waiver?.reference?.id ?? '' } },
+    enabled: waiver?.code === 'missing_acknowledgment',
+  });
   const adult = household.find(
     (p) => p.kind === 'adult' && signers.some((s) => s.value === p.personId),
   );
   return (
     <>
-      <span className="desk-blocker">{blockerWords(verdict.blocking[0]!)}</span>
+      <span className="desk-blocker">
+        {waiver?.code === 'missing_acknowledgment' && form.data
+          ? `${form.data.title} not signed`
+          : blockerWords(verdict.blocking[0]!)}
+      </span>
       {waiver ? (
         adult ? (
           <button
@@ -941,11 +955,14 @@ function CheckedInAnswer({
   onNext: () => void;
 }) {
   const [held, setHeld] = useState(false);
+  // The latest "next family" without restarting the 3 s when the desk re-renders meanwhile.
+  const next = useRef(onNext);
+  next.current = onNext;
   useEffect(() => {
     if (held) return;
-    const id = setTimeout(onNext, CHECKED_IN_HOLD_MS);
+    const id = setTimeout(() => next.current(), CHECKED_IN_HOLD_MS);
     return () => clearTimeout(id);
-  }, [held, onNext]);
+  }, [held]);
   const names = result.people.map((p) => p.person.givenName).join(' and ');
   return (
     <section

@@ -75,7 +75,9 @@ export function TabletSign({
   const signerName = signer ? fullName(signer) : (signers[0]?.label ?? 'The parent');
   const signerGiven = signer?.givenName ?? signerName.split(' ')[0] ?? 'there';
 
-  const commands = useKeyedCommands({ invalidate: [PERSON_WAIVERS_KEY] });
+  const commands = useKeyedCommands({
+    invalidate: [PERSON_WAIVERS_KEY, ['api', '/acknowledgments']],
+  });
   const [also, setAlso] = useState(true);
   const [strokes, setStrokes] = useState<string[]>([]);
   const [typed, setTyped] = useState<string | null>(null);
@@ -87,7 +89,12 @@ export function TabletSign({
   }, []);
 
   const siblings = household.filter((p) => p.personId !== person.personId && p.kind === 'child');
-  const sibling = useSiblingToSign(siblings, policy.data?.key ?? null, signerId);
+  // Only a waiver family can be signed for a sibling at the same time (a form is per offering).
+  const sibling = useSiblingToSign(
+    siblings,
+    policy.data?.kind === 'waiver' ? policy.data.key : null,
+    signerId,
+  );
   const forIds = [person.personId, ...(sibling && also ? [sibling.person.personId] : [])];
   const forNames = [person, ...(sibling && also ? [sibling.person] : [])].map((p) => p.givenName);
   const signed = strokes.length > 0 || (typed !== null && typed.trim().length >= 3);
@@ -105,27 +112,40 @@ export function TabletSign({
         done.push(subjectId);
         continue;
       }
-      const result = await commands.run(subjectId, 'post', '/waiver-acceptances', {
-        body: {
-          subjectPersonId: subjectId,
-          policyKey: policy.data.key,
-          ...(subjectId === person.personId ? { policyVersionId } : {}),
-          method: 'digital',
-          signedByPersonId: signerId,
-          evidence: {
-            method: 'desk_tablet',
-            signerPresent: true,
-            signature:
-              typed !== null
-                ? { kind: 'typed', name: typed.trim() }
-                : {
-                    kind: 'finger',
-                    strokes: strokes.length,
-                    path: strokes.join(' ').slice(0, 8000),
-                  },
-          },
-        },
-      });
+      const evidence = {
+        method: 'desk_tablet',
+        signerPresent: true,
+        signature:
+          typed !== null
+            ? { kind: 'typed', name: typed.trim() }
+            : {
+                kind: 'finger',
+                strokes: strokes.length,
+                path: strokes.join(' ').slice(0, 8000),
+              },
+      };
+      // A required form is an acknowledgment of its version (SPK-REG-009); a waiver is an
+      // acceptance of its family (SPK-REG-011). Either way the signer is named, never staff.
+      const result =
+        issue.code === 'missing_acknowledgment'
+          ? await commands.run(subjectId, 'post', '/acknowledgments', {
+              body: {
+                subjectPersonId: subjectId,
+                policyVersionId,
+                signedByPersonId: signerId,
+                evidence,
+              },
+            })
+          : await commands.run(subjectId, 'post', '/waiver-acceptances', {
+              body: {
+                subjectPersonId: subjectId,
+                policyKey: policy.data.key,
+                ...(subjectId === person.personId ? { policyVersionId } : {}),
+                method: 'digital',
+                signedByPersonId: signerId,
+                evidence,
+              },
+            });
       if (result) done.push(subjectId);
     }
     if (done.length === forIds.length) setSignedIds(done);
