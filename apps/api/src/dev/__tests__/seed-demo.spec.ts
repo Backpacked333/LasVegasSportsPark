@@ -119,7 +119,8 @@ describe('demo dataset (ADR-007)', () => {
       ['dev-parent', []],
     ]);
     expect(first.devTokens.path).toBe('/v1/dev/tokens');
-    // The dataset adds one sign-in account: the general manager, who approves and sees money.
+    // The dataset adds two sign-in accounts: the general manager, who approves and sees money,
+    // and the field crew (demo/staff-crew.ts, Phase 8), whose home is Fields.
     expect(first.demo.accounts.map((a) => [a.subject, a.roles])).toEqual([
       [
         'demo-manager',
@@ -131,6 +132,7 @@ describe('demo dataset (ADR-007)', () => {
           'scheduler',
         ],
       ],
+      ['demo-crew', ['facilities_operator']],
     ]);
     // Nothing the services refused: every part of the dataset was created.
     expect(first.demo.notCreated).toEqual([]);
@@ -493,7 +495,8 @@ describe('demo dataset (ADR-007)', () => {
     const tasks = await managerRead<{ items: Json[] }>(
       `/v1/maintenance-tasks?facilityId=${facility}`,
     );
-    expect(tasks.items).toHaveLength(1);
+    // The torn net on Field 3, and the field crew's three tasks (demo/staff-crew.ts, Phase 8).
+    expect(tasks.items).toHaveLength(4);
     const closures = await managerRead<Json[]>(`/v1/closures?facilityId=${facility}`);
     // The planned Field 3 closure, and Field 4 closed for its repair during the busy hour that
     // Today shows (demo/staff-today.ts; the clock of this suite is inside opening hours), and
@@ -512,7 +515,13 @@ describe('demo dataset (ADR-007)', () => {
     );
     const officialReads = await as('dev-official');
     const official = await officialReads<Mine>('/v1/me/assignments');
-    expect(official.items.map((a) => a.assignment.status).sort()).toEqual(['accepted', 'offered']);
+    // The next league night (accepted and offered), and the request for the coach's game today
+    // (demo/staff-crew.ts, Phase 8).
+    expect(official.items.map((a) => a.assignment.status).sort()).toEqual([
+      'accepted',
+      'offered',
+      'offered',
+    ]);
 
     // The seeded parent: a class today, a team, an amount owed, a waiver to accept, notices in
     // the inbox, an invitation to a rental roster and a register receipt.
@@ -569,12 +578,14 @@ describe('demo dataset late on a Sunday evening', () => {
       // demo/staff-coach.ts adds next Sunday's class: its duty manager (accepted), the coach's
       // decline and the replacement proposed for it (the swap); Little Kickers "now" would cross
       // midnight, so it is skipped at this hour.
+      // The coach's next game is tomorrow then, with its referee request (demo/staff-crew.ts).
       expect(assignments.map((a) => a.status).sort()).toEqual([
         'accepted',
         'accepted',
         'accepted',
         'accepted',
         'declined',
+        'offered',
         'offered',
         'offered',
         'proposed',

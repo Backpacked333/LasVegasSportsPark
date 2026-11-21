@@ -5,7 +5,7 @@
  * unknown paths.
  */
 import { Suspense } from 'react';
-import { Navigate, Route, Routes } from 'react-router';
+import { Route, Routes } from 'react-router';
 import { UiGallery } from './dev';
 import { competitionRoutes } from './features/competition/routes';
 import { insightAdminRoutes } from './features/insight-admin/routes';
@@ -15,6 +15,7 @@ import { Shell } from './layout/Shell';
 import { STAFF_AREAS } from './navigation/areas';
 import { messageSequenceRoutes } from './screens/communications/sequences/routes';
 import { packageGRoutes } from './screens/package-g/routes';
+import { crewRoutes, HomeRedirect } from './screens/crew/routes';
 import { AreaScreen } from './screens/area/AreaScreen';
 import { FacilitiesArea } from './screens/facilities/FacilitiesArea';
 import { NotFoundScreen } from './screens/not-found/NotFoundScreen';
@@ -56,7 +57,9 @@ export function AppRoutes() {
       >
         {/* Before the area placeholders: the first of equal routes wins. */}
         {registrationFinanceRoutes()}
-        <Route index element={<Navigate to="/today" replace />} />
+        {/* Phase 8: the coach, referee and field crew homes; "/" opens the viewer's home. */}
+        {crewRoutes()}
+        <Route index element={<HomeRedirect />} />
         {/* Before the area placeholders: equally ranked routes match in order. */}
         {competitionRoutes()}
         {operationsRoutes()}

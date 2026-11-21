@@ -192,7 +192,8 @@ describe('guided tour', () => {
   });
 
   it('finishes on the last step and offers to reopen a step screen after wandering off', async () => {
-    setDemoState({ roleId: 'referee', step: 1, open: true });
+    // The referee tour's last step (Phase 8 added the referee home first).
+    setDemoState({ roleId: 'referee', step: 2, open: true });
     render(inRouter(<TourPanel />, '/today'));
 
     await userEvent.click(screen.getByRole('button', { name: 'Open this screen' }));

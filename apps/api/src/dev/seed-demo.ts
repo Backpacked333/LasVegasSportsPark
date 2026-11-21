@@ -29,6 +29,7 @@ import { seedSpaces } from './demo/spaces';
 import { seedStaffToday } from './demo/staff-today';
 import { seedStaffSchedule } from './demo/staff-schedule';
 import { seedStaffCoach } from './demo/staff-coach';
+import { seedStaffCrew } from './demo/staff-crew';
 import {
   assertSeedAllowed,
   seedDevelopment,
@@ -157,6 +158,7 @@ export async function seedDemo(
   // Last: it fills the free time it finds and skips anything that would clash.
   await seedStaffSchedule(ctx, staff, spaces, catalog, families);
   await seedStaffCoach(ctx, staff);
+  const crew = await seedStaffCrew(ctx, staff, spaces);
   ctx.log('done');
 
   const slug = ctx.organizationSlug;
@@ -208,6 +210,13 @@ export async function seedDemo(
           accountId: staff.manager.accountId,
           personId: staff.manager.personId,
           roles: [...staff.manager.principal.staffRoles],
+        },
+        // Phase 8: the field crew (demo/staff-crew.ts), whose home is Fields.
+        {
+          subject: crew.subject,
+          accountId: crew.accountId,
+          personId: crew.personId,
+          roles: [...crew.principal.staffRoles],
         },
       ],
       publicLinks,

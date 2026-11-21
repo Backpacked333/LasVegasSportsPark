@@ -514,6 +514,74 @@ injury notice; assessments reach families only after a program manager approves 
 chart shows one bar; approving a swap offers the slot: the session's coach changes once the person
 accepts (§4.8).
 
+## Phase 8: coach, referee and field crew screens (specified, not yet drawn)
+
+Built from `docs/design/redesign-handoff/BUILD_PLAN.md` "Phase 8" (no renders exist), in the
+language of the drawn phone screens (S 1d, S 2d, S 3g, S 4d, S 5c): a night header band, white
+20 px cards, 52 to 56 px field targets, floodlight for "now". Files: `src/screens/crew/*` (routes in
+`crew/routes.tsx`, one line in `App.tsx`), `src/screens/facilities/MaintenanceBoardScreen.tsx`,
+`src/screens/today/field-readiness.ts`. Status words follow §6.7.
+
+- **Homes per role** (`crew/workspace-kind.ts`). "/" opens the coach's week, the referee's home or
+  the field crew's fields (Today for anyone who runs the facility); the phone workspace tab bar
+  follows the role: coach Week · Teams · Now · Messages · More, referee Home · Games · Pay · Issues ·
+  More, crew Fields · Tasks · Report · Queue · More, everyone else the original tabs. This chooses
+  a layout from `GET /me` staff roles, never what the viewer may do. A `Field crew` demo role
+  (`demo-crew`, facilities operator) signs in to Fields. **Verified.**
+- **Coach · My week** (`/workspace/week`): Needs you (Nudge the next game's players without an
+  answer, `POST /fixtures/{id}/availability-requests`; a played game whose score waits for the
+  referee; offers to answer), the next session's night card (countdown pill, going / no answer,
+  Lineup, Start game day; Attendance and Pickup for a class), the rest of today, day chips.
+  Composed from `/me/assignments`, `/me/team-entries` (a youth team's coach holds its captain
+  role), `/me/fixtures` and the team sheet. **Verified.** **Pending decision:** allergy counts:
+  care notes are read by the desk and managers only (`identity.read_care_notes`), so the tile says
+  "At check-in".
+- **Coach · Lineup** (`/workspace/fixtures/:id/lineup`): the pitch in formation (initials on the
+  person colour; no photo API), the bench of Going players only, fewest minutes this season first,
+  ▲ amber below the team average. Drag to place or swap (pointer, touch, pen), or choose a player
+  and then a place (tap, Enter / Space; Escape lets go; each move announced). "Auto-fill fairly"
+  keeps the keeper and starts the fewest minutes. Save with Undo, Share. API added (competition
+  migration 0475): `GET/POST /fixtures/{id}/lineup`, `POST /fixtures/{id}/lineup/share`; minutes
+  come from the coach's game logs. **Verified.** **Pending decision 8:** sharing is recorded and
+  announced (`competition.lineup_shared`), but no notice reaches families until messaging exists.
+- **Coach · Live game day** (`/workspace/fixtures/:id/game-day`, night): ± per team (our goal
+  asks the scorer and assist), the timeline, Sub, Half time, Injury, "End game · 3–1". The game is
+  kept on this phone (ids and minutes only) and sent as the side's game log with every player's
+  minutes (`POST /fixtures/{id}/game-log`); offline it waits and is sent when the connection is
+  back. The game log is never the result: families see the score once the league publishes the
+  referee's report, which is checked against it. **Verified.** **Proposed:** the Injury button
+  opens `INJURY_REPORT_PATH` (`/workspace/report-problem?fixtureId=…&injury=1`), to be pointed at
+  the injury report (S 4d) route when it is merged.
+- **Coach · Team messages** (`/workspace/messages`): **Pending decision 8** (a messaging API).
+  One thread per real team; private replies "to you only", read counts, event and poll cards and
+  "Text them" are drawn in the proposed state; every send control is disabled with the reason
+  (`TEAM_MESSAGING_AVAILABLE = false`). No messages, real or invented. Phone numbers never shown.
+- **Referee home** (`/workspace/referee`): requests with Accept (at once, so Today's "no referee"
+  issue clears on its next read; Undo withdraws) and Can't (one-tap reason, `POST
+/assignments/{id}/decline`), confirmed games with their fee, availability (`GET/POST
+/availability` in the facility zone) and pay totals. **Verified.** **Proposed / pending
+  decision:** a reply-by time (no field in the API) and passing a declined request to the next
+  candidate by itself (the league manager offers it today).
+- **Referee match report** (SCR-W-05 with `crew/RefereeReportExtras.tsx`): the score is prefilled
+  from the coach's game log (`GET /fixtures/{id}/game-logs`); a different score must be fixed or
+  explained (the explanation goes into the report's notes); Field damage creates a crew task after
+  the report; Injury adds an injury incident; conduct chips go into the notes; the payout line.
+  **Verified.**
+- **Field crew · Fields** (`/workspace/fields`): pitches by first use, each with its checklist;
+  ticks save at once (`POST /field-preparations`), "Mark ready" only with every item ticked, shown
+  at once and sent after the 5 s Undo window. It drives Today's "Field" check (S 1a / S 3a, in
+  `start-checks.ts`), and a pitch not ready 15 minutes before its first use is a red Needs action
+  issue (`field-readiness.ts`). "Report a problem" creates a maintenance task. API added
+  (facilities migration 0975). **Verified.** **Proposed:** the photo (tasks keep evidence by
+  reference only; no upload API).
+- **Maintenance tasks board** (`/facilities/board`, tablet): To do / Doing / Done with the photo
+  (when the evidence links an image), field, bookings affected for the rest of today and assignee;
+  Assign to me, Start and Done move at once and send after the Undo window; "Close field" lists the
+  affected bookings with Move (the schedule day timeline, S 3e) and Cancel these (the S 3b dialog),
+  then closes the pitch for the task (`POST /maintenance-restrictions`). **Verified.**
+- Tests: `src/screens/crew/__tests__/*` and the Phase 8 block of
+  `src/screens/today/__tests__/TodayScreen.test.tsx`.
+
 ## Conventions for screen builders
 
 - **Layout.** One directory per screen under `src/screens/<area>/`, the screen in

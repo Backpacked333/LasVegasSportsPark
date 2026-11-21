@@ -51,6 +51,13 @@ export const FacilitiesActions = defineActions({
     staffRoles: ['facilities_operator', 'general_manager'],
     requirements: ['SPK-FAC-004', 'SPK-FAC-002'],
   },
+  prepareField: {
+    id: 'facilities.prepare_field',
+    description:
+      "Tick a pitch's daily preparation checklist and mark it ready for its first use (migration 0975)",
+    staffRoles: ['facilities_operator', 'general_manager'],
+    requirements: ['SPK-FAC-001', 'SPK-READY-001', 'SPK-UX-006'],
+  },
   recordInspection: {
     id: 'facilities.record_inspection',
     description: 'Record an inspection outcome for a maintenance task',

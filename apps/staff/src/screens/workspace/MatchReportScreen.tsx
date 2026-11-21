@@ -13,9 +13,13 @@
  *   official's full view); when the sheet is not available to the viewer, cards are not offered.
  * - Offline, the report stays on screen as entered; submitting needs a connection (a queued
  *   submission is DEC-032, pending).
+ * - Phase 8 (crew/RefereeReportExtras.tsx): the score is prefilled from the coach's game log with a
+ *   match check (a difference is fixed or explained, the explanation going into the notes); field
+ *   and conduct chips (Field damage creates a field crew task after the report, Injury adds an
+ *   injury incident); the payout line.
  */
 import { presentationForError, type ApiError, type Schema } from '@sportspark/api-client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
@@ -31,6 +35,15 @@ import { useApp } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
+import {
+  conductNote,
+  mismatchedLogs,
+  PayoutLine,
+  ReportChips,
+  ScoreMatchCheck,
+  useCoachScores,
+  type ReportChip,
+} from '../crew/RefereeReportExtras';
 import { useMatchSheet, type MatchSheet } from './MatchSheet';
 import { MyAssignmentPage, type WorkspaceAssignment } from './MyAssignment';
 import { activityZone } from './WorkspaceScreen';
@@ -122,6 +135,36 @@ function MatchReport({ item }: { item: WorkspaceAssignment }) {
   const [cards, setCards] = useState<CardDraft[]>([]);
   const sheet = useMatchSheet(fixtureId);
   const [problems, setProblems] = useState<Record<string, string>>({});
+  // Phase 8: the coach's score prefills the report once; a difference is fixed or explained.
+  const coachScores = useCoachScores(fixtureId);
+  const logs = coachScores.data?.logs ?? [];
+  const [explanation, setExplanation] = useState('');
+  const [chips, setChips] = useState<ReadonlySet<ReportChip>>(new Set());
+  const [prefilled, setPrefilled] = useState(false);
+  const reportTask = useApiCommand('post', '/maintenance-tasks', {
+    invalidate: [['api', '/maintenance-tasks']],
+  });
+  useEffect(() => {
+    const first = coachScores.data?.logs[0];
+    if (prefilled || !first) return;
+    setPrefilled(true);
+    if (classification || homeScore || awayScore) return;
+    setClassification('completed');
+    setHomeScore(String(first.homeScore));
+    setAwayScore(String(first.awayScore));
+  }, [coachScores.data, prefilled, classification, homeScore, awayScore]);
+  const toggleChip = (chip: ReportChip) => {
+    setChips((current) => {
+      const next = new Set(current);
+      if (next.has(chip)) next.delete(chip);
+      else next.add(chip);
+      return next;
+    });
+    // Injury adds an injury incident to fill in (the incident the injury report follows up).
+    if (chip === 'Injury' && !chips.has('Injury')) {
+      setIncidents((prev) => [...prev, { ...EMPTY_INCIDENT, kind: 'injury' }]);
+    }
+  };
   const apiErrors = fieldErrorsOf(submit.error);
   // SubmitResultBody (SPK-RESULT-002): scores are required for a completed or forfeited match and
   // optional for an abandoned one; minutes are 0 to 200.
@@ -168,8 +211,20 @@ function MatchReport({ item }: { item: WorkspaceAssignment }) {
       else if (c.minute.trim() && minuteOf(c.minute) === null)
         next[`card${n}`] = `A card minute is a whole number from 0 to ${MAX_MINUTE}.`;
     });
+    const different = showsScore ? mismatchedLogs(logs, homeScore, awayScore) : [];
+    if (different.length > 0 && !explanation.trim()) {
+      next.match = "Your score differs from the coach's: fix it, or explain why.";
+    }
     setProblems(next);
     if (Object.keys(next).length > 0 || !classification) return;
+    const noteLines = [
+      notes.trim(),
+      conductNote(chips),
+      different.length > 0
+        ? `Score differs from the coach's game log (${different.map((l) => `${l.teamName} ${l.homeScore}-${l.awayScore}`).join(', ')}): ${explanation.trim()}`
+        : '',
+    ].filter((l): l is string => !!l);
+    const allNotes = noteLines.join('\n');
     const cardInputs: CardInput[] = cards.map((c) => ({
       teamEntryId: c.teamEntryId,
       personId: c.personId,
@@ -203,8 +258,24 @@ function MatchReport({ item }: { item: WorkspaceAssignment }) {
             : {}),
           cards: cardInputs,
           incidents: incidentInputs,
-          ...(notes.trim() ? { notes: notes.trim() } : {}),
+          ...(allNotes ? { notes: allNotes.slice(0, 4000) } : {}),
         },
+      })
+      .then(() => {
+        // Field damage: a task for the field crew on this pitch (facilities.report_issue).
+        const pitch = sheet.data?.venue?.resources[0];
+        const facilityId = sheet.data?.venue?.facilityId ?? item.activity.facilityId;
+        if (!chips.has('Field damage') || !pitch) return;
+        return reportTask
+          .submit({
+            body: {
+              facilityId,
+              resourceId: pitch.id,
+              issue: `Field damage reported by the referee after ${item.activity.title}.`,
+              severity: 'medium',
+            },
+          })
+          .then(() => undefined);
       })
       .catch(() => undefined);
   };
@@ -322,6 +393,14 @@ function MatchReport({ item }: { item: WorkspaceAssignment }) {
                   {problems.score}
                 </span>
               ) : null}
+              <ScoreMatchCheck
+                logs={logs}
+                homeScore={homeScore}
+                awayScore={awayScore}
+                explanation={explanation}
+                onExplain={setExplanation}
+                error={problems.match}
+              />
               {sheet.data ? (
                 <p className="caption" data-testid="report-checked-in">
                   Checked in:{' '}
@@ -409,7 +488,9 @@ function MatchReport({ item }: { item: WorkspaceAssignment }) {
             problems={problems}
             onChange={setCards}
           />
+          <ReportChips selected={chips} onToggle={toggleChip} />
           <TextAreaField label="Notes (optional)" value={notes} onChange={setNotes} rows={3} />
+          <PayoutLine fee={item.fee} />
           <StateView
             variant="pending-decision"
             subject="Who publishes results"

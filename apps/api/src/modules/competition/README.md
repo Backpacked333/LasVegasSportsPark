@@ -963,3 +963,31 @@ dispatch.
 - `competition.incident_reported` carries `sessionId` and `facilityId` (optional for older events);
   communications composes the guardians' `injury_report` notice from it.
   `__tests__/session-incidents.spec.ts`.
+
+## Lineups and game logs (migration 0475, staff redesign Phase 8 "Coach · Lineup", "Live game day") — verified
+
+- **Tables:** `fixture_lineups` (one per fixture side; formation such as `2-3-1`; shared facts
+  with the shared revision, so a later save reads "changed since shared"), `fixture_lineup_slots`
+  (slot 1 is the goalkeeper; a player holds one place: `fixture_lineup_slots_one_place`),
+  `fixture_game_logs` (one per side: the side's score, a timeline of goal / opponent_goal /
+  substitution / half_time with identifiers only, a revision for corrections) and
+  `fixture_player_minutes` (minutes 0 to 150 per player of the game log's side). Triggers keep the
+  side one of the fixture's sides and the minutes on the game log's side.
+- **Endpoints** (`packages/contracts/src/api/competition-lineups.ts`, `LineupsService`):
+  `GET /v1/fixtures/{id}/lineup?teamEntryId=` (the team sheet: players at kickoff with their own
+  availability answer and minutes in the side's earlier game logs, the team average, the lineup,
+  the game log, the official result once published and the viewer's `availableActions`);
+  `POST /v1/fixtures/{id}/lineup` (save, `expectedRevision` once saved; places within the
+  formation, players on the roster at kickoff); `POST /v1/fixtures/{id}/lineup/share` (records
+  the share, enqueues `competition.lineup_shared`); `POST /v1/fixtures/{id}/game-log` (after
+  kickoff, while the fixture is scheduled or played); `GET /v1/fixtures/{id}/game-logs` (the sides'
+  scores for the official's match check).
+- **Authority:** the side's captain (a youth team's coach holds the captain role) or league staff
+  (`competition.read_team_sheet`, `manage_lineup`, `record_game_log`); `competition.read_game_logs`
+  also for an official with an accepted assignment (ASSIGNMENT_CHECK_PORT through
+  `FixtureAttendanceService.sidesFor`). Anyone else: protected NOT_FOUND.
+- The game log is never the result (SPK-RESULT-001/002): no result revision is written; the
+  official's report is checked against it on the referee's screen, and publication stays with the
+  league.
+- **Pending decision 8 (messaging):** nothing delivers `competition.lineup_shared` to families
+  yet; the share is recorded. **Verified:** `__tests__/lineups.spec.ts`.

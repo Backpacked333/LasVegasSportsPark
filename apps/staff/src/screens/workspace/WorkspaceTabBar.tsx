@@ -12,15 +12,14 @@ import { Link, useLocation } from 'react-router';
 import { WORKSPACE_PATH } from '../../navigation/areas';
 import { Glass } from '../../ui/glass/Glass';
 import { Icon } from '../../ui/Icon';
-import {
-  WORKSPACE_PHONE_TABS as TABS,
-  isFullScreenWorkspacePath,
-  isTabCurrent,
-} from './workspace-tabs';
+import { isFullScreenWorkspacePath, isTabCurrent } from './workspace-tabs';
+// Phase 8: the coach, referee and field crew each get their own tabs (crew/workspace-kind.ts).
+import { useWorkspaceTabs } from '../crew/workspace-kind';
 import './workspace.css';
 
 export function WorkspaceTabBar() {
   const { pathname } = useLocation();
+  const TABS = useWorkspaceTabs();
   if (pathname !== WORKSPACE_PATH && !pathname.startsWith(`${WORKSPACE_PATH}/`)) return null;
   if (isFullScreenWorkspacePath(pathname)) return null;
   return (
