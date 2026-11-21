@@ -1,20 +1,17 @@
 /**
- * "Needs you" on SCR-C-03 Home (SPK-UX-003 "actions required before participation", then
- * "invitations and offers"; PA-11 SPK-UX-011 **Proposed**; ADR-008): one card of up to three rows.
- * Registrations waiting on the customer come first (they are not in the inbox), then action
- * notices, then invitations and offers. Each row carries one verb ("Pay", "Sign form", "Answer",
- * "Accept") and opens the item: a registration its record, a notice the record it is about
- * (`noticeTarget`, with the inbox "read" request) or else the notice in the inbox. Rows beyond the
- * third are behind "See all" (the registrations list while one is hidden, otherwise the inbox).
+ * Rows of SCR-C-03 Home's "To do" card that open an item elsewhere (SPK-UX-003 "actions required
+ * before participation", then "invitations and offers"; PA-11 SPK-UX-011 **Proposed**; ADR-008),
+ * under the redesign's in-place rows (handoff 1b). Registrations waiting on the customer come
+ * first (they are not in the inbox), then action notices, then invitations and offers. Each row
+ * carries one verb ("Pay", "Sign form", "Answer", "Accept") and opens the item: a registration its
+ * record, a notice the record it is about (`noticeTarget`, with the inbox "read" request) or else
+ * the notice in the inbox. The same rows show the pinned recovery and "In progress".
  */
 import type { Schema } from '@sportspark/api-client';
-import { useRouter, type Href } from 'expo-router';
-import { View } from 'react-native';
 import { nameOf } from '../../features/today/queries';
 import { enrollmentStatus, noticeStatus } from '../../features/today/status';
 import { ListRow } from '../../ui/ListRow';
-import { Section } from '../../ui/Section';
-import { NEEDS_YOU_ROWS, noticeVerb, registrationVerb } from './home-layout';
+import { noticeVerb } from './home-layout';
 import { noticeFor, openNoticeHint, useOpenNotice } from './open-notice';
 import type { PendingRegistration } from './pending-registrations';
 
@@ -73,75 +70,5 @@ export function NoticeRow({ item, names }: { item: InboxItem; names: Map<string,
       accessibilityHint={openNoticeHint(item)}
       testID={`home-notice-${item.attemptId}`}
     />
-  );
-}
-
-export function NeedsYou({
-  registrations,
-  actions,
-  invitations,
-  names,
-  offeringNames,
-}: {
-  registrations: readonly PendingRegistration[];
-  actions: readonly InboxItem[];
-  invitations: readonly InboxItem[];
-  names: Map<string, string>;
-  offeringNames: Map<string, string>;
-}) {
-  const router = useRouter();
-  const total = registrations.length + actions.length + invitations.length;
-  if (total === 0) return null;
-  let room = NEEDS_YOU_ROWS;
-  const take = <T,>(list: readonly T[]): T[] => {
-    const shown = list.slice(0, Math.max(room, 0));
-    room -= shown.length;
-    return shown;
-  };
-  const shownRegistrations = take(registrations);
-  const shownActions = take(actions);
-  const shownInvitations = take(invitations);
-  const hidden = total - NEEDS_YOU_ROWS;
-  const registrationHidden = shownRegistrations.length < registrations.length;
-  return (
-    <Section
-      title="Needs you"
-      subtitle={hidden > 0 ? `${NEEDS_YOU_ROWS} of ${total}` : undefined}
-      action={
-        hidden > 0
-          ? {
-              label: 'See all',
-              onPress: () => router.push((registrationHidden ? '/enrollments' : '/inbox') as Href),
-            }
-          : undefined
-      }
-      testID="home-needs-you"
-    >
-      {shownRegistrations.length + shownActions.length > 0 ? (
-        <View accessibilityRole="list" testID="home-actions">
-          {shownRegistrations.map((row) => (
-            <RegistrationRow
-              key={row.enrollment.id}
-              row={row}
-              names={names}
-              offeringNames={offeringNames}
-              verb={registrationVerb(row.enrollment.pendingReason)}
-              onPress={() => router.push(`/enrollments/${row.enrollment.id}` as Href)}
-              testID="home-registration"
-            />
-          ))}
-          {shownActions.map((item) => (
-            <NoticeRow key={item.attemptId} item={item} names={names} />
-          ))}
-        </View>
-      ) : null}
-      {shownInvitations.length > 0 ? (
-        <View accessibilityRole="list" testID="home-invitations">
-          {shownInvitations.map((item) => (
-            <NoticeRow key={item.attemptId} item={item} names={names} />
-          ))}
-        </View>
-      ) : null}
-    </Section>
   );
 }

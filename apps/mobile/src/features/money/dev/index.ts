@@ -19,3 +19,12 @@ export const DevPaymentMethodPicker: ComponentType<PaymentMethodPickerProps> | n
   ? // eslint-disable-next-line @typescript-eslint/no-require-imports -- must stay a conditional require so release bundles drop the module
     (require('./DevPaymentMethodPicker') as typeof PickerModule).DevPaymentMethodPickerView
   : null;
+
+/**
+ * The same fake provider scenarios as a list of payment methods, for the Pay sheet (handoff 2b's
+ * "card row"); null in release builds, which show the DEC-019 pay-at-desk notice instead.
+ */
+export const DEV_PAYMENT_METHODS: readonly { token: string; label: string }[] | null = __DEV__
+  ? // eslint-disable-next-line @typescript-eslint/no-require-imports -- must stay a conditional require so release bundles drop the module
+    (require('./DevPaymentMethodPicker') as typeof PickerModule).DEV_PAYMENT_SCENARIOS
+  : null;

@@ -82,7 +82,9 @@ import { SupportDetails } from '../../ui/SupportDetails';
 import { Text } from '../../ui/Text';
 import { continuousCorners, layout, makeStyles, radius, spacing } from '../../ui/theme';
 import { CommandError, type NotAvailableCopy } from '../../ui/CommandError';
+import { useLocalSearchParams } from 'expo-router';
 import { NightCard, PassCard } from './PassCard';
+import { PassPeople } from './PassPeople';
 import { usePassStore, type StoredPass } from './pass-store';
 import { pendingMessage } from '../../copy/pending';
 
@@ -147,7 +149,7 @@ export function otherActivePasses(
 /** Codes after which the old pass is known to be unusable already (revoked or gone). */
 const ALREADY_WITHDRAWN = new Set(['STALE_REVISION', 'INVALID_TRANSITION', 'NOT_FOUND']);
 
-function PassContent() {
+function PassContent({ personFor }: { personFor: string | null }) {
   const styles = useStyles();
   const { session } = useApp();
   const { reachable } = useConnectivity();
@@ -340,6 +342,7 @@ function PassContent() {
           </View>
         ) : pass ? (
           <View testID="pass-ready">
+            <PassPeople initialPersonId={personFor} />
             <PassCard
               reference={pass.reference}
               issued={`Issued ${formatWhen(pass.issuedAt, zone.zone)} (${formatAge(new Date(pass.issuedAt), now)}).`}
@@ -718,10 +721,17 @@ function OtherPass({
   );
 }
 
-export function PassScreen() {
+/** Route component for app/pass.tsx: `?person=<id>` preselects that household member (1j). */
+export function PassRoute() {
+  const params = useLocalSearchParams<{ person?: string | string[] }>();
+  const person = Array.isArray(params.person) ? params.person[0] : params.person;
+  return <PassScreen personId={person ?? null} />;
+}
+
+export function PassScreen({ personId = null }: { personId?: string | null } = {}) {
   const { session } = useApp();
   // Signed in: the pass screen draws its own frame, with pull to refresh.
-  if (session.status === 'signed_in') return <PassContent />;
+  if (session.status === 'signed_in') return <PassContent personFor={personId} />;
   return (
     <Screen>
       <RequireSession what="your facility pass">{null}</RequireSession>
