@@ -40,12 +40,7 @@ import {
   useCalendarWindow,
   useMyFixtures,
 } from '../../../features/today/queries';
-import {
-  createTestApp,
-  mePermissions,
-  settleQueries,
-  TEST_NOW,
-} from '../../../testing/test-app';
+import { createTestApp, mePermissions, settleQueries, TEST_NOW } from '../../../testing/test-app';
 import { openSupportDetails, pullToRefresh } from '../../../testing/ui-surfaces';
 import { ScheduleScreen } from '../ScheduleScreen';
 
