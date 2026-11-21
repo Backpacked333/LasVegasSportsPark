@@ -230,6 +230,24 @@ describe('authority reads (ID-04; SPK-IAM-001, SPK-IAM-003, SPK-IAM-005, SPK-IAM
       ).status,
     ).toBe(404);
     expect((await t.http.get(`/v1/people/${newId()}/authority`).set(desk)).status).toBe(404);
+
+    // S 4c household record: staff who read authority read the household and its members; a
+    // customer, a coach and an unknown id all read as not found (§4.10).
+    const read = await t.http.get(`/v1/households/${household.body.id}`).set(desk);
+    expect(read.status, JSON.stringify(read.body)).toBe(200);
+    expect(read.body).toMatchObject({ id: household.body.id, name: 'Rivera household' });
+    expect(read.body.members.map((m: { personId: string }) => m.personId).sort()).toEqual(
+      [family.adult.personId, family.child.personId].sort(),
+    );
+    expect((await t.http.get(`/v1/households/${household.body.id}`).set(parent)).status).toBe(404);
+    expect(
+      (
+        await t.http
+          .get(`/v1/households/${household.body.id}`)
+          .set(await authHeaderForPerson(t, coach.personId))
+      ).status,
+    ).toBe(404);
+    expect((await t.http.get(`/v1/households/${newId()}`).set(desk)).status).toBe(404);
   });
 
   it('my households list myself and the members I hold view over, and only count the others', async () => {

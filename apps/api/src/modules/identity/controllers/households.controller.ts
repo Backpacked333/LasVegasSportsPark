@@ -1,4 +1,4 @@
-import { Controller, Post } from '@nestjs/common';
+import { Controller, Get, Post } from '@nestjs/common';
 import {
   AddHouseholdMemberBody,
   CreateHouseholdBody,
@@ -24,6 +24,15 @@ export class HouseholdsController {
     @CorrelationId() correlationId: string | null,
   ): Promise<Household> {
     return this.households.createHousehold(principal, body, correlationId);
+  }
+
+  /** S 4c household record: the household and its members, for staff who read authority. */
+  @Get(':id')
+  read(
+    @CurrentPrincipal() principal: Principal,
+    @ZodParams(IdParams) params: z.infer<typeof IdParams>,
+  ): Promise<Household> {
+    return this.households.read(principal, params.id);
   }
 
   @Post(':id/members')
