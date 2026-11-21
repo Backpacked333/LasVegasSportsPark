@@ -30,6 +30,7 @@ import type { StatusTone } from '../../ui/StatusBadge';
 import '../../ui/form-fields.css';
 import { AssistantPanel } from './AssistantPanel';
 import { CancelGamesDialog } from './CancelGamesDialog';
+import { fieldDays, fieldIssues } from './field-readiness';
 import { FieldBoard } from './FieldBoard';
 import { NeedsAction, type IssueContext, type WaiverIssue } from './NeedsAction';
 import { NextHourStrip, type StripContext } from './NextHourStrip';
@@ -143,6 +144,21 @@ function FacilityToday({
     [events.data],
   );
   const resources = status.data?.resources;
+  // Phase 8: the field crew's pitch preparation; a pitch not ready 15 min before its first use is
+  // a red issue (field-readiness.ts). A viewer who may not read it sees no such issue.
+  const preparations = useApiQuery({
+    path: '/field-preparations',
+    request: { query: { facilityId: facility.facilityId } },
+    refetchInterval: TODAY_REFRESH_MS,
+    refetchOnWindowFocus: 'always',
+  });
+  const notReady = useMemo(
+    () =>
+      resources && preparations.data
+        ? fieldIssues(fieldDays(resources, dayEvents, preparations.data.items, now), now)
+        : [],
+    [resources, preparations.data, dayEvents, now],
+  );
   const spaceNames = useMemo(
     () => new Map((resources ?? []).map((r) => [r.resourceId, r.name])),
     [resources],
@@ -264,6 +280,7 @@ function FacilityToday({
     <NeedsAction
       cards={cards}
       waiverIssues={waiverIssues}
+      fieldIssues={notReady}
       context={issueContext}
       now={now}
       sources={feed.sources}

@@ -11,19 +11,14 @@
 import { NavLink, useLocation } from 'react-router';
 import { WORKSPACE_PATH } from '../../navigation/areas';
 import { Glass } from '../../ui/glass/Glass';
-import { Icon, type IconName } from '../../ui/Icon';
+import { Icon } from '../../ui/Icon';
+// Phase 8: the coach, referee and field crew each get their own tabs (crew/workspace-kind.ts).
+import { useWorkspaceTabs } from '../crew/workspace-kind';
 import './workspace.css';
-
-const TABS: readonly { to: string; label: string; icon: IconName; end?: boolean }[] = [
-  { to: WORKSPACE_PATH, label: 'Now', icon: 'stadium', end: true },
-  { to: `${WORKSPACE_PATH}/assessments`, label: 'Assess', icon: 'checklist' },
-  { to: `${WORKSPACE_PATH}/fees`, label: 'Fees', icon: 'payments' },
-  { to: `${WORKSPACE_PATH}/report-problem`, label: 'Issues', icon: 'construction' },
-  { to: `${WORKSPACE_PATH}/offline`, label: 'Queue', icon: 'sync' },
-];
 
 export function WorkspaceTabBar() {
   const { pathname } = useLocation();
+  const TABS = useWorkspaceTabs();
   if (pathname !== WORKSPACE_PATH && !pathname.startsWith(`${WORKSPACE_PATH}/`)) return null;
   return (
     <nav className="ws-tabbar" aria-label="Workspace tabs">

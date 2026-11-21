@@ -34,8 +34,8 @@ import type { DemoSpaces } from './spaces';
  * - maintenance work for the tasks board: a corner flag being replaced on Field 1 (doing, the
  *   crew's), worn goalmouth turf on Field 2 (to do) and a leaking sprinkler on Field 5 (done).
  *
- * Every part is optional and idempotent (found again by name). Outside 07:00 to 21:00 at the
- * facility only the crew account is created: the day's work is not drawn at night.
+ * Every part is optional and idempotent (found again by name). When no pitch is free today
+ * between 08:00 and 19:00 (late in the evening), the coach's next game is tomorrow instead.
  */
 export const CREW_DEMO = {
   division: 'U10',
@@ -87,16 +87,6 @@ export async function seedStaffCrew(
     { subject: 'demo-crew', givenName: 'Marco', familyName: 'Sample-Diaz' },
     ['facilities_operator'],
   );
-  const now = ctx.clock.now().getTime();
-  const hour = Number(
-    new Intl.DateTimeFormat('en-US', {
-      hour: 'numeric',
-      hourCycle: 'h23',
-      timeZone: ctx.timezone,
-    }).format(new Date(now)),
-  );
-  if (hour < 7 || hour >= 21) return crew;
-
   await optional(ctx, "the coach's team and its games", () => seedCoachTeam(ctx, staff, spaces));
   await settle(ctx);
   await optional(ctx, "today's pitch preparation", () => seedPreparations(ctx, crew, spaces));
@@ -304,14 +294,20 @@ async function seedCoachTeam(ctx: DemoContext, staff: DemoStaff, spaces: DemoSpa
   }
   await settle(ctx);
 
-  // Today's game at the first free pitch at least 75 minutes away, before 20:00; then next week.
-  const earliest = Math.ceil((ctx.clock.now().getTime() + 75 * MINUTE) / QUARTER) * QUARTER;
-  const lastStart = calendar.at(0, '19:00').getTime();
+  // The next game at the first free pitch at least 75 minutes away between 08:00 and 19:00
+  // today, else tomorrow from 09:00; then next week's.
+  const soonest = Math.ceil((ctx.clock.now().getTime() + 75 * MINUTE) / QUARTER) * QUARTER;
+  const windows: Array<[number, number]> = [
+    [Math.max(soonest, calendar.at(0, '08:00').getTime()), calendar.at(0, '19:00').getTime()],
+    [calendar.at(1, '09:00').getTime(), calendar.at(1, '19:00').getTime()],
+  ];
   let today: string | null = existing.find((f) => f.round === 3)?.id ?? null;
-  for (let start = earliest; !today && start <= lastStart; start += QUARTER) {
-    const startIso = new Date(start).toISOString();
-    if (!free(startIso, new Date(start + GAME_MINUTES * MINUTE).toISOString())) continue;
-    today = await game(3, hawks.id, devils.id, 0, new Date(start));
+  for (const [from, until] of windows) {
+    for (let start = from; !today && start <= until; start += QUARTER) {
+      const startIso = new Date(start).toISOString();
+      if (!free(startIso, new Date(start + GAME_MINUTES * MINUTE).toISOString())) continue;
+      today = await game(3, hawks.id, devils.id, 0, new Date(start));
+    }
   }
   await game(4, devils.id, hawks.id, 7, null);
   if (!today) return;

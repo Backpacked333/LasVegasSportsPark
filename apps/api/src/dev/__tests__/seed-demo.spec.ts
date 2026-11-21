@@ -574,10 +574,12 @@ describe('demo dataset late on a Sunday evening', () => {
       expect(summary.demo.notCreated).toEqual([]);
       expect(Object.keys(summary.demo.tourLinks)).toHaveLength(16);
       const assignments = await t.db.selectFrom('assignments').select(['status']).execute();
+      // The coach's next game is tomorrow then, with its referee request (demo/staff-crew.ts).
       expect(assignments.map((a) => a.status).sort()).toEqual([
         'accepted',
         'accepted',
         'accepted',
+        'offered',
         'offered',
         'offered',
       ]);

@@ -13,7 +13,11 @@
  * - a rental or party booked through the booking flow (`sourceType` enrollment.booking):
  *   `GET /v1/bookings/{id}` (payment outstanding, guests) and, for a rental,
  *   `GET /v1/bookings/{id}/roster` (joined members and waivers outstanding);
- * - the field: the space's restrictions from `GET /v1/facilities/{id}/operating-status`.
+ * - the field: the space's restrictions from `GET /v1/facilities/{id}/operating-status` and, for a
+ *   pitch or its half, the field crew's preparation of the day (`GET /v1/field-preparations`,
+ *   Phase 8 "Field crew · Fields"): "Field ready" only once the crew marked the pitch ready; not
+ *   ready is a warning, and a danger from 15 minutes before the start. A viewer who may not read
+ *   the preparations keeps the restriction-only check.
  *
  * A check the viewer may not read, or that did not answer, is "unknown" (◷), never ready
  * (SPK-READY-002). Status is glyph + words; the tone only repeats it.
@@ -22,8 +26,9 @@ import type { Schema } from '@sportspark/api-client';
 import { useQueries } from '@tanstack/react-query';
 import { useMemo } from 'react';
 import { useApiQuery } from '../../api/useApiQuery';
-import { useApi } from '../../providers/AppProviders';
+import { useApi, useNow } from '../../providers/AppProviders';
 import type { StatusTone } from '../../ui/StatusBadge';
+import { preparationForEvent, type FieldPreparationState } from './field-readiness';
 import { shortName, type ResourceStatus, type ScheduledEvent } from './today-model';
 
 export type CheckKey =
@@ -187,6 +192,8 @@ export interface ResourceFieldState {
   /** Restrictions on the event's spaces now ('closed' or 'limited'), with their reason. */
   restrictions: Array<{ kind: 'closed' | 'limited'; reason: string }>;
   known: boolean;
+  /** The crew's preparation of the pitch the event uses (null: not a pitch, or not readable). */
+  preparation?: FieldPreparationState | null;
 }
 
 export function fieldStateOf(
@@ -226,6 +233,17 @@ function fieldCheck(field: ResourceFieldState, readiness?: FixtureReadiness['sta
       fix: 'field',
     };
   }
+  const prep = field.preparation;
+  if (prep && !prep.progress.ready) {
+    return {
+      key: 'field',
+      tone: prep.urgent ? 'danger' : 'warning',
+      label: 'Field not ready',
+      heading: 'Field',
+      value: `Not ready · ${prep.progress.done} of ${prep.progress.total} checks`,
+      fix: 'field',
+    };
+  }
   if (!field.known && !readiness) {
     return {
       key: 'field',
@@ -235,7 +253,13 @@ function fieldCheck(field: ResourceFieldState, readiness?: FixtureReadiness['sta
       value: 'Unknown',
     };
   }
-  return { key: 'field', tone: 'success', label: 'Field ready', heading: 'Field', value: 'Ready' };
+  return {
+    key: 'field',
+    tone: 'success',
+    label: 'Field ready',
+    heading: 'Field',
+    value: prep ? 'Lined, nets up' : 'Ready',
+  };
 }
 
 function capacityOf(session: FacilitySession | undefined): number | null {
@@ -474,7 +498,18 @@ export function useStartChecks(
     enabled: isBooking && event.kind === 'rental',
   });
 
-  const field = fieldStateOf(event, context.resources);
+  const now = useNow(60_000);
+  // The day's pitch preparations (one shared read for every start of the facility).
+  const preparations = useApiQuery({
+    path: '/field-preparations',
+    request: { query: { facilityId: event.facilityId } },
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+  });
+  const field = {
+    ...fieldStateOf(event, context.resources),
+    preparation: preparationForEvent(event, context.resources, preparations.data, now),
+  };
   const waiversDone = waiverReads.every((q) => q.isSuccess);
   const missingWaivers: MissingWaiver[] = waiversDone
     ? people

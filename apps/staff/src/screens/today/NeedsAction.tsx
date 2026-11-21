@@ -37,6 +37,7 @@ import {
   type RefereeTarget,
 } from './RefereeFix';
 import { domainActions, permittedVerbs } from './exception-actions';
+import type { FieldIssue } from './field-readiness';
 import { useTodayLocal } from './today-local';
 import {
   canSnooze,
@@ -459,9 +460,35 @@ function StaffingIssue({
   );
 }
 
+/**
+ * A pitch not marked ready 15 minutes before its first use (Phase 8 "Field crew · Fields", the
+ * crew's preparation, `field-readiness.ts`): a red issue at the top. It leaves the list by itself
+ * once the crew marks the pitch ready.
+ */
+function FieldNotReadyCard({ issue, timeZone }: { issue: FieldIssue; timeZone: string }) {
+  return (
+    <>
+      <span className="issue-title" id={`issue-title-${issue.id}`}>
+        {issue.pitch.name} not ready for {issue.use.title}
+      </span>
+      <span className="issue-text">
+        {issue.progress.done} of {issue.progress.total} checks done; first use{' '}
+        {shortTime(issue.use.scheduledStart, timeZone, true)}. The field crew marks it ready on
+        their phone.
+      </span>
+      <span className="issue-actions">
+        <Link className="button button-secondary button-sm" to="/workspace/fields">
+          Open fields
+        </Link>
+      </span>
+    </>
+  );
+}
+
 export function NeedsAction({
   cards,
   waiverIssues,
+  fieldIssues = [],
   context,
   now,
   sources,
@@ -469,6 +496,8 @@ export function NeedsAction({
 }: {
   cards: IssueCard[];
   waiverIssues: WaiverIssue[];
+  /** Pitches not ready 15 minutes before their first use (Phase 8, red, first). */
+  fieldIssues?: FieldIssue[];
   context: IssueContext;
   now: Date;
   sources: Schema<'TodaySource'>[];
@@ -513,7 +542,8 @@ export function NeedsAction({
   const waivers = waiverIssues.filter(
     (w) => !local.isFlagged(w.id) && !local.isSnoozed(w.id, now) && !local.resolved.has(w.id),
   );
-  const total = visible.length + waivers.length;
+  const fields = fieldIssues.filter((f) => !local.isSnoozed(f.id, now));
+  const total = visible.length + waivers.length + fields.length;
   // Waiver issues sit by their start among the timed issues.
   type Row = { kind: 'card'; card: IssueCard } | { kind: 'waiver'; issue: WaiverIssue };
   const rows: Row[] = visible.map((card) => ({ kind: 'card' as const, card }));
@@ -542,6 +572,29 @@ export function NeedsAction({
         </div>
       ) : (
         <ul className="issue-list" aria-label="Needs action">
+          {fields.map((issue) => (
+            <IssueShell
+              key={issue.id}
+              id={issue.id}
+              edge="danger"
+              resolvedLabel={null}
+              snooze={null}
+            >
+              <span className="issue-tags">
+                <StatusBadge
+                  tone="danger"
+                  label={
+                    new Date(issue.use.scheduledStart).getTime() <= now.getTime()
+                      ? 'Under way'
+                      : `Starts in ${Math.max(0, Math.ceil((new Date(issue.use.scheduledStart).getTime() - now.getTime()) / 60_000))} min`
+                  }
+                  size="sm"
+                />
+                <StatusBadge tone="neutral" label={issue.pitch.name} size="sm" />
+              </span>
+              <FieldNotReadyCard issue={issue} timeZone={context.timeZone} />
+            </IssueShell>
+          ))}
           {rows.map((row) => {
             if (row.kind === 'waiver') {
               const issue = row.issue;
