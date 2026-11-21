@@ -90,7 +90,7 @@ describe('SCR-C-10 PlacementInformationScreen', () => {
   it("PA-11 ADR-008: a player's placement answers are the Options step of registering", async () => {
     const app = renderPlacement({ routes: routes() });
     expect(await screen.findByRole('header', { name: 'About you as a player' })).toBeOnTheScreen();
-    expect(screen.getByLabelText('Step 2 of 5, Options')).toBeOnTheScreen();
+    expect(screen.getByLabelText('Step 2 of 3, Options')).toBeOnTheScreen();
     await app.settle();
   });
 

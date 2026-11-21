@@ -269,7 +269,8 @@ describe('SCR-C-18 Calendar (ScheduleScreen)', () => {
     expect(await screen.findByTestId('day-2026-10-24')).toBeOnTheScreen();
     now = new Date('2026-10-24T13:00:00.000Z');
     act(() => app.sources.setReachable(false));
-    expect(screen.getByText(/Showing information from 1 hour ago\./)).toBeOnTheScreen();
+    // The shared banner (handoff 3f): "Offline. Showing what was saved at 5:00."
+    expect(screen.getByText(/Showing what was saved at \d{1,2}:\d{2}\./)).toBeOnTheScreen();
     expect(screen.getByTestId('day-2026-10-24')).toBeOnTheScreen();
   });
 

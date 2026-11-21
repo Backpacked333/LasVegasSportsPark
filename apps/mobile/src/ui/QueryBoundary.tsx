@@ -69,6 +69,11 @@ export interface QueryBoundaryProps<T> {
   empty: QueryEmpty;
   /** Actions on this screen that need a connection, listed in the offline notice. */
   unavailableOffline?: string[];
+  /**
+   * Leave out "Updated just now" (a full-bleed page such as the activity, Register or the pass:
+   * the age still shows offline or when a refresh failed).
+   */
+  hideUpdated?: boolean;
   children: (data: T) => ReactNode;
 }
 
@@ -78,6 +83,7 @@ export function QueryBoundary<T>({
   isEmpty,
   empty,
   unavailableOffline,
+  hideUpdated = false,
   children,
 }: QueryBoundaryProps<T>) {
   const now = useNow();
@@ -133,7 +139,7 @@ export function QueryBoundary<T>({
           unavailableActions={unavailableOffline}
           onRetry={retry}
         />
-      ) : (
+      ) : hideUpdated ? null : (
         <LastUpdated at={query.updatedAt} now={now} />
       )}
       {isEmpty?.(query.data) ? <EmptyAnswer empty={empty} /> : children(query.data)}

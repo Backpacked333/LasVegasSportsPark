@@ -38,6 +38,10 @@ export type LinkTarget =
   | { to: 'claim'; token: string }
   /** An asynchronous outcome, shown in its current state (`GET /v1/operations/{id}`). */
   | { to: 'operation'; id: string }
+  /** An activity's page (handoff 3d "Share"). */
+  | { to: 'activity'; id: string }
+  /** A waitlist entry and its offer (handoff 2e; the push "A place opened for Maya"). */
+  | { to: 'waitlist'; id: string }
   | { to: 'inbox' }
   | { to: 'account' }
   | { to: 'family' }
@@ -77,6 +81,8 @@ export function resolveLinkParams(params: Params): LinkResolution {
     case 'claim':
       return isLinkToken(token) ? { kind: 'target', target: { to, token } } : { kind: 'malformed' };
     case 'operation':
+    case 'activity':
+    case 'waitlist':
       return isUuid(id)
         ? { kind: 'target', target: { to, id: id.toLowerCase() } }
         : { kind: 'malformed' };

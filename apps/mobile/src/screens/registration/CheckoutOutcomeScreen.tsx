@@ -33,7 +33,6 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
-import { illustrations } from '../../artwork/manifest';
 import { pendingMessage } from '../../copy/pending';
 import {
   mayHaveTakenEffect,
@@ -61,7 +60,6 @@ import {
 import { useApp, useConnectivity } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
 import { LiveRegion, sentences } from '../../ui/announce';
-import { Artwork } from '../../ui/Artwork';
 import { Button } from '../../ui/Button';
 import { FieldValue } from '../../ui/Field';
 import { useHaptics } from '../../ui/PressableScale';
@@ -73,6 +71,7 @@ import { Section } from '../../ui/Section';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { Text } from '../../ui/Text';
 import { layout, makeStyles, spacing } from '../../ui/theme';
+import { DoneView } from './register/DoneView';
 
 type Checkout = Schema<'Checkout'>;
 
@@ -243,26 +242,20 @@ function OutcomeContent({ checkout }: { checkout: Checkout }) {
       : payment?.status === 'failed' && payment.failureReason && !retryUnknown
         ? payment.failureReason
         : null;
+  // 1g: once the API reports the checkout completed, Done says what happens next.
+  if (completed) {
+    return (
+      <DoneView
+        checkout={checkout}
+        basket={basket.data}
+        names={names}
+        enrollments={enrollments}
+        placements={placements}
+      />
+    );
+  }
   return (
     <View>
-      {completed ? (
-        <View style={styles.success}>
-          <Artwork
-            source={illustrations.success}
-            aspectRatio={1}
-            contentFit="contain"
-            style={styles.art}
-            testID="outcome-success-art"
-          />
-          {/* ADR-008: the picture has a headline under it that says what happened. */}
-          <Text variant="title1" heading style={styles.centered}>
-            You&apos;re registered
-          </Text>
-          <Text variant="body" tone="muted" style={styles.centered}>
-            You&apos;ll find it in Calendar and under You.
-          </Text>
-        </View>
-      ) : null}
       <Section title="Registration and payment">
         {/* SPK-UX-009, NA-A01: every change of the checkout's status (re-read while it runs) is
             announced, and so is the payment's below. */}
@@ -424,15 +417,6 @@ function OutcomeContent({ checkout }: { checkout: Checkout }) {
       </Section>
 
       <View style={styles.actions}>
-        {completed ? (
-          <Button
-            label="See it in Calendar"
-            onPress={() => router.push('/schedule')}
-            icon="calendar_today"
-            size="lg"
-            block
-          />
-        ) : null}
         {terminal ? (
           <Button
             label="Explore more activities"
@@ -512,15 +496,6 @@ const useStyles = makeStyles(({ colors }) => ({
     gap: spacing.xs,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.border,
-  },
-  success: { alignItems: 'center', gap: spacing.xs, paddingHorizontal: layout.gutter },
-  centered: { textAlign: 'center' },
-  art: {
-    alignSelf: 'center',
-    width: '50%',
-    maxWidth: 200,
-    marginTop: spacing.lg,
-    backgroundColor: 'transparent',
   },
   actions: { gap: spacing.sm, paddingHorizontal: layout.gutter, paddingVertical: spacing.lg },
 }));

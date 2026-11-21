@@ -87,7 +87,6 @@ describe('SCR-C-08 OfferingDetailScreen', () => {
     expect(screen.getByLabelText('Location: Field 2')).toBeOnTheScreen();
     expect(screen.getByLabelText('Dates: Nov 2, 2026 to Dec 14, 2026')).toBeOnTheScreen();
     expect(screen.getByLabelText('Age: Ages 8 to 10')).toBeOnTheScreen();
-    expect(screen.getByText('20 places')).toBeOnTheScreen();
     expect(screen.getByLabelText('Base price: $120.00')).toBeOnTheScreen();
     expect(screen.getByLabelText('Facility fee: $5.00, added to the price')).toBeOnTheScreen();
     expect(await screen.findByText('• Medical consent')).toBeOnTheScreen();
@@ -286,11 +285,13 @@ describe('SCR-C-08 OfferingDetailScreen', () => {
     expect(screen.queryByRole('button', { name: 'Register' })).not.toBeOnTheScreen();
   });
 
-  it('opens the registration chooser (SCR-C-09) from Register', async () => {
+  it('handoff 3d: "Register Ada" opens Who (1e) with the first child who qualifies ticked', async () => {
     const app = createRegistrationTestApp({ routes: routes() });
     render(<OfferingDetailScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
-    fireEvent.press(await screen.findByRole('button', { name: 'Register' }));
-    expect(mockRouter.push).toHaveBeenCalledWith(`/registration/start/${IDS.offering}`);
+    fireEvent.press(await screen.findByRole('button', { name: 'Register Ada' }));
+    expect(mockRouter.push).toHaveBeenCalledWith(
+      `/registration/start/${IDS.offering}?person=${IDS.childA}`,
+    );
   });
 
   it('SPK-CAT-004: a paused registration keeps existing participation and offers no registration', async () => {
@@ -346,9 +347,9 @@ describe('SCR-C-08 OfferingDetailScreen', () => {
   it('§4.15: offline keeps the detail with its age and disables registration', async () => {
     const app = createRegistrationTestApp({ routes: routes() });
     render(<OfferingDetailScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
-    expect(await screen.findByRole('button', { name: 'Register' })).toBeOnTheScreen();
+    expect(await screen.findByRole('button', { name: 'Register Ada' })).toBeOnTheScreen();
     act(() => app.sources.setReachable(false));
-    expect(screen.getByRole('button', { name: 'Register' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Register Ada' })).toBeDisabled();
     expect(screen.getByText('Registration needs a connection.')).toBeOnTheScreen();
     // ADR-008: under the app's offline banner the section says its own age and needs on one quiet line.
     expect(
@@ -356,25 +357,16 @@ describe('SCR-C-08 OfferingDetailScreen', () => {
     ).toBeOnTheScreen();
   });
 
-  it('Activity page: the key facts are tags under the name, with the picture above', async () => {
+  it('handoff 3d: the page answers for this family: where it is, the ages, and which child qualifies', async () => {
     const app = createRegistrationTestApp({ routes: routes() });
     render(<OfferingDetailScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
     const facts = await screen.findByTestId('offering-facts');
-    await screen.findByLabelText('Mon · 3:00 PM');
+    expect(within(facts).getByLabelText('Field 2. Test complex')).toBeOnTheScreen();
     expect(
-      within(facts)
-        .getAllByRole('text')
-        .map((tag) => tag.props.accessibilityLabel as string | undefined)
-        // The tags' decorative icons are text too, without a name.
-        .filter((name) => name !== undefined),
-    ).toEqual([
-      'Ages 8 to 10',
-      'Nov 2 to Dec 14, 2026',
-      'Mon · 3:00 PM',
-      'Field 2',
-      '20 places',
-      'From $120.00',
-    ]);
+      await within(facts).findByLabelText('Ages 8–10. Ada qualifies · Ben qualifies'),
+    ).toBeOnTheScreen();
+    expect(screen.getByRole('button', { name: 'Back' })).toBeOnTheScreen();
+    expect(screen.getByRole('button', { name: 'Share' })).toBeOnTheScreen();
     // Facts move into folds: closed until the person opens one.
     expect(screen.queryByLabelText('Format: 7v7')).toBeNull();
     expect(screen.getByRole('button', { name: 'Schedule' })).toBeCollapsed();
@@ -418,8 +410,8 @@ describe('SCR-C-08 OfferingDetailScreen', () => {
     const app = createRegistrationTestApp({ routes: routes() });
     render(<OfferingDetailScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
     const bar = await screen.findByTestId('offering-action');
-    expect(within(bar).getByLabelText('From, $120.00')).toBeOnTheScreen();
-    expect(await within(bar).findByRole('button', { name: 'Register' })).toBeEnabled();
+    expect(within(bar).getByLabelText(/^\$120/)).toBeOnTheScreen();
+    expect(await within(bar).findByRole('button', { name: 'Register Ada' })).toBeEnabled();
     await app.settle();
   });
 
@@ -449,7 +441,7 @@ describe('SCR-C-08 OfferingDetailScreen', () => {
     render(<OfferingDetailScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
     const bar = await screen.findByTestId('offering-action');
     fireEvent.press(await within(bar).findByRole('button', { name: 'Check out' }));
-    expect(within(bar).getByLabelText('In your cart, $120.00')).toBeOnTheScreen();
+    expect(within(bar).getByLabelText(/^In your cart, \$120/)).toBeOnTheScreen();
     expect(mockRouter.push).toHaveBeenCalledWith(`/registration/basket/${IDS.basket}`);
     expect(app.fake.requests.find((r) => r.route === '/me/baskets')?.query).toEqual({
       limit: '20',
@@ -476,7 +468,9 @@ describe('SCR-C-08 OfferingDetailScreen', () => {
     });
     render(<OfferingDetailScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
     fireEvent.press(await screen.findByRole('button', { name: 'Join waitlist' }));
-    expect(mockRouter.push).toHaveBeenCalledWith(`/registration/start/${IDS.offering}`);
+    expect(mockRouter.push).toHaveBeenCalledWith(
+      expect.stringMatching(new RegExp(`^/registration/start/${IDS.offering}`)),
+    );
     expect(screen.queryByRole('button', { name: 'Register' })).toBeNull();
   });
 
@@ -488,7 +482,9 @@ describe('SCR-C-08 OfferingDetailScreen', () => {
     });
     render(<OfferingDetailScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
     fireEvent.press(await screen.findByRole('button', { name: 'Book' }));
-    expect(mockRouter.push).toHaveBeenCalledWith(`/registration/start/${IDS.offering}`);
+    expect(mockRouter.push).toHaveBeenCalledWith(
+      expect.stringMatching(new RegExp(`^/registration/start/${IDS.offering}`)),
+    );
   });
 
   it('Activity page: the bar picks one action for each state', () => {

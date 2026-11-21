@@ -108,6 +108,8 @@ const classicColors = {
   /** A tonal button and a selected tonal chip. */
   tonal: '#E2F0E7',
   onTonal: '#0A5C35',
+  /** A chosen card or row (Who, the camp weeks): a whisper of the accent behind its border. */
+  selectedSurface: '#F5FAF6',
   /** Toasts: a dark capsule over the light page. */
   toast: '#1B2420',
   onToast: '#FFFFFF',
@@ -175,6 +177,7 @@ const legendsColors: ThemeColors = {
   skeletonHighlight: '#1E4334',
   tonal: '#1E4334',
   onTonal: '#C6F36B',
+  selectedSurface: '#1E4334',
   toast: '#24473A',
   onToast: '#FFFFFF',
   shadow: '#000000',

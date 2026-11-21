@@ -15,7 +15,7 @@
  *   separate code per person, the scannable symbol and Wallet are **Pending decision** DEC-023.
  */
 import { formatAge, type Schema } from '@sportspark/api-client';
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Pressable, View } from 'react-native';
 import { useApiQuery } from '../../api/useApiQuery';
 import { useHousehold, type HouseholdPerson } from '../../features/home/household';
@@ -27,7 +27,7 @@ import { useCalendarWindow, useMyFixtures, useMyTeams } from '../../features/tod
 import { formatTime, localDayKey } from '../../features/today/time';
 import { useConnectivity, useNow } from '../../providers/AppProviders';
 import { Text } from '../../ui/Text';
-import { fonts, makeStyles, radius, spacing } from '../../ui/theme';
+import { fonts, layout, makeStyles, radius, spacing } from '../../ui/theme';
 
 type PersonWaivers = Schema<'PersonWaivers'>;
 
@@ -81,21 +81,38 @@ function Readiness({ person, now }: { person: HouseholdPerson; now: Date }) {
   );
 }
 
-/** Drawn only for a household: one person alone needs no switch (their pass is below). */
-export function PassPeople({ initialPersonId }: { initialPersonId: string | null }) {
+/**
+ * The switch (drawn only for a household: one person alone needs none) and, through `card`, the
+ * person's name, today's activity and status inside the pass card (1j).
+ */
+export function PassPeople({
+  initialPersonId,
+  card,
+}: {
+  initialPersonId: string | null;
+  card: (who: ReactNode) => ReactNode;
+}) {
   const { people, selfId } = useHousehold();
-  if (people.length <= 1) return null;
-  return <PassPeopleSwitch people={people} selfId={selfId} initialPersonId={initialPersonId} />;
+  return (
+    <PassPeopleSwitch
+      people={people}
+      selfId={selfId}
+      initialPersonId={initialPersonId}
+      card={card}
+    />
+  );
 }
 
 function PassPeopleSwitch({
   people,
   selfId,
   initialPersonId,
+  card,
 }: {
   people: readonly HouseholdPerson[];
   selfId: string | null;
   initialPersonId: string | null;
+  card: (who: ReactNode) => ReactNode;
 }) {
   const styles = useStyles();
   const now = useNow();
@@ -124,9 +141,29 @@ function PassPeopleSwitch({
     return `${title} · today ${formatTime(entry.start, entry.zone.zone)}`;
   };
   const shown = current === 'all' ? ordered : ordered.filter((p) => p.id === current);
+  // One person alone: no switch and no name on the card (SPK-ENTRY-002), as before.
+  if (ordered.length <= 1) return <View>{card(null)}</View>;
+  const who = (
+    <View style={styles.who} testID="pass-people">
+      {shown.map((p) => (
+        <View key={p.id} style={styles.person} testID={`pass-for-${p.id}`}>
+          <Text style={[styles.name, shown.length > 1 ? styles.nameSmall : null]}>
+            {p.givenName}
+          </Text>
+          <Text style={styles.line}>{lineFor(p.id)}</Text>
+          <Readiness person={p} now={now} />
+        </View>
+      ))}
+      {current === 'all' ? (
+        <Text style={styles.line}>
+          One pass for the family: the front desk chooses who is checking in.
+        </Text>
+      ) : null}
+    </View>
+  );
   return (
-    <View style={styles.box} testID="pass-people">
-      {options.length > 1 ? (
+    <View>
+      {options.length > 2 ? (
         <View style={styles.switch} accessibilityRole="radiogroup" accessibilityLabel="Whose pass">
           {options.map((o) => {
             const on = o.id === current;
@@ -146,32 +183,15 @@ function PassPeopleSwitch({
           })}
         </View>
       ) : null}
-      {shown.map((p) => (
-        <View key={p.id} style={styles.person} testID={`pass-for-${p.id}`}>
-          <Text style={styles.name}>{p.givenName}</Text>
-          <Text style={styles.line}>{lineFor(p.id)}</Text>
-          <Readiness person={p} now={now} />
-        </View>
-      ))}
-      {current === 'all' ? (
-        <Text style={styles.line}>
-          One pass for the family: the front desk chooses who is checking in.
-        </Text>
-      ) : null}
+      {card(who)}
     </View>
   );
 }
 
 const useStyles = makeStyles(({ colors }) => ({
-  box: {
-    marginHorizontal: spacing.lg + 4,
-    marginBottom: spacing.md,
-    padding: spacing.md,
-    gap: spacing.md,
-    borderRadius: radius.xl,
-    backgroundColor: colors.night,
-  },
+  who: { gap: spacing.md },
   switch: {
+    marginHorizontal: layout.gutter,
     flexDirection: 'row',
     padding: spacing.xs,
     gap: spacing.xs,
@@ -192,6 +212,7 @@ const useStyles = makeStyles(({ colors }) => ({
   optionTextOn: { color: colors.onFloodlight },
   person: { alignItems: 'center', gap: spacing.xs },
   name: { ...fonts.bold, fontSize: 26, lineHeight: 32, color: colors.onNight },
+  nameSmall: { fontSize: 19, lineHeight: 24 },
   line: {
     ...fonts.regular,
     fontSize: 14,

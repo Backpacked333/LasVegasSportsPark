@@ -201,10 +201,11 @@ describe('SCR-C-13 RequiredFormsScreen', () => {
     expect(screen.getByRole('checkbox', { name: AGREE_ADA })).toBeChecked();
   });
 
-  it('PA-11 ADR-008: Forms is step 3, and each form is read and signed in its own "Read and sign" sheet', async () => {
+  it('PA-11 ADR-008 (handoff 1f): forms are no longer a step of their own (they are signed on Review), and each form is read and signed in its own "Read and sign" sheet', async () => {
     const app = createRegistrationTestApp({ routes: routes() });
     render(<RequiredFormsScreen basketId={IDS.basket} />, { wrapper: app.wrapper });
-    expect(await screen.findByLabelText('Step 3 of 5, Forms')).toBeOnTheScreen();
+    expect(await screen.findByRole('button', { name: READ_ADA })).toBeOnTheScreen();
+    expect(screen.queryByLabelText(/^Step \d of/)).toBeNull();
     // Closed: no wording, no agreement and no Sign button on the page.
     expect(screen.queryByRole('checkbox', { name: AGREE_ADA })).toBeNull();
     expect(screen.queryByRole('button', { name: SIGN_ADA })).toBeNull();
@@ -258,8 +259,7 @@ describe('SCR-C-13 RequiredFormsScreen', () => {
     });
     render(<RequiredFormsScreen basketId={IDS.basket} />, { wrapper: app.wrapper });
     expect(await screen.findByRole('header', { name: 'No forms required' })).toBeOnTheScreen();
-    // ADR-008: reached from a cart, it is still step 3 of 5 with nothing (or only waivers) to sign.
-    expect(screen.getByLabelText('Step 3 of 5, Forms')).toBeOnTheScreen();
+    expect(screen.queryByLabelText(/^Step \d of/)).toBeNull();
   });
 
   it('offline: the answer is kept and signing is disabled', async () => {

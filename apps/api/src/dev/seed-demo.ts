@@ -19,6 +19,7 @@ import { seedMessageSequence, seedSeasonSchedule } from './demo/messages';
 import { seedFrontDesk } from './demo/front-desk';
 import { seedParentAccount } from './demo/parent-account';
 import { nameParentHousehold, seedParentCore } from './demo/parent-core';
+import { seedParentRegister } from './demo/parent-register';
 import { seedFamilies, seedStaff } from './demo/people';
 import { seedRegister } from './demo/register';
 import { seedRegistrations } from './demo/registrations';
@@ -151,6 +152,7 @@ export async function seedDemo(
   await settle(ctx);
   await seedParentCore(ctx, staff, spaces, base.child.personId);
   await seedParentAccount(ctx, staff, spaces, base.child.personId);
+  await seedParentRegister(ctx, staff, families, base.child.personId);
   // Last: it fills the free time it finds and skips anything that would clash.
   await seedStaffSchedule(ctx, staff, spaces, catalog, families);
   ctx.log('done');

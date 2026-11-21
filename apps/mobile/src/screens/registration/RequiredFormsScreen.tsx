@@ -26,7 +26,7 @@
  * (signing); success (signed, with date); partial completion per participant.
  */
 import type { ApiError, Schema } from '@sportspark/api-client';
-import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
+import { Redirect, Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useRef, useState, type ReactNode } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { usePermissions } from '../../api/permissions';
@@ -42,7 +42,6 @@ import { formatInstant } from '../../features/registration/format';
 import { useMe, useParticipantNames } from '../../features/registration/participants';
 import { useApiRecords, type RecordState } from '../../features/registration/queries';
 import { param, registrationRoutes } from '../../features/registration/routes';
-import { RegistrationSteps } from '../../features/registration/steps';
 import { WaiverCard } from '../../features/waivers/WaiverCard';
 import { useApp, useConnectivity } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
@@ -364,7 +363,17 @@ function FormCard({
   );
 }
 
-function FormsContent({ source }: { source: FormsSource }) {
+/**
+ * The forms and waivers of a cart or a waitlist offer. `embedded`: inside Review & pay's sign sheet
+ * (1f), without the steps and the "Back" button.
+ */
+export function FormsContent({
+  source,
+  embedded = false,
+}: {
+  source: FormsSource;
+  embedded?: boolean;
+}) {
   const styles = useStyles();
   const router = useRouter();
   const { reachable } = useConnectivity();
@@ -414,12 +423,9 @@ function FormsContent({ source }: { source: FormsSource }) {
     ) : (
       (whenNone ?? null)
     );
-  // From a cart, Forms is step 3 of 5 whichever forms or waivers it holds.
-  const steps = source.basketId ? <RegistrationSteps step="Forms" /> : null;
   if (groups.length === 0) {
     return (
       <View>
-        {steps}
         {requiredWaivers(
           <StateView
             variant="empty"
@@ -432,12 +438,11 @@ function FormsContent({ source }: { source: FormsSource }) {
   }
   const signed = status.total - status.outstanding;
   const back = source.basketId
-    ? () => router.push(registrationRoutes.basket(source.basketId as string))
+    ? () => router.push(registrationRoutes.review(source.basketId as string))
     : () => router.push(registrationRoutes.waitlist(source.waitlistEntryId as string));
 
   return (
     <View>
-      {steps}
       {/* The screen's title is "Required forms": this section says how far signing has got. */}
       <Section title="Signing progress">
         <StatusBadge
@@ -482,13 +487,15 @@ function FormsContent({ source }: { source: FormsSource }) {
         );
       })}
       {requiredWaivers()}
-      <View style={styles.actions}>
-        <Button
-          label={source.basketId ? 'Back to your cart' : 'Back to the waitlist offer'}
-          variant={status.outstanding === 0 ? 'primary' : 'secondary'}
-          onPress={back}
-        />
-      </View>
+      {embedded ? null : (
+        <View style={styles.actions}>
+          <Button
+            label={source.basketId ? 'Back to Review' : 'Back to the waitlist offer'}
+            variant={status.outstanding === 0 ? 'primary' : 'secondary'}
+            onPress={back}
+          />
+        </View>
+      )}
     </View>
   );
 }
@@ -510,6 +517,9 @@ export function RequiredFormsScreen(props: FormsSource) {
 /** Route component for app/registration/forms.tsx (`?basketId=` or `?waitlistEntryId=`). */
 export function RequiredFormsRoute() {
   const params = useLocalSearchParams<{ basketId?: string; waitlistEntryId?: string }>();
+  const basketId = param(params.basketId);
+  // A cart's forms are signed on its Review (1f): the old link opens it there.
+  if (basketId) return <Redirect href={registrationRoutes.review(basketId)} />;
   return (
     <>
       <Stack.Screen options={{ title: 'Required forms' }} />

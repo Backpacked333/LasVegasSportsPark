@@ -328,7 +328,8 @@ describe('SCR-C-03 Home', () => {
     now = new Date('2026-10-24T12:45:00.000Z');
     act(() => app.sources.setReachable(false));
     expect(screen.getByLabelText('You are offline')).toBeOnTheScreen();
-    expect(screen.getByText(/Showing information from 45 minutes ago\./)).toBeOnTheScreen();
+    // The shared banner (handoff 3f): "Offline. Showing what was saved at 5:00."
+    expect(screen.getByText(/Showing what was saved at \d{1,2}:\d{2}\./)).toBeOnTheScreen();
     expect(screen.getByTestId('next-activity-card')).toBeOnTheScreen();
   });
 

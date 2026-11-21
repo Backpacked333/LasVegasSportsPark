@@ -31,7 +31,13 @@ import { WaitlistScreen } from '../WaitlistScreen';
 import { WaitlistsScreen } from '../WaitlistsScreen';
 import { openSupportDetails, illustrationsOnScreen } from '../../../testing/ui-surfaces';
 
-const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), navigate: jest.fn() };
+const mockRouter = {
+  push: jest.fn(),
+  replace: jest.fn(),
+  back: jest.fn(),
+  navigate: jest.fn(),
+  canGoBack: () => true,
+};
 jest.mock('expo-router', () => ({
   ...jest.requireActual('expo-router'),
   useRouter: () => mockRouter,
@@ -91,7 +97,7 @@ describe('SCR-C-16 WaitlistScreen', () => {
     ).toEqual({ expectedRevision: 2 });
   });
 
-  it('SPK-REG-008: an open offer shows the server expiry; accepting consumes it once and opens the held basket', async () => {
+  it('SPK-REG-008 (handoff 2e): an open offer shows the time left in big units and the exact deadline on the facility clock; taking it consumes it once and opens Review & pay held until the offer ends', async () => {
     const held = basket({ status: 'held', holdExpiresAt: inMinutes(120) });
     const app = renderEntry({
       routes: routes({
@@ -105,26 +111,51 @@ describe('SCR-C-16 WaitlistScreen', () => {
           }),
       }),
     });
-    // SPK-SCHED-008: 14:00 UTC is 7:00 AM in the facility's zone (Los Angeles, PDT).
-    expect(
-      (await screen.findAllByLabelText('Place offered. Accept by Sat, Oct 24, 7:00 AM PDT.'))
-        .length,
-    ).toBeGreaterThan(0);
-    expect(screen.getByText('Countdown: about 2 hours left')).toBeOnTheScreen();
-    const accept = screen.getByRole('button', { name: 'Accept the place' });
+    expect(await screen.findByText('A place opened for Ada')).toBeOnTheScreen();
+    // SPK-SCHED-008: 14:00 UTC is 7:00 AM in the facility's zone (Los Angeles).
+    expect(screen.getByTestId('offer-clock')).toHaveProp(
+      'accessibilityLabel',
+      'The offer ends in 2 hours 0 minutes left. Until today 7:00 AM. After that it goes to the next family.',
+    );
+    const take = screen.getByRole('button', { name: 'Take the place · $120' });
     await act(async () => {
-      fireEvent.press(accept);
+      fireEvent.press(take);
     });
     const sent = app.fake.requests.find((r) => r.route === '/waitlist-offers/{id}/accept');
     expect(sent?.params.id).toBe(IDS.offer);
     expect(sent?.body).toEqual({ expectedRevision: 4 });
     expect(sent?.headers['idempotency-key']).toMatch(/^key-/);
-    expect(mockRouter.push).toHaveBeenCalledWith(`/registration/basket/${IDS.basket}`);
+    expect(mockRouter.push).toHaveBeenCalledWith(`/registration/review/${IDS.basket}?offer=1`);
+  });
+
+  it('handoff 2e row 1: under an hour the seconds show; at the deadline the screen says the offer ended, with "Stay on the waitlist"', async () => {
+    let now = new Date(Date.parse(offer().expiresAt) - 30 * 60_000 - 5_000);
+    renderEntry({
+      now: () => now,
+      routes: routes({ 'GET /waitlist-entries/{id}': { status: 200, body: OFFERED } }),
+    });
+    expect(await screen.findByText('sec')).toBeOnTheScreen();
+    expect(screen.getByText('30')).toBeOnTheScreen();
+    now = new Date(Date.parse(offer().expiresAt) + 1_000);
+    expect(
+      await screen.findByLabelText(
+        /^This offer ended at \d{1,2}:\d{2} [AP]M$/,
+        {},
+        { timeout: 10_000 },
+      ),
+    ).toBeOnTheScreen();
+    fireEvent.press(screen.getByRole('button', { name: 'Stay on the waitlist' }));
+    expect(mockRouter.back).toHaveBeenCalled();
   });
 
   it("lists the offer history with each offer's outcome", async () => {
     renderEntry({
-      routes: routes({ 'GET /waitlist-entries/{id}': { status: 200, body: OFFERED } }),
+      routes: routes({
+        'GET /waitlist-entries/{id}': {
+          status: 200,
+          body: waitlistEntry({ offers: [OFFERED.offers[0] as ReturnType<typeof offer>] }),
+        },
+      }),
     });
     expect(await screen.findByRole('header', { name: 'Offer history' })).toBeOnTheScreen();
     expect(screen.getAllByLabelText('Offer expired').length).toBeGreaterThan(0);
@@ -144,9 +175,9 @@ describe('SCR-C-16 WaitlistScreen', () => {
           ),
       }),
     });
-    const accept = await screen.findByRole('button', { name: 'Accept the place' });
+    const take = await screen.findByRole('button', { name: 'Take the place · $120' });
     await act(async () => {
-      fireEvent.press(accept);
+      fireEvent.press(take);
     });
     expect(
       await screen.findByText('This offer has expired; its place was released.'),
@@ -155,10 +186,11 @@ describe('SCR-C-16 WaitlistScreen', () => {
     expect(screen.getByText(/Error code: CAPACITY_UNAVAILABLE/)).toBeOnTheScreen();
   });
 
-  it("MISSING_ACKNOWLEDGMENT opens the offer's required forms", async () => {
+  it("MISSING_ACKNOWLEDGMENT opens the offer's required forms in a sheet on the offer", async () => {
     renderEntry({
       routes: routes({
         'GET /waitlist-entries/{id}': { status: 200, body: OFFERED },
+        'GET /acknowledgments': { status: 200, body: [] },
         'POST /waitlist-offers/{id}/accept': () =>
           fakeResponse(
             422,
@@ -166,32 +198,33 @@ describe('SCR-C-16 WaitlistScreen', () => {
           ),
       }),
     });
-    const accept = await screen.findByRole('button', { name: 'Accept the place' });
+    const take = await screen.findByRole('button', { name: 'Take the place · $120' });
     await act(async () => {
-      fireEvent.press(accept);
+      fireEvent.press(take);
     });
-    fireEvent.press(await screen.findByRole('button', { name: 'Complete required forms' }));
-    expect(mockRouter.push).toHaveBeenCalledWith(
-      `/registration/forms?waitlistEntryId=${IDS.entry}`,
-    );
+    expect(await screen.findByRole('header', { name: 'Forms to sign' })).toBeOnTheScreen();
+    expect(mockRouter.push).not.toHaveBeenCalled();
   });
 
-  it('declines with the offer revision', async () => {
+  it('handoff 2e row 3: passing asks first ("Pass on this place?…") and declines with the offer revision', async () => {
     const app = renderEntry({
       routes: routes({
         'GET /waitlist-entries/{id}': { status: 200, body: OFFERED },
         'POST /waitlist-offers/{id}/decline': { status: 200, body: offer({ status: 'declined' }) },
       }),
     });
-    const decline = await screen.findByRole('button', { name: 'Decline the offer' });
+    fireEvent.press(await screen.findByRole('button', { name: 'Pass to the next family' }));
+    expect(await screen.findByRole('header', { name: 'Pass on this place?' })).toBeOnTheScreen();
+    expect(
+      screen.getByText('It goes to the next family. Ada stays on the waitlist for later places.'),
+    ).toBeOnTheScreen();
+    expect(app.fake.requests.some((r) => r.route === '/waitlist-offers/{id}/decline')).toBe(false);
     await act(async () => {
-      fireEvent.press(decline);
+      fireEvent.press(screen.getByRole('button', { name: 'Pass' }));
     });
     expect(
       app.fake.requests.find((r) => r.route === '/waitlist-offers/{id}/decline')?.body,
-    ).toEqual({
-      expectedRevision: 4,
-    });
+    ).toEqual({ expectedRevision: 4 });
   });
 
   it('CAPABILITIES-03 / DEC-082: an offer of a pickup seat cannot be accepted while pickup sessions are turned off; declining stays available', async () => {
@@ -216,14 +249,16 @@ describe('SCR-C-16 WaitlistScreen', () => {
     ).toEqual({ expectedRevision: 4 });
   });
 
-  it('offline: the offer stays with its expiry and accepting is disabled', async () => {
+  it('offline: the offer stays with its clock; taking and passing are disabled with the reason', async () => {
     const app = renderEntry({
       routes: routes({ 'GET /waitlist-entries/{id}': { status: 200, body: OFFERED } }),
     });
-    expect(await screen.findByRole('button', { name: 'Accept the place' })).toBeOnTheScreen();
+    expect(await screen.findByRole('button', { name: 'Take the place · $120' })).toBeOnTheScreen();
     act(() => app.sources.setReachable(false));
-    expect(screen.getByRole('button', { name: 'Accept the place' })).toBeDisabled();
-    expect(screen.getByText('Accepting needs a connection.')).toBeOnTheScreen();
+    expect(screen.getByRole('button', { name: 'Take the place · $120' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Pass to the next family' })).toBeDisabled();
+    expect(screen.getByText('Taking or passing needs a connection.')).toBeOnTheScreen();
+    expect(screen.getByTestId('offer-clock')).toBeOnTheScreen();
   });
 
   it('§4.10: an entry the account may not see reads not available', async () => {
