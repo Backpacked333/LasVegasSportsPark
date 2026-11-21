@@ -91,7 +91,8 @@ export const GUARDIAN_OF_CHILD = [{ subjectPersonId: CHILD, permissions: ['view'
 /** `GET /v1/person-names` (ID-02): names only, for the ids asked that the map knows. */
 export function names(known: Record<string, string>): FakeHandler {
   return (req) => {
-    const ids = (req.query.ids ?? '').split(',').filter(Boolean);
+    // The client repeats `ids` for several people: read every value.
+    const ids = (req.queryAll?.ids ?? (req.query.ids ?? '').split(',')).filter(Boolean);
     return fakeResponse(200, {
       items: ids.flatMap((id) =>
         known[id]
@@ -153,6 +154,8 @@ export function calendarItem(overrides: Record<string, unknown> = {}) {
     offeringId: OFFERING,
     sessionId: SESSION,
     title: 'Junior Skills',
+    // Handoff M 1h: the space it is in (none named by default).
+    place: null,
     // 10:00 to 11:00 AM in Los Angeles.
     start: '2026-10-24T17:00:00.000Z',
     end: '2026-10-24T18:00:00.000Z',
