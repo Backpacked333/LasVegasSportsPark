@@ -300,6 +300,30 @@ export class CareNotesService {
     return out;
   }
 
+  /**
+   * S 2d: which kinds of active note each person has (allergy, care instruction), without their
+   * text, for a roster another module shows as flags. No content is read, so nothing is audited
+   * here; the caller authorizes its context first, and reading a note's text goes through
+   * `readForArrivalIn` (audited). Merged people's notes follow the survivor.
+   */
+  async kindsIn(
+    trx: Trx,
+    organizationId: string,
+    personIds: readonly string[],
+  ): Promise<Map<string, ScanCareNote['kind'][]>> {
+    const out = new Map<string, ScanCareNote['kind'][]>();
+    if (personIds.length === 0) return out;
+    const resolving = await this.people.personIdsResolvingToMany(organizationId, personIds, trx);
+    const all = [...new Set([...resolving.values()].flat())];
+    const rows = await this.activeRows(trx, organizationId, all);
+    for (const personId of personIds) {
+      const ids = new Set(resolving.get(personId) ?? [personId]);
+      const kinds = [...new Set(rows.filter((r) => ids.has(r.person_id)).map((r) => r.kind))];
+      if (kinds.length > 0) out.set(personId, kinds.sort());
+    }
+    return out;
+  }
+
   private activeRows(trx: Trx, organizationId: string, personIds: readonly string[]) {
     if (personIds.length === 0) return Promise.resolve([] as CareNoteRow[]);
     return trx
